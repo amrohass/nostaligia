@@ -124,6 +124,41 @@
     }
   };
 
+  /* Content records are {ar, en} pairs, so every editor edits both sides at once.
+     Each input carries its own dir/lang, otherwise Arabic renders left-to-right
+     whenever the surrounding page is in English (and vice versa). */
+  function langPair(label, value, opts) {
+    opts = opts || {};
+    var tag = opts.multiline ? 'textarea' : 'input';
+    var pair = value || { ar: '', en: '' };
+
+    function side(lang, dir, text, placeholder) {
+      var node = el(tag + '.input', {
+        dir: dir,
+        lang: lang,
+        rows: opts.multiline ? (opts.rows || '3') : null,
+        type: opts.multiline ? null : (opts.type || 'text'),
+        placeholder: placeholder || '',
+        'aria-label': label + ' (' + (lang === 'ar' ? 'العربية' : 'English') + ')'
+      });
+      node.value = text || '';
+      return node;
+    }
+
+    var ar = side('ar', 'rtl', pair.ar, opts.placeholderAr);
+    var en = side('en', 'ltr', pair.en, opts.placeholderEn);
+
+    return {
+      ar: ar,
+      en: en,
+      node: el('div.field-pair', null, [
+        el('div.field', null, [el('label.field__label', null, [label, ' — العربية']), ar]),
+        el('div.field', null, [el('label.field__label', null, [label, ' — English']), en])
+      ]),
+      read: function () { return { ar: ar.value.trim(), en: en.value.trim() }; }
+    };
+  }
+
   /** Brief confirmation of an action that has no other visible result. */
   var toastTimer = null;
   function toast(message) {
@@ -169,6 +204,7 @@
     qs: qs,
     qsa: qsa,
     toneStyle: toneStyle,
+    langPair: langPair,
     ICONS: ICONS,
     toast: toast,
     trapFocus: trapFocus

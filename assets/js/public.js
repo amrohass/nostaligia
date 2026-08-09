@@ -13,12 +13,39 @@
 
   var RAMALLAH = [31.9022, 35.2034];
 
+  /* Content comes from the store — the same records the dashboard edits. DATA
+     still supplies places, decades and tone palettes, which are reference data
+     rather than editable content.
+
+     `memories` is a plain array because the viewer indexes into it; it is
+     refreshed from the store at the top of every render. */
+  var memories = [];
+
+  function refreshContent() {
+    memories = Store.list('memories', function (m) { return m.status !== 'hidden'; });
+  }
+
+  function events() {
+    return Store.list('events');
+  }
+
+  /** An editorial copy block, in the active language. */
+  function copyText(id) {
+    return pick(Store.copy(id));
+  }
+
+  /* Signing in binds the session to a real member record, so #/me has a profile
+     to show and new comments have an author. */
+  var DEMO_USER_ID = 'm1';
+
   var state = {
     signedIn: readSession(),
+    userId: readSession() ? DEMO_USER_ID : null,
     likes: {},
     decade: 'all',
     viewer: null,      // { index }
     mapCard: null,     // memory id
+    editOpen: false,   // profile edit panel
     releaseTrap: null
   };
 
@@ -31,12 +58,36 @@
     catch (e) { /* private mode — session state stays in memory only */ }
   }
 
+  function currentUser() {
+    return state.userId ? Store.get('users', state.userId) : null;
+  }
+
   /* ── Routing ─────────────────────────────────────────────── */
 
+  function hashPath() {
+    return global.location.hash.replace(/^#\/?/, '');
+  }
+
   function route() {
-    var hash = global.location.hash.replace(/^#\/?/, '');
+    var hash = hashPath();
     if (hash.slice(0, 2) === 'm/') return 'archive';
+    if (hash === 'me' || hash.slice(0, 2) === 'u/') return 'profile';
+    if (hash === 'page' || hash.slice(0, 5) === 'page/') return 'page';
     return ['archive', 'map', 'events'].indexOf(hash) > -1 ? hash : 'archive';
+  }
+
+  /** #/me is the signed-in member; #/u/<id> is somebody else. */
+  function routedProfileId() {
+    var hash = hashPath();
+    if (hash === 'me') return state.userId;
+    if (hash.slice(0, 2) === 'u/') return hash.slice(2);
+    return null;
+  }
+
+  /** #/page/<slug> scrolls to a section; bare #/page starts at the top. */
+  function routedPageSlug() {
+    var hash = hashPath();
+    return hash.slice(0, 5) === 'page/' ? hash.slice(5) : null;
   }
 
   /** #/m/<id> deep-links a single memory, so every one of them has a URL. */
@@ -44,7 +95,7 @@
     var hash = global.location.hash.replace(/^#\/?/, '');
     if (hash.slice(0, 2) !== 'm/') return -1;
     var id = hash.slice(2);
-    for (var i = 0; i < DATA.MEMORIES.length; i++) if (DATA.MEMORIES[i].id === id) return i;
+    for (var i = 0; i < memories.length; i++) if (memories[i].id === id) return i;
     return -1;
   }
 
@@ -71,15 +122,22 @@
     ];
 
     if (state.signedIn) {
+      var me = currentUser();
       actions.push(el('button.btn.btn--primary.btn--share', { type: 'button', onclick: openShareSheet }, [
         el('span.plus', { text: '+' }),
         t('action.share')
       ]));
-      actions.push(el('button.avatar-btn', {
-        type: 'button',
-        title: t('action.signOut'),
-        onclick: signOut,
-        text: I18N.lang === 'ar' ? 'س' : 'S'
+      // The avatar is the way into your own profile; sign-out moved beside it.
+      actions.push(el('a.avatar-btn', {
+        href: '#/me',
+        title: t('profile.mine'),
+        'aria-label': t('profile.mine'),
+        'aria-current': current === 'profile' && routedProfileId() === state.userId ? 'page' : null,
+        style: me && me.tone ? '--p1:' + me.tone : null,
+        text: me ? pick(me.initial) : (I18N.lang === 'ar' ? 'ع' : 'M')
+      }));
+      actions.push(el('button.btn.btn--quiet.masthead__signout', {
+        type: 'button', onclick: signOut, text: t('action.signOut')
       }));
     } else {
       actions.push(el('button.btn.btn--quiet', {
@@ -110,19 +168,20 @@
         el('div.site-footer__about', null, [
           el('div.site-footer__mark', { text: t('brand.name') }),
           el('div.site-footer__mark-sub', { dir: I18N.lang === 'ar' ? 'ltr' : 'rtl', text: t('brand.counterpart') }),
-          el('p.site-footer__blurb', { text: t('footer.blurb') })
+          el('p.site-footer__blurb', { text: copyText('footer.blurb') })
         ]),
+        // Each link deep-links to its own section of the info page.
         el('nav.site-footer__links', { 'aria-label': t('footer.project') }, [
-          el('div.site-footer__heading', { text: t('footer.project') }),
-          el('a', { href: '#/archive', text: t('footer.about') }),
-          el('a', { href: '#/archive', text: t('footer.contact') }),
-          el('a', { href: '#/archive', text: t('footer.help') }),
-          el('a', { href: '#/archive', text: t('footer.terms') })
-        ]),
+          el('div.site-footer__heading', { text: t('footer.project') })
+        ].concat(Store.list('pages').map(function (section) {
+          return el('a', { href: '#/page/' + section.slug, text: pick(section.title) });
+        }).concat([
+          el('a', { href: '#/page/support', text: t('footer.terms') })
+        ]))),
         el('div.donate', null, [
-          el('div.donate__title', { text: t('donate.title') }),
-          el('p.donate__blurb', { text: t('donate.blurb') }),
-          el('button.btn', { type: 'button', onclick: function () { UI.toast(t('donate.title')); }, text: t('donate.cta') })
+          el('div.donate__title', { text: copyText('donate.title') }),
+          el('p.donate__blurb', { text: copyText('donate.blurb') }),
+          el('a.btn', { href: '#/page/donate', text: t('donate.cta') })
         ])
       ]),
       el('div.site-footer__legal', null, [
@@ -187,14 +246,14 @@
     var count = columnCount();
     var columns = [];
     for (var c = 0; c < count; c++) columns.push([]);
-    DATA.MEMORIES.forEach(function (memory, i) {
+    memories.forEach(function (memory, i) {
       columns[i % count].push(memoryCard(memory, i));
     });
 
     return el('div', { dataset: { cols: String(count) } }, [
       el('section.hero', null, [
-        el('h1.hero__line', { text: t('hero.line') }),
-        el('p.hero__blurb', { text: t('hero.blurb') }),
+        el('h1.hero__line', { text: copyText('hero.line') }),
+        el('p.hero__blurb', { text: copyText('hero.blurb') }),
         el('ul.hero__stats', null, [
           el('li', { text: t('hero.memories', { n: num(3462) }) }),
           el('li', { text: t('hero.narrators', { n: num(890) }) }),
@@ -264,36 +323,45 @@
      comments. Called on scroll and whenever sign-in state changes, since the
      padlocks belong to the rail. */
   function renderViewerChrome(index) {
-    var memory = DATA.MEMORIES[index];
+    var memory = memories[index];
     var overlay = qs('#viewer');
     if (!overlay) return;
 
     qs('.viewer__position', overlay).textContent =
-      num(index + 1) + ' / ' + num(DATA.MEMORIES.length);
+      num(index + 1) + ' / ' + num(memories.length);
 
     mount(qs('.viewer__rail', overlay), viewerRail(memory));
     mount(qs('.viewer__comments', overlay), commentsPanel(memory));
   }
 
+  /* Comments are their own collection now, so they can be listed on a profile and
+     moderated from the dashboard. Each one resolves its author to a real user. */
+  function commentRow(comment, tag) {
+    var author = Store.author(comment) || {};
+    return el(tag || 'li.comment', null, [
+      profileLink(author, el('span.comment__avatar', {
+        style: author.tone ? '--p1:' + author.tone : null,
+        text: pick(author.initial || { ar: '؟', en: '?' })
+      })),
+      el('div', null, [
+        el('div.comment__head', null, [
+          profileLink(author, el('span.comment__name', { text: pick(author.name || { ar: 'عضو', en: 'Member' }) })),
+          el('span.comment__when', { text: pick(comment.when) })
+        ]),
+        el('p.comment__body', { text: pick(comment.body) })
+      ])
+    ]);
+  }
+
   function commentsPanel(memory) {
-    var list = memory.comments && memory.comments.length
-      ? el('ul.comments__list', null, memory.comments.map(function (comment) {
-          return el('li.comment', null, [
-            el('span.comment__avatar', { text: pick(comment.initial) }),
-            el('div', null, [
-              el('div.comment__head', null, [
-                el('span.comment__name', { text: pick(comment.name) }),
-                el('span.comment__when', { text: pick(comment.when) })
-              ]),
-              el('p.comment__body', { text: pick(comment.body) })
-            ])
-          ]);
-        }))
+    var rows = Store.commentsOn(memory.id);
+    var list = rows.length
+      ? el('ul.comments__list', null, rows.map(function (comment) { return commentRow(comment); }))
       : el('div.comments__list', null, el('p.comments__empty', { text: t('comments.empty') }));
 
     return [
       el('div.comments__head', null, [
-        el('div.comments__count', { html: t('comments.title') + ' <b>' + num((memory.comments || []).length) + '</b>' }),
+        el('div.comments__count', { html: t('comments.title') + ' <b>' + num(rows.length) + '</b>' }),
         el('div.comments__subject', { text: pick(memory.title) })
       ]),
       list,
@@ -312,7 +380,7 @@
 
     var scroller = el('div.viewer__scroller', {
       onscroll: onViewerScroll
-    }, DATA.MEMORIES.map(viewerSlide));
+    }, memories.map(viewerSlide));
 
     var overlay = el('div.viewer', { id: 'viewer', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('nav.archive') }, [
       el('div.viewer__stage', null, [
@@ -344,12 +412,12 @@
     var scroller = event.currentTarget;
     scrollSettle = global.setTimeout(function () {
       var index = Math.round(scroller.scrollTop / scroller.clientHeight);
-      index = Math.max(0, Math.min(DATA.MEMORIES.length - 1, index));
+      index = Math.max(0, Math.min(memories.length - 1, index));
       if (index !== state.viewer.index) {
         state.viewer.index = index;
         renderViewerChrome(index);
         // Keep the address bar on the memory in view without stacking history.
-        global.history.replaceState(null, '', '#/m/' + DATA.MEMORIES[index].id);
+        global.history.replaceState(null, '', '#/m/' + memories[index].id);
       }
     }, 90);
   }
@@ -377,7 +445,7 @@
   }
 
   function toggleLike() {
-    var memory = DATA.MEMORIES[state.viewer.index];
+    var memory = memories[state.viewer.index];
     var current = state.likes[memory.id] != null ? state.likes[memory.id] : memory.likes;
     state.likes[memory.id] = current === memory.likes ? current + 1 : memory.likes;
     renderViewerChrome(state.viewer.index);
@@ -520,6 +588,7 @@
 
   function signIn() {
     state.signedIn = true;
+    state.userId = DEMO_USER_ID;
     writeSession(true);
     renderMasthead();
     if (state.viewer) renderViewerChrome(state.viewer.index);
@@ -528,7 +597,10 @@
 
   function signOut() {
     state.signedIn = false;
+    state.userId = null;
     writeSession(false);
+    // A profile route is member-only; drop back to the archive on the way out.
+    if (route() === 'profile') { global.location.hash = '#/archive'; return; }
     renderMasthead();
     if (state.viewer) renderViewerChrome(state.viewer.index);
   }
@@ -613,14 +685,274 @@
     scrim = overlayShell('scrim.scrim--heavy', [form], close);
   }
 
+  /* ── Profile ─────────────────────────────────────────────────
+     Display name, avatar and role badge are never gated — attribution has to stay
+     legible or the archive stops crediting anyone. Everything else is governed by
+     the user's `visibility` map. The owner viewing #/me sees all of it, with each
+     private section flagged so they can tell what visitors are missing. */
+
+  function profileLink(user, node) {
+    if (!user || !user.id) return node;
+    return el('a.profile-link', { href: '#/u/' + user.id, tabindex: '-1' }, node);
+  }
+
+  function isPublic(user, field) {
+    return (user.visibility || {})[field] !== 'private';
+  }
+
+  function avatarNode(user, className) {
+    return el('span.' + (className || 'profile__avatar'), {
+      style: user.tone ? '--p1:' + user.tone : null,
+      'aria-hidden': 'true',
+      text: pick(user.initial)
+    });
+  }
+
+  function privateFlag() {
+    return el('span.privacy-flag', { text: t('profile.ownerOnly') });
+  }
+
+  /** One profile section, or nothing at all when a visitor may not see it.
+      The count is its own element — a "·" between an Arabic label and a digit
+      reads ambiguously once bidi reorders the line. */
+  function profileSection(user, field, isOwner, title, count, body) {
+    var visible = isPublic(user, field);
+    if (!visible && !isOwner) return null;
+    return el('section.profile__section', null, [
+      el('div.profile__section-head', null, [
+        el('h2.profile__section-title', { text: title }),
+        el('span.profile__section-count', { text: num(count) }),
+        !visible ? privateFlag() : null
+      ]),
+      body
+    ]);
+  }
+
+  function renderProfile(userId) {
+    var user = Store.get('users', userId);
+    if (!user) {
+      return el('div.page-head', null, [
+        el('h1.page-head__title', { text: t('profile.notFound') }),
+        el('p.page-head__blurb', null, el('a', { href: '#/archive', text: t('viewer.back') }))
+      ]);
+    }
+
+    /* #/me is your own view; #/u/<id> is always the public one — including for
+       your own id, which makes it a preview of what visitors actually get. */
+    var isSelf = state.signedIn && user.id === state.userId;
+    var isOwner = isSelf && hashPath() === 'me';
+    var contributions = Store.memoriesFor(user.id);
+    var comments = Store.commentsFor(user.id);
+
+    var facts = [];
+    if (isPublic(user, 'personalInfo') || isOwner) {
+      if (user.city) facts.push(el('span.profile__fact', { text: pick(user.city) }));
+      if (user.joined) facts.push(el('span.profile__fact', { text: t('profile.memberSince', { n: I18N.year(user.joined) }) }));
+      if (!isPublic(user, 'personalInfo')) facts.push(privateFlag());
+    }
+
+    var header = el('header.profile__header', null, [
+      avatarNode(user),
+      el('div.profile__identity', null, [
+        el('h1.profile__name', { text: pick(user.name) }),
+        el('div.profile__gloss.gloss-line', { text: gloss(user.name) }),
+        el('div.profile__badges', null, [
+          el('span.badge', { text: t('mb.role' + roleKey(user)) }),
+          isOwner ? el('span.badge.badge--voice', { text: t('profile.you') }) : null
+        ]),
+        facts.length ? el('div.profile__facts', null, facts) : null
+      ])
+    ]);
+
+    var bio = (isPublic(user, 'bio') || isOwner) && pick(user.bio)
+      ? el('div.profile__bio-wrap', null, [
+          el('p.profile__bio', { text: pick(user.bio) }),
+          !isPublic(user, 'bio') ? privateFlag() : null
+        ])
+      : null;
+
+    var contributionsBody = contributions.length
+      ? el('div.profile__grid', null, contributions.map(function (memory) { return memoryCard(memory); }))
+      : el('p.profile__empty', { text: t('profile.noContributions') });
+
+    var commentsBody = comments.length
+      ? el('ul.profile__comments', null, comments.map(function (comment) {
+          var memory = Store.get('memories', comment.memoryId);
+          return el('li.profile__comment', null, [
+            el('p.comment__body', { text: pick(comment.body) }),
+            el('div.profile__comment-meta', null, [
+              memory
+                ? el('a', { href: '#/m/' + memory.id, text: t('profile.onMemory', { t: pick(memory.title) }) })
+                : el('span', { text: t('profile.onRemoved') }),
+              el('span.comment__when', { text: pick(comment.when) })
+            ])
+          ]);
+        }))
+      : el('p.profile__empty', { text: t('profile.noComments') });
+
+    return el('div.profile', null, [
+      isSelf && !isOwner
+        ? el('div.profile__preview', null, [
+            el('span', { text: t('profile.previewNotice') }),
+            el('a', { href: '#/me', text: t('profile.backToMine') })
+          ])
+        : null,
+      header,
+      bio,
+      isOwner ? editPanel(user) : null,
+      profileSection(user, 'contributions', isOwner, t('profile.contributions'), contributions.length, contributionsBody),
+      profileSection(user, 'comments', isOwner, t('profile.comments'), comments.length, commentsBody)
+    ]);
+  }
+
+  function roleKey(user) {
+    var map = { editor: 'Editor', partner: 'Partner', narrator: 'Narrator', admin: 'AdminShort' };
+    if (map[user.role]) return map[user.role];
+    return user.feminine ? 'ContributorF' : 'ContributorM';
+  }
+
+  /* ── Edit profile & privacy (owner only) ─────────────────── */
+
+  function editPanel(user) {
+    var open = state.editOpen;
+
+    var controls = el('div.profile__edit-controls', null, [
+      el('button.btn.btn--ghost.profile__edit-toggle', {
+        type: 'button',
+        'aria-expanded': open ? 'true' : 'false',
+        onclick: function () { state.editOpen = !state.editOpen; render(); },
+        text: t('profile.editTitle')
+      }),
+      el('a.profile__preview-link', { href: '#/u/' + user.id, text: t('profile.previewLink') })
+    ]);
+
+    if (!open) return el('div.profile__edit', null, controls);
+
+    var namePair = UI.langPair(t('profile.displayName'), user.name);
+    var bioPair = UI.langPair(t('profile.bio'), user.bio, { multiline: true, rows: '3' });
+
+    var toggles = Store.VISIBILITY_FIELDS.map(function (fieldName) {
+      var on = isPublic(user, fieldName);
+      return el('div.privacy-row', null, [
+        el('div', null, [
+          el('div.privacy-row__name', { text: t('profile.field.' + fieldName) }),
+          el('div.privacy-row__hint', { text: t('profile.hint.' + fieldName) })
+        ]),
+        el('button.switch', {
+          type: 'button',
+          role: 'switch',
+          'aria-checked': on ? 'true' : 'false',
+          'aria-label': t('profile.field.' + fieldName) + ' — ' + (on ? t('profile.public') : t('profile.private')),
+          onclick: function () {
+            var next = {};
+            Store.VISIBILITY_FIELDS.forEach(function (f) { next[f] = isPublic(user, f) ? 'public' : 'private'; });
+            next[fieldName] = on ? 'private' : 'public';
+            Store.set('users', user.id, { visibility: next });
+            render();
+          }
+        }),
+        el('span.privacy-row__state', { text: on ? t('profile.public') : t('profile.private') })
+      ]);
+    });
+
+    var form = el('form.profile__edit-form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        var name = namePair.read();
+        Store.set('users', user.id, {
+          // A blank name would erase attribution everywhere, so it falls back.
+          name: { ar: name.ar || user.name.ar, en: name.en || user.name.en },
+          bio: bioPair.read()
+        });
+        UI.toast(t('profile.saved'));
+        render();
+      }
+    }, [
+      namePair.node,
+      bioPair.node,
+      el('div.privacy-list', null, [
+        el('div.privacy-list__head', null, [
+          el('h3.profile__section-title', { text: t('profile.privacyTitle') }),
+          el('p.privacy-list__note', { text: t('profile.privacyNote') })
+        ])
+      ].concat(toggles)),
+      el('div.dialog__actions', null, [
+        el('button.btn.btn--primary', { type: 'submit', text: t('profile.save') })
+      ])
+    ]);
+
+    return el('div.profile__edit.profile__edit--open', null, [controls, form]);
+  }
+
+  /* ── Info page ───────────────────────────────────────────── */
+
+  function renderInfoPage() {
+    var sections = Store.list('pages');
+
+    return el('div.infopage', null, [
+      el('div.page-head', null, [
+        el('div', null, [
+          el('h1.page-head__title', { text: t('page.title') }),
+          el('p.page-head__blurb', { text: t('page.blurb') })
+        ])
+      ]),
+      el('nav.infopage__toc', { 'aria-label': t('page.title') }, sections.map(function (section) {
+        return el('a.infopage__toc-link', {
+          href: '#/page/' + section.slug,
+          'aria-current': routedPageSlug() === section.slug ? 'true' : null,
+          text: pick(section.title)
+        });
+      })),
+      el('div.infopage__body', null, sections.map(function (section) {
+        return el('section.infosection', { id: 'section-' + section.slug }, [
+          el('h2.infosection__title', { text: pick(section.title) }),
+          el('div.infosection__gloss.gloss-line', { text: gloss(section.title) })
+        ].concat(
+          pick(section.body).split(/\n\s*\n/).map(function (para) {
+            return el('p.infosection__para', { text: para });
+          })
+        ).concat(
+          section.slug === 'donate' ? [donateContact(section)] : []
+        ));
+      }))
+    ]);
+  }
+
+  /* Email opens the mail client; the phone number opens WhatsApp. */
+  function donateContact(section) {
+    var contact = section.contact || {};
+    var email = contact.email || '';
+    var whatsapp = contact.whatsapp || '';
+    var waDigits = whatsapp.replace(/[^\d]/g, '');
+
+    return el('div.donate-contact', null, [
+      el('h3.donate-contact__title', { text: t('page.donateReach') }),
+      el('div.donate-contact__rows', null, [
+        el('a.donate-contact__row', { href: 'mailto:' + email }, [
+          el('span.donate-contact__label', { text: t('page.email') }),
+          el('span.donate-contact__value.lat', { text: email })
+        ]),
+        el('a.donate-contact__row', {
+          href: waDigits ? 'https://wa.me/' + waDigits : 'https://wa.me/',
+          target: '_blank',
+          rel: 'noopener'
+        }, [
+          el('span.donate-contact__label', { text: t('page.whatsapp') }),
+          el('span.donate-contact__value.lat', { text: whatsapp })
+        ])
+      ]),
+      el('p.donate-contact__note', { text: t('page.donateNote') })
+    ]);
+  }
+
   /* ── Map ─────────────────────────────────────────────────── */
 
   var mapInstance = null;
   var markerLayer = null;
 
   function memoriesForDecade() {
-    if (state.decade === 'all') return DATA.MEMORIES;
-    return DATA.MEMORIES.filter(function (memory) { return memory.decade === state.decade; });
+    if (state.decade === 'all') return memories;
+    return memories.filter(function (memory) { return memory.decade === state.decade; });
   }
 
   function renderMap() {
@@ -702,19 +1034,9 @@
     var place = DATA.place(memory.place);
     var likes = state.likes[memory.id] != null ? state.likes[memory.id] : memory.likes;
 
-    var comments = (memory.comments || []).length
-      ? el('ul.map-card__comments', null, memory.comments.map(function (comment) {
-          return el('li.comment', null, [
-            el('span.comment__avatar', { text: pick(comment.initial) }),
-            el('div', null, [
-              el('div.comment__head', null, [
-                el('span.comment__name', { text: pick(comment.name) }),
-                el('span.comment__when', { text: pick(comment.when) })
-              ]),
-              el('p.comment__body', { text: pick(comment.body) })
-            ])
-          ]);
-        }))
+    var commentRows = Store.commentsOn(memory.id);
+    var comments = commentRows.length
+      ? el('ul.map-card__comments', null, commentRows.map(function (comment) { return commentRow(comment); }))
       : el('div.map-card__comments', null, el('p.comments__empty', { text: t('comments.empty') }));
 
     var card = el('div.map-card', null, [
@@ -732,7 +1054,7 @@
         ]),
         el('div.map-card__divider'),
         el('div.map-card__comments-head', {
-          html: t('comments.title') + ' <b>' + num((memory.comments || []).length) + '</b>'
+          html: t('comments.title') + ' <b>' + num(commentRows.length) + '</b>'
         }),
         comments,
         el('button.locked-prompt', {
@@ -754,12 +1076,12 @@
     return el('div', null, [
       el('div.page-head', null, [
         el('div', null, [
-          el('h1.page-head__title', { text: t('events.title') }),
-          el('p.page-head__blurb', { text: t('events.blurb') })
+          el('h1.page-head__title', { text: copyText('events.title') }),
+          el('p.page-head__blurb', { text: copyText('events.blurb') })
         ]),
-        el('span.page-head__count', { text: t('events.count', { n: num(DATA.EVENTS.length) }) })
+        el('span.page-head__count', { text: t('events.count', { n: num(events().length) }) })
       ]),
-      el('ul.events', null, DATA.EVENTS.map(function (event) {
+      el('ul.events', null, events().map(function (event) {
         var plate = event.voice
           ? el('div.event__plate.event__plate--voice', null, el('span', { html: ICONS.waveform(150, 28, 7) }))
           : el('div.event__plate.plate', { style: toneStyle(event.tone) }, el('span.mono', { text: event.plate }));
@@ -790,8 +1112,21 @@
   /* ── Render ──────────────────────────────────────────────── */
 
   function render() {
+    refreshContent();
+
     var name = route();
     var memoryIndex = routedMemoryIndex();
+
+    // Profiles are member-only: a signed-out visitor meets the gate and lands back
+    // on the archive rather than on an empty page.
+    if (name === 'profile' && !state.signedIn) {
+      global.location.replace('#/archive');
+      renderMasthead();
+      renderFooter();
+      mount(qs('#view'), renderArchive());
+      openGate();
+      return;
+    }
 
     renderMasthead();
     renderFooter();
@@ -804,18 +1139,31 @@
     } else {
       qs('#site-footer').hidden = false;
       if (mapInstance) { mapInstance.remove(); mapInstance = null; }
-      mount(view, name === 'events' ? renderEvents() : renderArchive());
-      if (name === 'events') tintVoiceWaveforms();
+      if (name === 'profile') mount(view, renderProfile(routedProfileId()));
+      else if (name === 'page') mount(view, renderInfoPage());
+      else if (name === 'events') { mount(view, renderEvents()); tintVoiceWaveforms(); }
+      else mount(view, renderArchive());
     }
 
     // The viewer is a route, not a mode: #/m/<id> opens it over the archive.
     closeViewer();
     if (memoryIndex > -1) openViewer(memoryIndex);
+    else if (name === 'page' && routedPageSlug()) scrollToSection(routedPageSlug());
     else global.scrollTo(0, 0);
+  }
+
+  /** #/page/<slug> renders the whole page, then brings that section into view. */
+  function scrollToSection(slug) {
+    var target = qs('#section-' + slug);
+    if (!target) { global.scrollTo(0, 0); return; }
+    var top = target.getBoundingClientRect().top + global.pageYOffset - 80;
+    global.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
   }
 
   global.addEventListener('hashchange', render);
   global.addEventListener('langchange', render);
+  // A dashboard edit in another tab reaches the public site without a reload.
+  Store.subscribe(function () { render(); });
 
   // The archive is masonry across a variable column count; re-lay it out on resize.
   var resizeTimer = null;
