@@ -1,0 +1,117 @@
+/* Ramallah Memory Atlas — design tokens
+   Values are lifted directly from the design doc (Ramallah Memory Atlas.dc.html). */
+
+:root {
+  /* Ink & paper */
+  --ink: #26281F;
+  --ink-70: rgba(38, 40, 31, .7);
+  --ink-65: rgba(38, 40, 31, .65);
+  --ink-60: rgba(38, 40, 31, .6);
+  --ink-55: rgba(38, 40, 31, .55);
+  --ink-50: rgba(38, 40, 31, .5);
+  --ink-45: rgba(38, 40, 31, .45);
+  --ink-40: rgba(38, 40, 31, .4);
+
+  --canvas: #E8E4D8;
+  --paper: #F7F4EC;
+  --paper-raised: #FBF8EF;
+  --paper-sunken: #F2EEE2;
+
+  /* Brand */
+  --olive: #3E4A2E;
+  --olive-deep: #2E3226;
+  --sage: #8A9268;
+  --terracotta: #C05B3E;
+  --gold: #D9A441;
+  --gold-ink: #A67B24;
+  --gold-ink-deep: #8A6A1F;
+
+  /* Olive alpha ramp — borders and rest states on paper */
+  --olive-a08: rgba(62, 74, 46, .08);
+  --olive-a10: rgba(62, 74, 46, .10);
+  --olive-a12: rgba(62, 74, 46, .12);
+  --olive-a14: rgba(62, 74, 46, .14);
+  --olive-a16: rgba(62, 74, 46, .16);
+  --olive-a18: rgba(62, 74, 46, .18);
+  --olive-a22: rgba(62, 74, 46, .22);
+  --olive-a25: rgba(62, 74, 46, .25);
+  --olive-a30: rgba(62, 74, 46, .30);
+  --olive-a35: rgba(62, 74, 46, .35);
+
+  /* Cream alpha ramp — for use on the olive rail and the dark viewer */
+  --cream: #F7F4EC;
+  --cream-a75: rgba(247, 244, 236, .75);
+  --cream-a65: rgba(247, 244, 236, .65);
+  --cream-a55: rgba(247, 244, 236, .55);
+  --cream-a45: rgba(247, 244, 236, .45);
+  --cream-a18: rgba(247, 244, 236, .18);
+  --cream-a14: rgba(247, 244, 236, .14);
+  --cream-a13: rgba(247, 244, 236, .13);
+  --cream-a10: rgba(247, 244, 236, .10);
+  --cream-a08: rgba(247, 244, 236, .08);
+  --footer-ink: #EEF1E6;
+
+  /* Tinted surfaces */
+  --terracotta-a04: rgba(192, 91, 62, .04);
+  --terracotta-a07: rgba(192, 91, 62, .07);
+  --terracotta-a12: rgba(192, 91, 62, .12);
+  --terracotta-a14: rgba(192, 91, 62, .14);
+  --terracotta-a25: rgba(192, 91, 62, .25);
+  --terracotta-a45: rgba(192, 91, 62, .45);
+  --gold-a06: rgba(217, 164, 65, .06);
+  --gold-a12: rgba(217, 164, 65, .12);
+  --gold-a18: rgba(217, 164, 65, .18);
+  --gold-a20: rgba(217, 164, 65, .20);
+  --gold-a40: rgba(217, 164, 65, .40);
+  --gold-a45: rgba(217, 164, 65, .45);
+  --map-canvas: #EEF1E6;
+
+  /* Type */
+  --font-ar: 'IBM Plex Sans Arabic', system-ui, sans-serif;
+  --font-en: 'Inter', system-ui, sans-serif;
+  --font-mono: ui-monospace, Menlo, Consolas, monospace;
+
+  /* Radius */
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-pill: 999px;
+
+  /* Elevation */
+  --sh-card: 0 1px 3px rgba(38, 40, 31, .05);
+  --sh-card-hover: 0 4px 14px rgba(38, 40, 31, .13);
+  --sh-float: 0 8px 24px rgba(38, 40, 31, .2);
+  --sh-modal: 0 24px 70px rgba(0, 0, 0, .4);
+  --sh-modal-lg: 0 30px 80px rgba(0, 0, 0, .45);
+
+  /* Motion */
+  --ease: cubic-bezier(.2, .7, .3, 1);
+  --dur: 180ms;
+}
+
+/* The archive has no digitised photographs in this build. Every image well uses
+   the design's hatched-gradient placeholder, which reads as "material pending"
+   rather than pretending a photo exists. */
+.plate {
+  background:
+    repeating-linear-gradient(45deg, rgba(38, 40, 31, .045) 0 7px, rgba(0, 0, 0, 0) 7px 14px),
+    linear-gradient(160deg, var(--p1, #D9C49C), var(--p2, #B29470));
+}
+
+.plate--deep {
+  background:
+    repeating-linear-gradient(45deg, rgba(38, 40, 31, .1) 0 8px, rgba(0, 0, 0, 0) 8px 16px),
+    linear-gradient(160deg, var(--p1, #D9C49C), var(--p2, #B29470));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
