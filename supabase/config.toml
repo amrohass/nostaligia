@@ -1,0 +1,33 @@
+# Supabase CLI configuration.
+#
+# Deliberately minimal. This file is read for two very different purposes and only
+# one of them is safe right now:
+#
+#   `supabase db push`      — applies supabase/migrations/ to the linked project.
+#                             Safe. This is what item 1 is verified with.
+#   `supabase config push`  — overwrites the HOSTED project's auth/API settings with
+#                             whatever this file says, filling every key you omitted
+#                             with a CLI default. DO NOT RUN IT until this file
+#                             describes the project fully (M1, when auth is
+#                             configured and the access-token hook is registered).
+#
+# The project ref below is a public identifier — it is in every API URL the browser
+# sends. It is not a credential. No key of any kind belongs in this file; the CLI
+# reads SUPABASE_DB_PASSWORD and SUPABASE_ACCESS_TOKEN from the environment, and
+# .gitignore keeps every .env out of the repo.
+
+project_id = "pjqvtmhizbnimqyxjbyq"
+
+# The access-token hook from migration 0013. This block configures the LOCAL stack
+# only (`supabase start`). The hosted project does not read this file — the hook must
+# be switched on by hand at
+#   Dashboard → Authentication → Hooks → Customize Access Token (JWT) Claims
+#   → Postgres → public.custom_access_token_hook
+# until `supabase config push` becomes safe to run (M1).
+#
+# Nothing in item 4's RLS depends on this hook. Policies read public.authz_role(),
+# which goes to the table. The claim exists for Edge Functions and admin-UI
+# affordances only — leaving the hook off degrades M1, never M0's authorization.
+[auth.hook.custom_access_token]
+enabled = true
+uri = "pg-functions://postgres/public/custom_access_token_hook"

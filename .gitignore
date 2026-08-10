@@ -1,0 +1,57 @@
+# Ramallah Memory Atlas — ignore rules
+#
+# CLAUDE.md §6: ".env* git-ignored from commit #1." That rule is absolute here —
+# there is deliberately no `!.env.example` negation, because a negation is a hole
+# and this project has already paid for one leaked credential. A committed
+# template belongs at `env.example` (no leading dot), which these rules allow
+# through while every real `.env…` stays out.
+
+# ── Secrets ──────────────────────────────────────────────────
+.env
+.env.*
+*.env
+.envrc
+
+# Anything that smells like a key. Belt and braces alongside gitleaks.
+*.pem
+*.key
+*.p12
+*.pfx
+service-role*
+*service_role*
+secrets.json
+.secrets/
+
+# ── Supabase CLI ─────────────────────────────────────────────
+# Local stack state and generated temp files. Migrations, config.toml,
+# functions and tests are all tracked — only runtime state is ignored.
+.supabase/
+supabase/.temp/
+supabase/.branches/
+supabase/logs/
+
+# ── Node ─────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.npm/
+.node_repl_history
+
+# ── Build & tooling output ───────────────────────────────────
+dist/
+.cache/
+coverage/
+gitleaks-report.json
+*.log
+
+# ── Cloudflare ───────────────────────────────────────────────
+.wrangler/
+
+# ── Editors & OS ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
