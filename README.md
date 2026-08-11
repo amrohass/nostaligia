@@ -51,8 +51,11 @@ db` exits 0 when it runs nothing. No capability-bearing key is reachable from th
 ### Hosting — resolved
 
 The site is served by **Cloudflare Pages** at `nostaligia.pages.dev`, Git-connected to
-`main`. Framework preset None, no build command, output directory `/` — CLAUDE.md §2
-forbids a build step and `_headers` must sit at the output root, which it does.
+`main`. Framework preset None, no build command, output directory **`site/`** — declared in
+[wrangler.toml](wrangler.toml) rather than the dashboard, so the deployed tree is
+config-as-code. Only `site/` is served; `supabase/`, `scripts/`, `config/` and the docs are
+unreachable by construction. CLAUDE.md §2 forbids a build step and `_headers` must sit at the
+output root, which is now `site/_headers`, where the generator writes it.
 
 `_headers` is a Cloudflare Pages feature that **GitHub Pages ignores entirely**, so for a
 while the CSP and HSTS in this repository were correct, tested, and applied to nothing. That
@@ -78,8 +81,10 @@ commits to, and hardcoding it would be the same mistake as hardcoding it in the 
 
 Still open before the old deployment can be retired: a real custom domain, DNS, replacing
 `PLACEHOLDER_DOMAIN`/`PLACEHOLDER_CDN_DOMAIN` and regenerating, then retiring GitHub Pages —
-which is **still live and still serving with no CSP**, so two public origins currently carry
-the same content. HSTS `preload` should be *submitted* last, once the final domain is
+which is **still live, still serving with no CSP, and still serving the repository root**.
+`wrangler.toml` scopes the *Cloudflare* deployment to `site/`; GitHub Pages ignores that file
+entirely, so `CLAUDE.md`, `supabase/` and `scripts/` stay public there until it is retired.
+HSTS `preload` should be *submitted* last, once the final domain is
 settled; serving the directive is harmless until then, but the list is painful to unwind.
 
 ### Headers and CSP
