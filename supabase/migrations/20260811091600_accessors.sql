@@ -84,7 +84,13 @@ as $$
       else null
     end as visibility,
     extract(year from p.created_at)::integer as member_since,
-    (p.id = (select auth.uid())) as is_own
+    -- coalesce is not decoration, for the same reason as in is_moderator(): for a
+    -- signed-out caller auth.uid() is NULL, so `p.id = NULL` is NULL rather than
+    -- false. A NULL here is falsy in JavaScript so the UI would look right, but
+    -- `not is_own` is ALSO falsy on NULL — anything negating this would conclude the
+    -- profile belongs to the caller. Caught by an assertion that expected false and
+    -- got NULL.
+    coalesce(p.id = (select auth.uid()), false) as is_own
   from public.profiles p
   where public.normalized_handle(p.handle) = public.normalized_handle(p_handle);
 $$;

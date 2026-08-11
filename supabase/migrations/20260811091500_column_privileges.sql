@@ -205,6 +205,32 @@ revoke all on public.audit_log from anon, authenticated;
 grant select (id, actor, action, target_type, target_id, before, after, created_at)
   on public.audit_log to authenticated;
 
+-- ── service_role ─────────────────────────────────────────────
+--
+-- FOUND BY the trigger suite: a service-role INSERT into posts failed with
+-- "permission denied for table posts". service_role held only Dxtm — TRUNCATE,
+-- REFERENCES, TRIGGER, MAINTAIN — on all fifteen tables, and no DML whatsoever.
+--
+-- The cause is a default-privilege entry this Supabase version ships:
+--
+--   postgres | public | r | anon=Dxtm  authenticated=Dxtm  service_role=Dxtm
+--
+-- Tables created by `postgres` (every migration here) get DML for nobody. That is a
+-- sensible hardening — new tables are not world-readable by accident — but it means
+-- service_role's access is NOT inherited from anywhere. Everything above grants
+-- `authenticated` explicitly and would have looked complete; service_role was simply
+-- never mentioned, and BYPASSRLS gave the impression it did not need to be. BYPASSRLS
+-- exempts a role from ROW policies. It grants no table privilege at all.
+--
+-- What this would have broken, all of it silently and all of it later: the
+-- request-upload and processing Edge Functions (M1), the publisher reading approved
+-- rows to build shards (M2), takedown (M2), and the bulk importer (M5).
+--
+-- Granted explicitly rather than by restoring a default, so this file stays the whole
+-- model: a reader can see who may touch what without consulting pg_default_acl.
+grant select, insert, update, delete on all tables in schema public to service_role;
+grant usage, select on all sequences in schema public to service_role;
+
 -- ── Never reachable from a browser ───────────────────────────
 -- No grant, no policy, twice-locked. Listed explicitly so the absence is a decision
 -- rather than an omission.

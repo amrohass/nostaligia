@@ -31,13 +31,28 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | # | Item | State |
 |---|---|---|
 | 0 | `.gitignore`, `.env*` excluded from commit #1 | done |
-| 1 | Full schema — 12 tables, PostGIS, EDTF, generated `decade`, media ladder, indexes | done, **unapplied** |
-| 2 | Edit-after-approval trigger, content hash, post audit trail | done, **unapplied** |
-| 3 | Role plumbing — `user_roles`, `authz_role()`, access-token hook, role audit trail | done, **unapplied** |
-| 4 | RLS policies + column privileges on every table, with structural tests | done, **unapplied, unrun** |
-| 5 | RLS denial matrix (pgTAP) wired into CI | not started |
+| 1 | Full schema — 15 tables, PostGIS, EDTF, generated `decade`, media ladder, indexes | **applied, verified** |
+| 2 | Edit-after-approval trigger, content hash, post audit trail | **applied**, tests pending |
+| 3 | Role plumbing — `user_roles`, `authz_role()`, access-token hook, role audit trail | **applied**, tests pending |
+| 4 | RLS policies + column privileges on every table, with structural tests | **applied, 26/26 green** |
+| 4a | Location fuzzing derived in-database; jsonb key allowlists + size ceilings | **applied, verified** |
+| 5 | Full denial matrix + `SECURITY DEFINER` per-function tests, wired into CI | in progress |
 | 6 | gitleaks in pre-commit and CI | not started |
 | 7 | Cloudflare Pages `_headers` — CSP without `unsafe-inline`, HSTS | not started |
+
+All 22 migrations apply cleanly and deterministically on PostgreSQL 17.6 (Supabase local),
+from scratch and incrementally onto a populated database. 43 pgTAP assertions green.
+
+### Requirements carried into later milestones
+
+Decisions taken during M0 that must be honoured elsewhere. Recorded here because the
+reasoning is M0's and the implementation is not.
+
+| # | Requirement | Milestone |
+|---|---|---|
+| R1 | **The moderation queue must visually flag any submission with `location_precision = 'exact'`**, so publishing a precise coordinate is reviewed as a decision rather than accepted as a default. The schema deliberately does *not* gate this — `exact` is legitimate for a public landmark — so the control is editorial, not structural. | M1 |
+| R2 | The day-precision timestamp assertion in `stage0_incremental.ps1` covers the generated column only. Postgres already forces that case (`created_at::date` is STABLE and would be rejected at DDL time). The place a local-time bug can actually occur is the **publish-time** day-precision path, which has no such guard — re-point the assertion there. | M2/M3 |
+| R3 | CI must gate on `pg_prove`'s TAP parsing, never on a psql exit code: psql exits 0 even when a pgTAP assertion fails. | M0 item 5 |
 
 **Unapplied** means the SQL is written and reviewed but has not been run against any
 database. **Unrun** means the same for the test suite. See
@@ -147,6 +162,17 @@ refused by Postgres itself:
 - **Two releases cannot both be active** — a partial unique index makes it
   unrepresentable, which is the database half of the publisher's single-writer lock.
 - **Editing approved content returns it to the queue** — see below.
+- **`location_public` is derived, never written.** A trigger computes it from
+  `location` + `location_precision` for *every* writer including the service role and the
+  bulk importer, and the column is not in any grant. Fuzzing is **grid snapping**, not
+  jitter: jitter re-rolled per write leaks the true point to anyone who can average
+  several observations, while snapping destroys the information outright. `street` snaps
+  to 0.001° (~100 m), `area` to 0.01° (~1 km), `hidden` publishes nothing. `exact`
+  publishes the true point and must be chosen — the column default is `hidden`.
+- **`details` and `consent` accept only allowlisted keys**, with size ceilings. `details`
+  is readable by any signed-in user, so an unconstrained blob there would walk straight
+  past every column privilege; adding a key now requires a migration, which forces the
+  question "may a stranger read this?" to be asked in a diff.
 - **`profiles.role_cache` cannot be written from a browser**, by column privilege rather
   than by policy, so the rule binds moderators and admins too.
 

@@ -8,6 +8,13 @@
 --
 -- pgTAP is created inside this transaction and rolled back with it, so it never
 -- appears in a migration and cannot reach production.
+--
+-- A note on `aclexplode(relacl)` with no coalesce. The obvious defensive spelling,
+-- coalesce(relacl, '{}'::aclitem[]), RAISES: an empty array literal is
+-- zero-dimensional (array_ndims returns NULL) and aclexplode demands one dimension.
+-- The bare column is both simpler and correct — aclexplode is STRICT, so a NULL acl
+-- yields zero rows, and a NULL acl means "default privileges, no explicit grant",
+-- which is exactly the nothing-to-see case these assertions want to skip.
 
 begin;
 create extension if not exists pgtap;
@@ -48,7 +55,7 @@ select is_empty(
     select c.relname || ' / ' || acl.privilege_type
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
-    cross join lateral aclexplode(coalesce(c.relacl, '{}'::aclitem[])) acl
+    cross join lateral aclexplode(c.relacl) acl
     where n.nspname = 'public' and c.relkind = 'r'
       and acl.grantee = 'anon'::regrole::oid
   $q$,
@@ -62,7 +69,7 @@ select is_empty(
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-    cross join lateral aclexplode(coalesce(a.attacl, '{}'::aclitem[])) acl
+    cross join lateral aclexplode(a.attacl) acl
     where n.nspname = 'public' and c.relkind = 'r'
       and acl.grantee = 'anon'::regrole::oid
   $q$,
@@ -77,7 +84,7 @@ select is_empty(
     select acl.privilege_type
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
-    cross join lateral aclexplode(coalesce(c.relacl, '{}'::aclitem[])) acl
+    cross join lateral aclexplode(c.relacl) acl
     where n.nspname = 'public' and c.relname = 'posts'
       and acl.grantee = 'authenticated'::regrole::oid
       and acl.privilege_type = 'SELECT'
@@ -92,7 +99,7 @@ select is_empty(
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-    cross join lateral aclexplode(coalesce(a.attacl, '{}'::aclitem[])) acl
+    cross join lateral aclexplode(a.attacl) acl
     where n.nspname = 'public' and c.relname = 'posts'
       and acl.grantee = 'authenticated'::regrole::oid
       and acl.privilege_type = 'SELECT'
@@ -110,7 +117,7 @@ select is_empty(
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-    cross join lateral aclexplode(coalesce(a.attacl, '{}'::aclitem[])) acl
+    cross join lateral aclexplode(a.attacl) acl
     where n.nspname = 'public' and c.relname = 'posts'
       and acl.grantee = 'authenticated'::regrole::oid
       and acl.privilege_type in ('INSERT', 'UPDATE')
@@ -126,7 +133,7 @@ select is_empty(
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     join pg_attribute a on a.attrelid = c.oid and a.attname = 'role_cache'
-    cross join lateral aclexplode(coalesce(a.attacl, '{}'::aclitem[])) acl
+    cross join lateral aclexplode(a.attacl) acl
     where n.nspname = 'public' and c.relname = 'profiles'
       and acl.grantee in ('anon'::regrole::oid, 'authenticated'::regrole::oid)
       and acl.privilege_type in ('INSERT', 'UPDATE')
