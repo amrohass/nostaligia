@@ -18,7 +18,7 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 
 | M | Contents | State |
 |---|---|---|
-| **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **all 8 items built and green**; blocked on provisioning Cloudflare Pages |
+| **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **complete** — 8/8 items, exit criteria met, CSP/HSTS verified live |
 | M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | not started |
 | M2 | Sharding · versioned releases · single-writer lock · takedown | not started |
 | M3 | Front end on shards · History API · prerendered item pages · XSS/bidi sweep | not started |
@@ -42,16 +42,45 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 
 All 23 migrations apply cleanly and deterministically on PostgreSQL 17.6 (Supabase local),
 from scratch and incrementally onto a populated database. **All eight M0 items are built
-and green in CI.**
+and green in CI**, across three jobs: secrets, frontend, database.
 
-Two things stand between that and M0 being *finished*, and neither is code:
+**M0's exit criteria are met.** The denial matrix is green in CI — and the database job now
+gates on the assertion *count*, derived by summing every `plan(N)`, because `supabase test
+db` exits 0 when it runs nothing. No capability-bearing key is reachable from the browser.
 
-1. **The site is served by GitHub Pages, not Cloudflare Pages.** CLAUDE.md §2 names
-   Cloudflare Pages explicitly. `_headers` is a Cloudflare Pages file — **GitHub Pages
-   ignores it entirely**, so right now the CSP and HSTS in this repository are not applied
-   to anything. M0's header work is correct and inert.
-2. **The production host and domain are not provisioned**, so every origin is still
-   `PLACEHOLDER_DOMAIN`.
+### Hosting — resolved
+
+The site is served by **Cloudflare Pages** at `nostaligia.pages.dev`, Git-connected to
+`main`. Framework preset None, no build command, output directory `/` — CLAUDE.md §2
+forbids a build step and `_headers` must sit at the output root, which it does.
+
+`_headers` is a Cloudflare Pages feature that **GitHub Pages ignores entirely**, so for a
+while the CSP and HSTS in this repository were correct, tested, and applied to nothing. That
+gap is not visible from the repository or from CI — only a response from the live origin
+settles it, which is what
+[scripts/verify-deployed-headers.mjs](scripts/verify-deployed-headers.mjs) exists to do:
+
+```
+node scripts/verify-deployed-headers.mjs https://nostaligia.pages.dev
+```
+
+It rebuilds the expected policy from `config/site.json` — not by parsing `_headers`, so a
+hand-edited `_headers` is caught too — and compares every header against the live response.
+The URL is an argument, never a constant: a `*.pages.dev` host is not an origin this project
+commits to, and hardcoding it would be the same mistake as hardcoding it in the app.
+
+| | GitHub Pages | Cloudflare Pages |
+|---|---|---|
+| CSP | **absent** | present, byte-identical to the generated policy |
+| HSTS | `max-age=31556952` (GitHub's own) | `max-age=31536000; includeSubDomains; preload` |
+| nosniff · XFO · Referrer · COOP · CORP · Permissions | all absent | all present, exact |
+| verifier | **8 of 10 failed** | **12 of 12 passed** |
+
+Still open before the old deployment can be retired: a real custom domain, DNS, replacing
+`PLACEHOLDER_DOMAIN`/`PLACEHOLDER_CDN_DOMAIN` and regenerating, then retiring GitHub Pages —
+which is **still live and still serving with no CSP**, so two public origins currently carry
+the same content. HSTS `preload` should be *submitted* last, once the final domain is
+settled; serving the directive is harmless until then, but the list is painful to unwind.
 
 ### Headers and CSP
 
@@ -250,6 +279,7 @@ scripts/
   forbidden-paths.ere      ONE copy of the path patterns, read by both hook and CI
   build-site-config.mjs    config/site.json -> _headers + config.js; --check gates CI
   frontend-csp-test.mjs    14 assertions: CSSOM styling + the external-origin ratchet
+  verify-deployed-headers.mjs  fetches a live deployment; proves headers are SERVED
 .github/workflows/ci.yml   three jobs: secrets · frontend (headers/CSP) · database
 
 supabase/
