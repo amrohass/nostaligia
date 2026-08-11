@@ -17,18 +17,14 @@ $root    = Split-Path -Parent $PSScriptRoot
 $migDir  = Join-Path $root 'supabase/migrations'
 $holdDir = Join-Path $env:TEMP 'rma_stage0_hold'
 
-# Everything from 0014 onward is withheld for the first reset.
-$later = @(
-  '20260811091400_authorship.sql',
-  '20260811091500_column_privileges.sql',
-  '20260811091600_accessors.sql',
-  '20260811091700_rls_identity.sql',
-  '20260811091800_rls_content.sql',
-  '20260811091900_rls_engagement.sql',
-  '20260811092000_rls_governance.sql',
-  '20260811092100_location_fuzzing.sql',
-  '20260811092200_jsonb_shape.sql'
-)
+# Everything from 0014 onward is withheld for the first reset. DERIVED, not listed:
+# a hardcoded list goes stale the moment a migration is added, and the failure is
+# silent — the withheld set would simply miss the new file, `db reset` would apply it
+# on top of 0013, and the test would quietly stop testing what it claims to.
+$boundary = '20260811091400'
+$later = Get-ChildItem (Join-Path (Split-Path -Parent $PSScriptRoot) 'supabase/migrations') -Filter '*.sql' |
+         Where-Object { ($_.Name -split '_')[0] -ge $boundary } |
+         Sort-Object Name | Select-Object -ExpandProperty Name
 
 function Get-DbContainer {
   $c = docker ps --filter 'name=supabase_db_' --format '{{.Names}}' | Select-Object -First 1

@@ -9,8 +9,8 @@ begin;
 create extension if not exists pgtap;
 
 -- 2 content-column sweep · 3 hash · 2 approval · 3 audit permanence
--- 4 role logs · 1 self-approval · 2 service role
-select plan(17);
+-- 4 role logs · 1 self-approval · 2 service-role triggers · 3 service-role privileges
+select plan(20);
 
 insert into auth.users (id,email) values
  ('00000000-0000-0000-0000-0000000000a1','m@t'),
@@ -136,12 +136,12 @@ select is((select count(*) from public.audit_log
   'a moderator approving their own post emits post.status.approved.self (§4)');
 
 -- ── audit_log permanence, for EVERY role ─────────────────────
-select throws_ok($q$ update public.audit_log set action='x' $q$, '2F003', null,
+select throws_ok($q$ update public.audit_log set action='x' $q$, '23001', null,
   'audit_log refuses UPDATE as the table owner');
-select throws_ok($q$ delete from public.audit_log $q$, '2F003', null,
+select throws_ok($q$ delete from public.audit_log $q$, '23001', null,
   'audit_log refuses DELETE as the table owner');
 set local role service_role;
-select throws_ok($q$ delete from public.audit_log $q$, '2F003', null,
+select throws_ok($q$ delete from public.audit_log $q$, '23001', null,
   'audit_log refuses DELETE as service_role — BYPASSRLS does not bypass a trigger');
 reset role;
 
@@ -185,6 +185,38 @@ select is((select round(st_x(location_public::geometry)::numeric,9) from public.
 select is((select count(*) from public.audit_log
            where target_id='00000000-0000-0000-0000-000000000bb1' and action='post.create'), 1::bigint,
   'the audit trigger fires on a service-role insert too');
+
+-- ── service_role actually holds the privileges it needs ──────
+--
+-- BYPASSRLS exempts a role from ROW policies; it grants no table privilege. This
+-- schema's every "service role only" claim rests on service_role being able to reach
+-- the table at all, and for fifteen tables it could not — the default privileges in
+-- this Supabase version give new tables Dxtm and no DML. Asserted per-operation
+-- rather than by a smoke test, because the failure was invisible until something
+-- tried to write.
+select is_empty(
+  $q$
+    select c.relname::text || ' missing ' || p.priv
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    cross join (values ('SELECT'),('INSERT'),('UPDATE'),('DELETE')) p(priv)
+    where n.nspname = 'public' and c.relkind = 'r'
+      and not exists (
+        select 1 from aclexplode(c.relacl) acl
+        where acl.grantee = 'service_role'::regrole::oid
+          and acl.privilege_type = p.priv
+      )
+  $q$,
+  'service_role holds SELECT/INSERT/UPDATE/DELETE on every table — BYPASSRLS is not a grant');
+
+set local role service_role;
+select lives_ok(
+  $q$ select count(*) from public.posts $q$,
+  'service_role can actually read posts — the publisher path (M2)');
+select lives_ok(
+  $q$ update public.upload_quota set count = count + 1 where true $q$,
+  'service_role can write upload_quota — the daily-quota path (M1, §6)');
+reset role;
 
 select * from finish();
 rollback;

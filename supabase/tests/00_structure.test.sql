@@ -19,7 +19,7 @@
 begin;
 create extension if not exists pgtap;
 
-select plan(9);
+select plan(11);
 
 -- ── 1 · RLS is on, everywhere ────────────────────────────────
 select is_empty(
@@ -155,6 +155,40 @@ select set_eq(
   $q$,
   array['user_roles', 'reserved_handles', 'releases', 'upload_quota'],
   'exactly four tables are intentionally policy-free (deny-all, service role only)'
+);
+
+-- ── 10 · No SECURITY DEFINER function with a mutable search_path ──
+-- A definer function that resolves unqualified names through the caller's search_path
+-- is the standard privilege-escalation route: put a same-named function in a schema
+-- earlier on the path and the definer runs it with the owner's rights.
+select is_empty(
+  $q$
+    select p.proname::text
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.prosecdef
+      and not exists (
+        select 1 from unnest(coalesce(p.proconfig, '{}')) as cfg
+        where cfg like 'search_path=%'
+      )
+  $q$,
+  'every SECURITY DEFINER function pins search_path'
+);
+
+-- ── 11 · Definer privileges are as narrow as the job ─────────
+-- These four bypass RLS and column grants entirely. Nothing that reaches them from a
+-- browser should be able to call them: two are trigger/publisher internals, one is
+-- Supabase Auth's, one is a policy helper that only the policy needs.
+select is_empty(
+  $q$
+    select p.proname::text || ' executable by ' || acl.grantee::regrole::text
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    cross join lateral aclexplode(p.proacl) acl
+    where n.nspname = 'public'
+      and p.proname in ('post_content_hash','post_audit_snapshot','custom_access_token_hook')
+      and acl.grantee in (0, 'anon'::regrole::oid, 'authenticated'::regrole::oid)
+  $q$,
+  'the sensitive definer functions are not executable by PUBLIC, anon or authenticated'
 );
 
 select * from finish();
