@@ -1,5 +1,6 @@
 (^|/)\.env($|\.)
 (^|/)\.envrc$
+(^|/)\.dev\.vars($|\.)
 \.(pem|key|p12|pfx)$
 service_?role
 (^|/)secrets\.json$

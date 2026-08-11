@@ -46,7 +46,7 @@ const stubWindow = {
   document: { createElement: stubNode, createTextNode: () => ({}) },
   DATA: { tone: () => ['#A98D66', '#8A9268'] }
 };
-new Function('window', readFileSync(join(root, 'assets/js/ui.js'), 'utf8'))(stubWindow);
+new Function('window', readFileSync(join(root, 'site/assets/js/ui.js'), 'utf8'))(stubWindow);
 const { el, toneStyle } = stubWindow.UI;
 
 const run = (styleValue) => { recorded.length = 0; el('div', { style: styleValue }); return recorded; };
@@ -76,10 +76,14 @@ ok(run('padding:20px;;').length === 1 && run(';').length === 0,
    'empty and malformed declarations are skipped rather than throwing');
 
 // ── 2 · the external-origin ratchet ─────────────────────────────────────────
+// Everything Cloudflare Pages actually serves, and nothing else — site/ IS the deployed
+// tree (wrangler.toml). Scanning the repository root instead would sweep in scripts/ and
+// supabase/, whose origins are never fetched by a browser, and the ratchet would start
+// reporting on files no visitor can reach.
 const files = [
-  'index.html', 'admin.html',
-  ...readdirSync(join(root, 'assets/js')).filter(f => f.endsWith('.js')).map(f => `assets/js/${f}`),
-  ...readdirSync(join(root, 'assets/css')).filter(f => f.endsWith('.css')).map(f => `assets/css/${f}`)
+  'site/index.html', 'site/admin.html',
+  ...readdirSync(join(root, 'site/assets/js')).filter(f => f.endsWith('.js')).map(f => `site/assets/js/${f}`),
+  ...readdirSync(join(root, 'site/assets/css')).filter(f => f.endsWith('.css')).map(f => `site/assets/css/${f}`)
 ];
 
 const own = new Set(Object.values(cfg.domains).map(d => `https://${d}`));
@@ -105,7 +109,7 @@ ok(stale.length === 0,
    `every known_violation is still real${stale.length ? ' — gone from the code, delete from site.json: ' + stale.join(', ') : ''}`);
 
 // ── 3 · the policy itself ───────────────────────────────────────────────────
-const headers = readFileSync(join(root, '_headers'), 'utf8');
+const headers = readFileSync(join(root, 'site/_headers'), 'utf8');
 ok(!/unsafe-inline|unsafe-eval/.test(headers),
    "the generated _headers contains neither 'unsafe-inline' nor 'unsafe-eval' (section 6)");
 ok(/^\s+Strict-Transport-Security: max-age=\d+; includeSubDomains/m.test(headers),

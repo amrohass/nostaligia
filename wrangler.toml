@@ -1,0 +1,41 @@
+# Cloudflare Pages configuration.
+#
+# WHY THIS FILE EXISTS. With the output directory at the repository root, Pages
+# deployed the entire repository. Verified against the live origin — every one of
+# these returned HTTP 200:
+#
+#     /CLAUDE.md            /supabase/config.toml
+#     /README.md            /supabase/migrations/20260811090100_extensions.sql
+#     /.gitignore           /supabase/tests/05_matrix.test.sql
+#     /.gitleaks.toml       /scripts/build-site-config.mjs
+#
+# No secret was disclosed — that was checked, file by file. But the full schema,
+# every RLS policy, the governance document and the secret-scanner's own rule set
+# were public, dotfiles included. The part that mattered was ahead of us rather
+# than behind: `supabase/functions/*.ts` would have been served the moment M1
+# created them, and a `.dev.vars` alongside them would have been a live secret on
+# a public URL.
+#
+# So the served tree is now an explicit allowlist instead of a default. `site/`
+# holds exactly what a browser is meant to fetch; everything else in this
+# repository is unreachable by construction, not by convention. Adding a new
+# public asset is a deliberate move into `site/`, which is the property worth
+# having — the previous arrangement made *withholding* a file the deliberate act,
+# and there was no way to perform it.
+#
+# `_headers` MUST sit at the root of the output directory to be applied, which is
+# why the generator writes `site/_headers` and not `_headers`. If it is ever moved
+# back to the repository root the CSP and HSTS silently stop being served — the
+# exact GitHub Pages failure the README documents, in a new costume.
+# scripts/verify-deployed-headers.mjs is what catches that; run it after deploy.
+#
+# NO BUILD COMMAND. CLAUDE.md §2 forbids a build step and this file does not add
+# one — Pages publishes `site/` as-is.
+#
+# `name` must match the Pages project exactly. Confirm in the dashboard after the
+# first build that the build configuration reads as managed by this file; a
+# wrangler.toml that Pages never picked up leaves the old root deploy in place and
+# looks identical from the repository.
+
+name = "nostaligia"
+pages_build_output_dir = "./site"

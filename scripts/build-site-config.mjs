@@ -1,4 +1,4 @@
-// Generate `_headers` and `assets/js/config.js` from config/site.json.
+// Generate `site/_headers` and `site/assets/js/config.js` from config/site.json.
 //
 // CLAUDE.md section 2 asks for every origin/CSP/CORS value in one config module so that
 // pointing at a real domain is a one-file change. Two files have to carry those values at
@@ -87,7 +87,7 @@ const headers = [
   ''
 ].join('\n');
 
-// ── assets/js/config.js ─────────────────────────────────────────────────────
+// ── site/assets/js/config.js ────────────────────────────────────────────────
 // Same IIFE-on-window shape as i18n.js / store.js / ui.js. No build step, no modules.
 const js = `/* ${GENERATED}
    Edit config/site.json and re-run the generator. */
@@ -124,9 +124,13 @@ ${Object.entries(cfg.domains).map(([k, v]) => `      ${k}: 'https://${v}'`).join
 })(window);
 `;
 
+// Both targets live inside site/, the Cloudflare Pages output directory declared in
+// wrangler.toml. `_headers` is only applied at the ROOT of that directory — written to
+// the repository root instead, it is a correct, tested, committed file that no longer
+// reaches a single visitor.
 const outputs = [
-  ['_headers', headers],
-  ['assets/js/config.js', js]
+  ['site/_headers', headers],
+  ['site/assets/js/config.js', js]
 ];
 
 let drifted = false;

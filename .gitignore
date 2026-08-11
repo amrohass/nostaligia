@@ -12,6 +12,20 @@
 *.env
 .envrc
 
+# Edge Function local secrets. A DIFFERENT filename from `.env`, so not one of the
+# rules above touches it — and it is precisely where TURNSTILE_SECRET_KEY and a
+# service-role key land the moment Edge Function work starts (M1). Committed, it
+# would be world-readable: the Pages origin serves dotfiles today (`/.gitignore`
+# and `/.gitleaks.toml` both return 200).
+#
+# No leading slash, so a pattern matches at EVERY depth. `.dev.vars` alone already
+# covers `supabase/.dev.vars` and `supabase/functions/.dev.vars`; the second line
+# catches the `.dev.vars.local` variant. Verified with `git check-ignore -v` rather
+# than assumed — the same reason scripts/forbidden-paths.ere carries the twin rule
+# for the force-added case.
+.dev.vars
+.dev.vars.*
+
 # Anything that smells like a key. Belt and braces alongside gitleaks.
 *.pem
 *.key
