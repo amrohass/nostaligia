@@ -1,0 +1,96 @@
+{
+  "_comment": [
+    "THE single source for every origin, CSP value and CORS value in this project.",
+    "CLAUDE.md section 2: 'keep every origin/CSP/CORS value in one config module so it is a",
+    "one-file change later.' This is that file. `_headers` and assets/js/config.js are both",
+    "GENERATED from it by scripts/build-site-config.mjs, and CI regenerates them and fails on",
+    "any diff -- so 'one-file change' is enforced rather than promised.",
+    "",
+    "To point the project at a real domain: edit `domains` here, run the generator, commit.",
+    "Nothing else in the repository should ever contain a hostname."
+  ],
+
+  "domains": {
+    "site": "PLACEHOLDER_DOMAIN",
+    "cdn": "PLACEHOLDER_CDN_DOMAIN",
+    "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co"
+  },
+
+  "_planned_comment": [
+    "Origins that CLAUDE.md commits to but that nothing loads yet. Deliberately NOT emitted:",
+    "a CSP that allows an origin the site does not use is weaker than it needs to be today,",
+    "and 'we will need it eventually' is how an allowlist grows. Move an entry into `csp`",
+    "in the milestone that actually introduces it -- one line, in this file."
+  ],
+  "planned": {
+    "turnstile": {
+      "origin": "https://challenges.cloudflare.com",
+      "needs": ["script-src", "frame-src"],
+      "milestone": "M1 — Turnstile on signup and submit (section 6)"
+    }
+  },
+
+  "_csp_comment": [
+    "No 'unsafe-inline' and no 'unsafe-eval' anywhere -- section 6. @tokens resolve to",
+    "https://<domain> from the table above.",
+    "",
+    "default-src 'none' means every directive not listed below is DENIED, so adding a new",
+    "kind of subresource is a deliberate edit here rather than something that silently works.",
+    "",
+    "form-action 'none': nothing in this app submits an HTML form. Supabase Auth is fetch().",
+    "Set to 'none' rather than 'self' because the attack it stops is an injected <form> that",
+    "POSTs a password somewhere else, and 'self' does not stop that being staged."
+  ],
+  "csp": {
+    "default-src": ["'none'"],
+    "base-uri": ["'none'"],
+    "form-action": ["'none'"],
+    "frame-ancestors": ["'none'"],
+    "object-src": ["'none'"],
+    "script-src": ["'self'"],
+    "style-src": ["'self'"],
+    "font-src": ["'self'"],
+    "img-src": ["'self'", "data:", "blob:", "@cdn"],
+    "media-src": ["'self'", "blob:", "@cdn"],
+    "connect-src": ["'self'", "@cdn", "@supabase"],
+    "worker-src": ["'self'", "blob:"],
+    "manifest-src": ["'self'"],
+    "upgrade-insecure-requests": []
+  },
+
+  "_headers_comment": [
+    "Referrer-Policy is no-referrer, not the usual strict-origin-when-cross-origin. This is a",
+    "politically sensitive archive (section 7); an outbound link should not tell the",
+    "destination which page of it the reader came from.",
+    "",
+    "Permissions-Policy: microphone is allowed for 'self' because voice notes are a first-class",
+    "content type and M1 may record in-browser. Camera and geolocation are denied outright --",
+    "nothing in CLAUDE.md asks for either, and device geolocation on a heritage map is a",
+    "de-anonymisation vector, not a feature."
+  ],
+  "headers": {
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), payment=(), usb=(), microphone=(self)"
+  },
+
+  "_known_violations_comment": [
+    "External origins the prototype front end still loads, every one of which this CSP BLOCKS",
+    "and CLAUDE.md already forbids. Listed here so CI can ratchet: a new external origin fails",
+    "the build, and removing one requires deleting its line, which is the point.",
+    "",
+    "None of these break anything today -- `_headers` is a Cloudflare Pages file and the site",
+    "is not on Cloudflare Pages yet. They break the moment it is. That is deliberate: it makes",
+    "M4 and M6 unable to ship without doing what CLAUDE.md already requires."
+  ],
+  "known_violations": [
+    { "origin": "https://unpkg.com",             "why": "Leaflet JS + CSS from a third-party CDN", "removed_by": "M4 — PMTiles basemap on R2" },
+    { "origin": "https://tile.openstreetmap.org", "why": "section 2: NEVER the public OSM tile endpoint", "removed_by": "M4 — PMTiles basemap on R2" },
+    { "origin": "https://fonts.googleapis.com",   "why": "section 9 wants a self-hosted subset; also leaks reader IPs to a third party", "removed_by": "M6 — font subsetting" },
+    { "origin": "https://fonts.gstatic.com",      "why": "same as fonts.googleapis.com", "removed_by": "M6 — font subsetting" }
+  ]
+}

@@ -80,6 +80,31 @@ jobs:
       - name: Scan the full history
         run: gitleaks git . -c .gitleaks.toml --redact --no-banner --log-opts=--all
 
+  # ── Front end / headers ────────────────────────────────────────────────────
+  # `_headers` and assets/js/config.js are generated from config/site.json. This job is
+  # what makes "every origin in one config module" (section 2) true rather than a
+  # convention: regenerate, and fail if the committed output differs.
+  frontend:
+    name: headers, CSP and the external-origin ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generated files match config/site.json
+        run: node scripts/build-site-config.mjs --check
+
+      # el() must write styles through CSSOM, and the set of third-party origins must be
+      # exactly the one config/site.json declares. Both are things a CSP cannot tell you
+      # about by inspection -- and neither shows up locally, because `_headers` is not
+      # applied by any local server.
+      - name: CSP survivability and origin ratchet
+        run: node scripts/frontend-csp-test.mjs
+
   database:
     name: schema, policies and the denial matrix
     runs-on: ubuntu-latest
@@ -130,8 +155,42 @@ jobs:
       # This must never become `psql -f`: psql exits 0 even when a pgTAP assertion
       # fails, so the build would pass over a red suite. Confirmed by probe 4, which
       # returns exit 0 while printing `not ok`.
+      #
+      # And it must not stop at the exit code either. `supabase test db` exits 0 when
+      # it runs NOTHING — a renamed directory, a glob that stops matching, a suite
+      # that silently shrinks — and a green tick over an empty suite is the exact
+      # failure this repository is built to refuse. So the run is gated on the counts
+      # pg_prove reports.
+      #
+      # Both expectations are DERIVED from the test files, never hardcoded: the file
+      # count from the glob, the assertion count by summing every plan(N). A literal
+      # goes stale the moment a test is added, and it goes stale downward.
       - name: RLS denial matrix and schema integrity
-        run: supabase test db
+        run: |
+          set -euo pipefail
+          expect_files=$(ls supabase/tests/*.test.sql | wc -l)
+          expect_tests=$(grep -ho 'plan([0-9]\+)' supabase/tests/*.test.sql \
+                         | grep -o '[0-9]\+' | awk '{s+=$1} END {print s+0}')
+          echo "expecting Files=$expect_files Tests=$expect_tests"
+
+          supabase test db 2>&1 | tee /tmp/tap.out
+
+          summary=$(grep -oE 'Files=[0-9]+, Tests=[0-9]+' /tmp/tap.out | tail -1 || true)
+          if [ -z "$summary" ]; then
+            echo "::error::pg_prove printed no summary — the suite did not run"
+            exit 1
+          fi
+          got_files=${summary#Files=}; got_files=${got_files%%,*}
+          got_tests=${summary##*Tests=}
+          echo "got $summary"
+          if [ "$got_files" != "$expect_files" ]; then
+            echo "::error::ran $got_files test files, expected $expect_files"
+            exit 1
+          fi
+          if [ "$got_tests" != "$expect_tests" ]; then
+            echo "::error::ran $got_tests assertions, expected $expect_tests"
+            exit 1
+          fi
 
       - name: Stop the stack
         if: always()

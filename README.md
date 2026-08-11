@@ -18,7 +18,7 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 
 | M | Contents | State |
 |---|---|---|
-| **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **in progress** — 7 of 8 items done; `_headers` + CSP remain |
+| **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **all 8 items built and green**; blocked on provisioning Cloudflare Pages |
 | M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | not started |
 | M2 | Sharding · versioned releases · single-writer lock · takedown | not started |
 | M3 | Front end on shards · History API · prerendered item pages · XSS/bidi sweep | not started |
@@ -38,11 +38,64 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | 4a | Location fuzzing derived in-database; jsonb key allowlists + size ceilings | **applied, verified** |
 | 5 | Full denial matrix + `SECURITY DEFINER` per-function tests, wired into CI | **done, 162/162 green** |
 | 6 | gitleaks in pre-commit and CI, with a rule self-test | **done, 16/16 green** |
-| 7 | Cloudflare Pages `_headers` — CSP without `unsafe-inline`, HSTS | **not started** |
+| 7 | `_headers` — CSP without `unsafe-inline`, HSTS, one config module | **done, 14/14 green** |
 
 All 23 migrations apply cleanly and deterministically on PostgreSQL 17.6 (Supabase local),
-from scratch and incrementally onto a populated database. **M0 is not complete** — item 7
-remains.
+from scratch and incrementally onto a populated database. **All eight M0 items are built
+and green in CI.**
+
+Two things stand between that and M0 being *finished*, and neither is code:
+
+1. **The site is served by GitHub Pages, not Cloudflare Pages.** CLAUDE.md §2 names
+   Cloudflare Pages explicitly. `_headers` is a Cloudflare Pages file — **GitHub Pages
+   ignores it entirely**, so right now the CSP and HSTS in this repository are not applied
+   to anything. M0's header work is correct and inert.
+2. **The production host and domain are not provisioned**, so every origin is still
+   `PLACEHOLDER_DOMAIN`.
+
+### Headers and CSP
+
+[config/site.json](config/site.json) is the single source for every origin, CSP value and
+CORS value — CLAUDE.md §2 asks for exactly that, so pointing the project at a real domain
+is a one-file change. Both consumers are **generated**, never hand-edited:
+
+```
+config/site.json
+      └── node scripts/build-site-config.mjs ──┬── _headers            (Cloudflare Pages)
+                                               └── assets/js/config.js (window.CONFIG)
+```
+
+CI runs the generator with `--check` and fails on any diff, so "one config module" is a
+property of the repository rather than a note in a README. The generator also refuses to
+emit a policy containing `'unsafe-inline'` or `'unsafe-eval'` — that assertion is what
+survives someone loosening the config to get a page working.
+
+**The one code change the CSP required.** `style-src 'self'` blocks the `style` attribute,
+and it makes no difference whether markup or script wrote it — so `el()`'s
+`setAttribute('style', …)` had to go. Property writes through CSSOM are not covered by the
+policy, because CSP governs what the *document declares*, not what script computes. The
+helper uses `setProperty()` rather than `node.style[prop] = v` because this codebase sets
+custom properties (`toneStyle()` emits `--p1`/`--p2`) and camelCase assignment cannot reach
+those.
+
+**The external-origin ratchet.** The prototype still loads Leaflet from unpkg, tiles from
+the public OSM endpoint, and fonts from Google. All four origins are blocked by this CSP,
+and CLAUDE.md already forbids all four — §2 says *NEVER the public OSM tile endpoint*, §9
+wants a self-hosted subset font. They are recorded in `known_violations` with the milestone
+that removes each, and [scripts/frontend-csp-test.mjs](scripts/frontend-csp-test.mjs)
+asserts the set found in the code is **exactly** the set declared: a new third-party origin
+fails the build, and so does a stale entry, so the list cannot quietly describe the past.
+
+Nothing breaks today, because `_headers` is inert on GitHub Pages. Everything breaks the
+moment the site moves to Cloudflare Pages — deliberately. That is what makes M4 and M6
+unable to ship without doing what CLAUDE.md already requires.
+
+**What was deliberately not fixed.** The gazetteer map builds its pins with inline `style`
+attributes inside a Leaflet `divIcon`, which this CSP blocks. It is left alone: that map is
+already dead under this policy (Leaflet and its tiles are both blocked), M4 replaces it with
+PMTiles on R2, and restyling it now would fix nothing while building M4 early. The
+`innerHTML` usage across `public.js`/`admin.js` is untouched for the same reason — CSP does
+not block it, and the XSS sweep is M3.
 
 ### Secret scanning
 
@@ -183,6 +236,10 @@ provisioned — every origin lives behind `PLACEHOLDER_DOMAIN` in one config mod
 CLAUDE.md                  governing document — read first
 README.md                  this file
 
+config/site.json           SINGLE source for every origin / CSP / CORS value
+_headers                   GENERATED — Cloudflare Pages headers (inert on GitHub Pages)
+assets/js/config.js        GENERATED — window.CONFIG
+
 .gitleaks.toml             secret-scanning rules; header comment derives the base64 markers
 .gitattributes             LF on hooks/sh/sql — a CRLF shebang fails on the Linux runner
 .githooks/
@@ -191,7 +248,9 @@ scripts/
   install-gitleaks.ps1     pinned 8.30.1 + sha256 into .tools/ (git-ignored)
   gitleaks-selftest.ps1    16 assertions, every carve-out paired with a control
   forbidden-paths.ere      ONE copy of the path patterns, read by both hook and CI
-.github/workflows/ci.yml   two jobs: secrets (full history) · database (migrations + pgTAP)
+  build-site-config.mjs    config/site.json -> _headers + config.js; --check gates CI
+  frontend-csp-test.mjs    14 assertions: CSSOM styling + the external-origin ratchet
+.github/workflows/ci.yml   three jobs: secrets · frontend (headers/CSP) · database
 
 supabase/
   config.toml              CLI config + access-token hook (local stack only)

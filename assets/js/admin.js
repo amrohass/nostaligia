@@ -642,6 +642,13 @@
       // Yellow marks a place whose coordinates have never been confirmed.
       var colour = isSelected ? '#C05B3E' : (place.unconfirmed ? '#D9A441' : '#8A9268');
       var size = isSelected ? 20 : 13;
+      // NOT ported to CSSOM, deliberately. These style attributes go through Leaflet's
+      // divIcon innerHTML and `style-src 'self'` blocks them — but this whole map is
+      // already dead under that CSP: Leaflet loads from unpkg and the tiles come from the
+      // public OSM endpoint, which CLAUDE.md section 2 forbids outright. Both are listed
+      // in config/site.json as known_violations. M4 replaces the map with PMTiles on R2,
+      // and this markup goes with it. Styling it now would fix nothing and would be
+      // building M4 early.
       var icon = L.divIcon({
         className: '',
         html: '<span style="display:block;width:' + size + 'px;height:' + size +
@@ -862,9 +869,14 @@
           el('div', { style: 'display:flex;gap:12px;align-items:flex-start' }, [
             el('div.contributor__avatar', { style: '--p1:' + report.authorTone, text: pick(report.authorInitial) }),
             el('div', { style: 'flex:1' }, [
-              el('div.contributor__name', {
-                html: pick(report.author) + ' <span style="font-weight:400;color:var(--ink-50)">· ' + pick(report.authorWhen) + '</span>'
-              }),
+              // Composed rather than assembled as an HTML string: the old spelling put a
+              // style="…" attribute through innerHTML, which `style-src 'self'` blocks.
+              // Building the node means the styling moves to a class and the author's
+              // name goes in as text, not markup.
+              el('div.contributor__name', null, [
+                pick(report.author),
+                el('span.contributor__when', { text: ' · ' + pick(report.authorWhen) })
+              ]),
               el('p.detail__story', { text: pick(report.content) })
             ])
           ]),

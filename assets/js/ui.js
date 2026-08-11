@@ -20,7 +20,7 @@
         if (value == null || value === false) return;
         if (key === 'html') { node.innerHTML = value; return; }
         if (key === 'text') { node.textContent = value; return; }
-        if (key === 'style') { node.setAttribute('style', value); return; }
+        if (key === 'style') { applyStyle(node, value); return; }
         if (key === 'dataset') {
           Object.keys(value).forEach(function (d) { node.dataset[d] = value[d]; });
           return;
@@ -35,6 +35,42 @@
 
     append(node, children);
     return node;
+  }
+
+  /* Apply a `prop:value;prop:value` string through CSSOM instead of the style attribute.
+
+     Why not setAttribute('style', …): a Content-Security-Policy with `style-src 'self'`
+     and no 'unsafe-inline' blocks the style ATTRIBUTE — it is an inline style like any
+     other, and it does not matter that script rather than markup wrote it. Property
+     writes through CSSOM are explicitly not covered, because the policy governs what the
+     document declares, not what script computes. This is the whole reason the helper
+     exists; see CLAUDE.md section 6 and config/site.json.
+
+     setProperty rather than `node.style[prop] = value`: this codebase sets CUSTOM
+     properties — toneStyle() emits `--p1`/`--p2` — and camelCase assignment cannot reach
+     those. setProperty handles both, so there is one path rather than two.
+
+     Split on the FIRST colon only: `background:var(--paper)` already carries a colon-free
+     value, but url() and gradient values will not, and a split-on-every-colon would
+     silently truncate them.
+
+     Known limit: a value containing a literal semicolon — a `data:image/svg+xml;base64,…`
+     background, say — would be split wrongly. No call site does that today. If one ever
+     needs to, pass the declaration through a class instead of inlining it. */
+  function applyStyle(node, declarations) {
+    String(declarations).split(';').forEach(function (declaration) {
+      var colon = declaration.indexOf(':');
+      if (colon < 0) return;
+      var prop = declaration.slice(0, colon).trim();
+      var value = declaration.slice(colon + 1).trim();
+      if (!prop) return;
+      var priority = '';
+      if (/!important$/i.test(value)) {
+        priority = 'important';
+        value = value.replace(/!important$/i, '').trim();
+      }
+      node.style.setProperty(prop, value, priority);
+    });
   }
 
   function append(node, children) {

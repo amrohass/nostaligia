@@ -1,0 +1,26 @@
+# GENERATED FROM config/site.json BY scripts/build-site-config.mjs -- DO NOT EDIT
+#
+# Cloudflare Pages reads this file. GitHub Pages IGNORES it completely, so none of these
+# headers apply while the site is served from GitHub Pages -- see the README.
+
+/*
+  Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: blob: https://PLACEHOLDER_CDN_DOMAIN; media-src 'self' blob: https://PLACEHOLDER_CDN_DOMAIN; connect-src 'self' https://PLACEHOLDER_CDN_DOMAIN https://pjqvtmhizbnimqyxjbyq.supabase.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), payment=(), usb=(), microphone=(self)
+
+# Generated release shards and media are immutable and content-addressed by path (M2).
+/v/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The pointer the whole read path hangs off. Short TTL so a rollback is visible fast.
+/manifest.json
+  Cache-Control: public, max-age=30, must-revalidate
+
+# Takedown must never wait for a publish cycle (section 8).
+/redactions.json
+  Cache-Control: public, max-age=30, must-revalidate
