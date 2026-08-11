@@ -31,3 +31,15 @@ project_id = "pjqvtmhizbnimqyxjbyq"
 [auth.hook.custom_access_token]
 enabled = true
 uri = "pg-functions://postgres/public/custom_access_token_hook"
+
+# request-upload (M1). verify_jwt is the CLI default; it is written out because a
+# default is not a decision and this one is worth stating.
+#
+# It is NOT what authenticates the caller. The function hands the same token to
+# PostgREST, which verifies the signature itself and derives auth.uid() from it, so an
+# anonymous request is refused by the database whatever the gateway did. This line is
+# the cheap outer gate: it rejects a garbage token before it costs a Turnstile
+# round-trip and two database calls. Deploying with --no-verify-jwt would remove the
+# gate and not the guard.
+[functions.request-upload]
+verify_jwt = true
