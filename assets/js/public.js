@@ -979,8 +979,19 @@
     ]);
   }
 
+  /* Returns whether the map actually came up.
+     Leaflet is loaded from unpkg, which `script-src 'self'` blocks — so `L` is undefined
+     on every deployment that serves the CSP, which is now all of them. admin.js already
+     guarded this; here the bare `L.map(...)` threw a ReferenceError that propagated out of
+     the router mid-route, AFTER the footer had been hidden, stranding the reader on a
+     blank panel with no way onward.
+     `typeof` rather than a truthiness test: `L` is an undeclared global, and any other
+     check on it throws before it can answer.
+     The return value exists so the caller can keep the page coherent — see the map branch
+     in the router. */
   function initMap() {
     if (mapInstance) { mapInstance.remove(); mapInstance = null; }
+    if (typeof L === 'undefined') return false;
     mapInstance = L.map('map', { zoomControl: true, attributionControl: true })
       .setView(RAMALLAH, 15);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -989,6 +1000,7 @@
     }).addTo(mapInstance);
     markerLayer = L.layerGroup().addTo(mapInstance);
     refreshMap();
+    return true;
   }
 
   function refreshMap() {
@@ -1134,8 +1146,10 @@
     var view = qs('#view');
     if (name === 'map') {
       mount(view, renderMap());
-      qs('#site-footer').hidden = true;
-      initMap();
+      // The footer is hidden because the map fills the viewport. Hide it only once the
+      // map is actually up: doing it unconditionally around a map that failed to load
+      // removes the last navigation on the page and leaves nothing behind.
+      qs('#site-footer').hidden = initMap();
     } else {
       qs('#site-footer').hidden = false;
       if (mapInstance) { mapInstance.remove(); mapInstance = null; }
