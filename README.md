@@ -18,7 +18,7 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 
 | M | Contents | State |
 |---|---|---|
-| **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **in progress** — items 0–3 of 7 done |
+| **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **in progress** — 7 of 8 items done; `_headers` + CSP remain |
 | M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | not started |
 | M2 | Sharding · versioned releases · single-writer lock · takedown | not started |
 | M3 | Front end on shards · History API · prerendered item pages · XSS/bidi sweep | not started |
@@ -36,12 +36,101 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | 3 | Role plumbing — `user_roles`, `authz_role()`, access-token hook, role audit trail | **applied**, tests pending |
 | 4 | RLS policies + column privileges on every table, with structural tests | **applied, 26/26 green** |
 | 4a | Location fuzzing derived in-database; jsonb key allowlists + size ceilings | **applied, verified** |
-| 5 | Full denial matrix + `SECURITY DEFINER` per-function tests, wired into CI | in progress |
-| 6 | gitleaks in pre-commit and CI | not started |
-| 7 | Cloudflare Pages `_headers` — CSP without `unsafe-inline`, HSTS | not started |
+| 5 | Full denial matrix + `SECURITY DEFINER` per-function tests, wired into CI | **done, 162/162 green** |
+| 6 | gitleaks in pre-commit and CI, with a rule self-test | **done, 16/16 green** |
+| 7 | Cloudflare Pages `_headers` — CSP without `unsafe-inline`, HSTS | **not started** |
 
-All 22 migrations apply cleanly and deterministically on PostgreSQL 17.6 (Supabase local),
-from scratch and incrementally onto a populated database. 43 pgTAP assertions green.
+All 23 migrations apply cleanly and deterministically on PostgreSQL 17.6 (Supabase local),
+from scratch and incrementally onto a populated database. **M0 is not complete** — item 7
+remains.
+
+### Secret scanning
+
+`gitleaks` runs in two places, and they are not equivalent.
+
+| | pre-commit hook | CI job |
+|---|---|---|
+| scope | staged changes only | **full history, every ref** (`fetch-depth: 0`) |
+| bypass | `git commit --no-verify` | none from a developer machine |
+| standing | fast local signal | **the authority** |
+
+Setup, once per clone — hooks are deliberately not installed by cloning:
+
+```
+pwsh -File scripts/install-gitleaks.ps1      # pinned 8.30.1 into .tools/ (git-ignored)
+git config core.hooksPath .githooks
+pwsh -File scripts/gitleaks-selftest.ps1     # 16 assertions
+```
+
+**Where the default rules were wrong for this project.** CLAUDE.md §6 draws a line
+gitleaks does not: the anon key is public by design, the service-role key is the thing
+that caused the billing incident. The stock `jwt` rule flags both identically. Left
+alone, that becomes a false positive on the one file the maintainer edits weekly — and
+an unresolved false positive in a pre-commit hook is how someone learns to type
+`--no-verify`.
+
+So [.gitleaks.toml](.gitleaks.toml) names the dangerous key as its own rule and carves
+the public ones out of the broad rules they trip. A JWT payload is base64, so
+`"role":"service_role"` is not searchable as text; its encoding depends on the claim's
+byte offset, giving **three** stable forms. All six markers (three service-role, three
+anon) are derived in the config's header comment and verified against generated tokens
+at each alignment.
+
+**Every carve-out has a paired control**, because a suppression that suppresses
+everything reads exactly like a clean scan:
+
+- the service-role assertions run with the carve-outs **active**, so a carve-out that
+  widened would fail them;
+- a control run with the carve-outs **stripped** proves the anon and publishable
+  fixtures do fire — otherwise "no finding" and "never scanned" are the same output;
+- an AWS key proves `[extend] useDefault` is still live.
+
+Two things this cost, both worth recording:
+
+- The first AWS control used `AKIAIOSFODNN7EXAMPLE`. Gitleaks' default allowlist
+  ignores AWS's own documented example key, so the control silently tested nothing.
+- The self-test's own fixtures were flagged by the scanner on first run — correctly.
+  The fix is that every fixture value is now **assembled at runtime**, not written as a
+  literal. A path allowlist for `scripts/` would have been easier and wrong: it would
+  also swallow a real key pasted into a file nobody reads closely. Assertion 16 scans
+  `scripts/` and `.githooks/` and requires zero findings **with no path allowlist**.
+
+**The path guard is not a duplicate of the content scan.** `.gitignore` excludes
+`.env*`, but `git add -f` overrides `.gitignore`, and a force-added `.env` holding
+innocuous-looking values passes a content scan cleanly. Both the hook and CI check
+paths against the single shared pattern file
+[scripts/forbidden-paths.ere](scripts/forbidden-paths.ere) — one file, because two
+hand-kept copies of a security regex drift, and drift is silent in the direction that
+matters.
+
+The hook **fails closed** when gitleaks is absent rather than skipping: a hook that
+silently does nothing is worse than no hook, because it manufactures the belief that
+scanning happened. It also distinguishes `--exit-code 2` (a secret was found) from any
+other non-zero exit (gitleaks itself failed and nothing was scanned) — both block, but
+they are not the same event and must not be reported as if they were.
+
+### The test suite
+
+`npx supabase test db` — 162 assertions, 8 files. CI runs it on every push
+([.github/workflows/ci.yml](.github/workflows/ci.yml)) and gates on `pg_prove`'s TAP
+parsing, never a psql exit code: **psql exits 0 even when a pgTAP assertion fails.**
+
+| file | what it pins |
+|---|---|
+| `00_structure` | RLS on every table; no policy reads `role_cache`; anon holds no grant anywhere; `authenticated` has no table-level SELECT on posts; the four §7 columns unreadable; approval columns unwritable; exactly four policy-free tables; every definer function pins `search_path`; sensitive definer functions unreachable |
+| `01_posts_rls` | the posts read matrix and write denials, per role |
+| `02_location_and_shape` | fuzzing on INSERT *and* UPDATE incl. the `exact → hidden` downgrade; jsonb allowlists and byte ceilings |
+| `03_schema_constraints` | every CHECK from both directions — EDTF, events, the media ladder, one-active-release |
+| `04_definer_functions` | exact row sets per role for every callable definer function |
+| `05_matrix` | 4 roles × 15 tables × 4 operations = **240 cells**, each `allow` / `empty` / `deny` |
+| `06_attacks` | forged columns, escalation, handle forging, `originals/` leakage |
+| `07_triggers` | edit-after-approval sweep, hash stability, audit permanence, role logs, service-role paths |
+
+[supabase/harness_probe.sql](supabase/harness_probe.sql) is run by CI *before* the suite
+and is not part of it — it contains a deliberate failure. It proves the harness can
+distinguish pass from fail, and that `SET LOCAL ROLE` actually takes effect. Without that
+second check every denial assertion would run as superuser and pass without testing
+anything.
 
 ### Requirements carried into later milestones
 
@@ -94,9 +183,19 @@ provisioned — every origin lives behind `PLACEHOLDER_DOMAIN` in one config mod
 CLAUDE.md                  governing document — read first
 README.md                  this file
 
+.gitleaks.toml             secret-scanning rules; header comment derives the base64 markers
+.gitattributes             LF on hooks/sh/sql — a CRLF shebang fails on the Linux runner
+.githooks/
+  pre-commit               staged scan + forbidden-path guard; fails closed
+scripts/
+  install-gitleaks.ps1     pinned 8.30.1 + sha256 into .tools/ (git-ignored)
+  gitleaks-selftest.ps1    16 assertions, every carve-out paired with a control
+  forbidden-paths.ere      ONE copy of the path patterns, read by both hook and CI
+.github/workflows/ci.yml   two jobs: secrets (full history) · database (migrations + pgTAP)
+
 supabase/
   config.toml              CLI config + access-token hook (local stack only)
-  migrations/              ordered, applied in filename order
+  migrations/              23 files, applied in filename order
     …090100_extensions     PostGIS into `extensions`
     …090200_helpers        touch_updated_at, visibility + handle validation
     …090300_enums          13 types
@@ -108,8 +207,21 @@ supabase/
     …090900_content_blocks editable site copy
     …091000_governance     reports, moderation_actions, audit_log, releases, upload_quota
     …091100_indexes        24 indexes, mostly partial
-    …091200_approval       edit-after-approval, content hash, post audit
+    …091200_approval_trig  edit-after-approval, content hash, post audit
     …091300_roles          user_roles, authz_role(), JWT hook, role audit
+    …091400_authorship     created_on generated columns, stamping triggers
+    …091500_column_privs   revoke all, then re-grant per column — the §7 layer
+    …091600_accessors      the definer functions the browser is allowed to call
+    …091700_rls_identity   profiles, places
+    …091800_rls_content    posts, media_assets, content_blocks
+    …091900_rls_engagement comments, likes, saves
+    …092000_rls_governance reports, moderation_actions, audit_log
+    …092100_location_fuzz  location_public derived in-database, never client-supplied
+    …092200_jsonb_shape    details/consent key allowlists and byte ceilings
+    …092300_media_visible  can_read_post_media() — see "Two Postgres rules", below
+  tests/                   8 files, 162 assertions, run by `npx supabase test db`
+  harness_probe.sql        NOT in tests/ — contains a deliberate failure, by design
+  stage0_incremental.ps1   proves 0014–0015 apply forward-only onto a populated database
 
 index.html                 public shell
 admin.html                 back-office shell
@@ -244,6 +356,30 @@ approve/reject and that is unimplementable without it; what makes it accountable
 every moderator action is audited, not that the read is narrow. Withdrawn content stays
 visible to moderators for the same reason: a withdrawal is a request a human has to
 service.
+
+### Two Postgres rules this schema was built around the hard way
+
+Both were found by running the tests, not by reading the docs, and both produce failures
+that look like success.
+
+**An RLS policy referencing *another* table's columns is evaluated with the caller's
+privileges on that table.** A policy referencing its *own* table's columns is exempt —
+which is why `posts_select` reads `posts.created_by` happily even though no browser role
+can SELECT it. `media_assets_select` cross-referenced `posts.created_by` and therefore
+failed with `permission denied for table posts` for **every** role, including admin. Media
+was unreadable by the whole site. The fix (`0023`) moves the check into a `SECURITY
+DEFINER` helper. The failure mode is the dangerous kind: a denial matrix is written to see
+denials, so a suite could record that cell as "correctly denied" while measuring a broken
+policy.
+
+**`BYPASSRLS` is not a grant.** `service_role` is exempt from row policies but holds no
+table privilege of its own. This Supabase version's default privileges give new tables in
+`public` only `Dxtm` (TRUNCATE, REFERENCES, TRIGGER, MAINTAIN) — no DML — so after
+`revoke all … from anon, authenticated` and explicit re-grants to `authenticated`,
+`service_role` had **no read or write access to any of the fifteen tables**. Nothing in the
+browser-facing suite would ever have noticed. It would have surfaced as M1's Edge Functions
+failing, M2's publisher reading nothing, and M5's importer refusing to run. `0015` now
+grants it explicitly.
 
 ### Roles
 
