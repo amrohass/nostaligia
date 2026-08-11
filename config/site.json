@@ -16,18 +16,28 @@
     "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co"
   },
 
-  "_planned_comment": [
-    "Origins that CLAUDE.md commits to but that nothing loads yet. Deliberately NOT emitted:",
-    "a CSP that allows an origin the site does not use is weaker than it needs to be today,",
-    "and 'we will need it eventually' is how an allowlist grows. Move an entry into `csp`",
-    "in the milestone that actually introduces it -- one line, in this file."
+  "_turnstile_comment": [
+    "Cloudflare Turnstile — section 6 requires it on signup and submit.",
+    "",
+    "site_key is PUBLIC by design. It is embedded in the page markup for every visitor to",
+    "read, exactly like the Supabase anon key, and it is not a capability: it identifies",
+    "the widget, it does not authorise anything. The SECRET key is the capability-bearing",
+    "half, it verifies the token server-side, and it must never appear in this repository",
+    "-- it belongs in GitHub Actions secrets and the Edge Function environment only.",
+    "There is deliberately no field for it here, not even an empty one, because an empty",
+    "field is an invitation.",
+    "",
+    "`origin` is NOT in `csp` yet, and that is on purpose. Nothing loads the widget until",
+    "M1 wires it, and a CSP that allows an origin the site does not use is weaker than it",
+    "needs to be today -- 'we will need it eventually' is how an allowlist grows. Adding",
+    "the widget in M1 means moving that origin into script-src and frame-src: one line,",
+    "in this file. Until then the site key is carried but unused, which costs nothing."
   ],
-  "planned": {
-    "turnstile": {
-      "origin": "https://challenges.cloudflare.com",
-      "needs": ["script-src", "frame-src"],
-      "milestone": "M1 — Turnstile on signup and submit (section 6)"
-    }
+  "turnstile": {
+    "site_key": "0x4AAAAAAENYWuxg_BTOj47Q",
+    "origin": "https://challenges.cloudflare.com",
+    "csp_needs": ["script-src", "frame-src"],
+    "wired_by": "M1 — Turnstile on signup and submit (section 6)"
   },
 
   "_csp_comment": [

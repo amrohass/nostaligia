@@ -42,6 +42,22 @@ for (const banned of ["'unsafe-inline'", "'unsafe-eval'"]) {
   if (policy.includes(banned)) throw new Error(`CSP contains ${banned} — forbidden by CLAUDE.md section 6`);
 }
 
+// The Turnstile SITE key is public; the SECRET key is the capability-bearing half and must
+// never reach the client. Nothing stops someone adding it to config/site.json next to its
+// sibling and assuming the generator will do something sensible — the generator would
+// happily inline it into assets/js/config.js and serve it to every visitor. This refuses.
+// gitleaks would also catch it on commit; this catches it one step earlier, at the point
+// where the mistake is actually made.
+for (const key of Object.keys(cfg.turnstile ?? {})) {
+  if (/secret|private/i.test(key)) {
+    throw new Error(
+      `config/site.json: turnstile.${key} looks like a secret. The Turnstile secret key ` +
+      `belongs in GitHub Actions secrets and the Edge Function environment, never in this ` +
+      `repository and never in a generated client file (CLAUDE.md section 6).`
+    );
+  }
+}
+
 // ── _headers ────────────────────────────────────────────────────────────────
 // Cloudflare Pages format: a path pattern, then indented `Name: value` lines. `/*` matches
 // every route, which is what a security header set should do -- an exception carved out
@@ -86,6 +102,19 @@ const js = `/* ${GENERATED}
 
     origins: Object.freeze({
 ${Object.entries(cfg.domains).map(([k, v]) => `      ${k}: 'https://${v}'`).join(',\n')}
+    }),
+
+    // Cloudflare Turnstile. The site key is public by construction — it ships in the
+    // markup for every visitor to read — so it belongs here alongside the origins.
+    // Mapped site_key -> siteKey explicitly rather than by a generic case transformer:
+    // config/site.json is snake_case throughout (known_violations, removed_by) and JS
+    // reads camelCase, and one visible line of translation is easier to trust than a
+    // rule that silently renames whatever it is handed.
+    //
+    // The SECRET key is not here and must never be. It never enters this repository:
+    // GitHub Actions secrets and the Edge Function environment only (CLAUDE.md §6).
+    turnstile: Object.freeze({
+      siteKey: ${JSON.stringify(cfg.turnstile.site_key)}
     }),
 
     // The exact policy served by _headers. Exposed so a page can assert at runtime that the
