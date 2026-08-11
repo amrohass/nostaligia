@@ -47,6 +47,11 @@ gitleaks-report.json
 # ── Cloudflare ───────────────────────────────────────────────
 .wrangler/
 
+# ── Bootstrapped tooling ─────────────────────────────────────
+# The pinned gitleaks binary fetched by scripts/install-gitleaks.ps1. The VERSION is
+# tracked (in that script and in the CI workflow); the binary is not.
+.tools/
+
 # ── Editors & OS ─────────────────────────────────────────────
 .vscode/
 .idea/

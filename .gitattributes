@@ -1,0 +1,17 @@
+# The hooks are shell scripts executed by git itself. A CRLF line ending on the
+# shebang line makes them fail on Linux — which is where CI runs — with an error that
+# reads like a missing interpreter. Forced to LF regardless of core.autocrlf.
+.githooks/* text eol=lf
+*.sh        text eol=lf
+
+# SQL is read by psql and by the Supabase CLI on both Windows and Linux; keeping it LF
+# means a migration's checksum does not depend on which machine checked it out.
+*.sql       text eol=lf
+
+# Screenshots and any future media are binary — never line-ending converted, never
+# diffed as text.
+*.png       binary
+*.jpg       binary
+*.webp      binary
+*.mp4       binary
+*.pmtiles   binary

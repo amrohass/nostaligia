@@ -1,0 +1,138 @@
+name: CI
+
+# Every push and every PR. M0's exit criterion is that the denial matrix is green in
+# CI — not that it was green on someone's laptop once.
+on:
+  push:
+  pull_request:
+
+# A second push while the first is still running should not race it into the same
+# report; cancel the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Secrets ────────────────────────────────────────────────────────────────
+  # CLAUDE.md §6, written after a real compromised-key incident. This job is the
+  # authority; the pre-commit hook is only a fast local echo of it, and `git commit
+  # --no-verify` skips that hook entirely. Runs independently of the database job so a
+  # slow Supabase start never delays the answer to "did a key just get pushed".
+  secrets:
+    name: gitleaks — full history, forbidden paths, rule self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # Pinned, and kept in step with scripts/install-gitleaks.ps1 BY HAND. A scanner's
+      # rule set changes between releases; if these two drift, the hook and this job
+      # disagree about what a clean commit is, and the disagreement is discovered in
+      # the worst direction — CI green on rules laxer than the ones run locally.
+      GITLEAKS_VERSION: 8.30.1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # THE reason this job exists in this shape. The default fetch-depth of 1
+          # scans one commit, so a key committed last week and merged today passes
+          # unseen. A secret scanner on a shallow clone is theatre.
+          fetch-depth: 0
+
+      - name: Install pinned gitleaks
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -fsSL -O "$base/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -O "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          # Same origin as the binary, so this catches corruption, not a compromised
+          # release. Said plainly rather than labelled "verified".
+          grep " gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz\$" \
+            "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # Before trusting a result from the scanner, prove the config can still tell a
+      # service_role key from an anon key. Same reasoning as the harness probe below:
+      # a rule set that matches nothing produces the output of a clean repo.
+      #
+      # Depends on `pwsh` being preinstalled on the GitHub-hosted Ubuntu image. If that
+      # ever stops being true this step fails loudly rather than skipping, which is the
+      # acceptable direction — but it is an assumption, not something verified locally.
+      - name: Rule self-test — the config still discriminates
+        run: pwsh -File scripts/gitleaks-selftest.ps1
+
+      # A force-added .env whose values look innocuous passes a content scan. This is
+      # the check that catches it, over every tracked path, using the same pattern
+      # file the hook reads.
+      - name: No tracked path may look like a credential file
+        run: |
+          set -euo pipefail
+          if hits=$(git ls-files | grep -Ei -f scripts/forbidden-paths.ere); then
+            echo "::error::tracked paths matching scripts/forbidden-paths.ere:"
+            echo "$hits"
+            exit 1
+          fi
+
+      # --log-opts=--all scans every ref fetched, not just the tip of this one. On a
+      # push with fetch-depth 0 that is the whole repository, which is the point.
+      - name: Scan the full history
+        run: gitleaks git . -c .gitleaks.toml --redact --no-banner --log-opts=--all
+
+  database:
+    name: schema, policies and the denial matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # 0.1 — a fresh database, every migration in order. Fails the build on the
+      # first migration that does not apply.
+      - name: Apply all migrations to a fresh database
+        run: supabase start -x realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,mailpit
+
+      # 0.2 — determinism. A migration set that only applies once is not a migration
+      # set. This has caught nothing yet; it is here for the day it does.
+      - name: Migrations are deterministic
+        run: supabase db reset
+
+      # 0.4 — prove the harness BEFORE trusting a single result from it.
+      #
+      # Two independent failure modes, both of which produce a green suite:
+      #   · SET LOCAL ROLE silently not taking effect, so every denial assertion runs
+      #     as superuser and passes without testing anything
+      #   · pgTAP unable to report a failure at all
+      #
+      # The probe contains a deliberate failure, so it cannot live in supabase/tests/
+      # and cannot be gated on an exit code. It is gated on its output instead.
+      - name: Harness probe — the suite can distinguish pass from fail
+        run: |
+          set -euo pipefail
+          out=$(psql "$(supabase status -o env | grep '^DB_URL=' | cut -d= -f2- | tr -d '"')" \
+                 -X -q -t -A -f supabase/harness_probe.sql)
+          echo "$out"
+          grep -qx 'ok 3 - the role switch actually took effect' <<<"$out" \
+            || { echo '::error::SET LOCAL ROLE is not taking effect — every denial test is meaningless'; exit 1; }
+          grep -q '^not ok 4 ' <<<"$out" \
+            || { echo '::error::the harness cannot detect a failing assertion'; exit 1; }
+          grep -qx 'ok 2 - pgTAP still works after SET LOCAL ROLE authenticated' <<<"$out" \
+            || { echo '::error::pgTAP temp-state collides with SET ROLE'; exit 1; }
+
+      # The suite itself. `supabase test db` runs pg_prove, which parses TAP and exits
+      # non-zero on any failed assertion or plan mismatch.
+      #
+      # This must never become `psql -f`: psql exits 0 even when a pgTAP assertion
+      # fails, so the build would pass over a red suite. Confirmed by probe 4, which
+      # returns exit 0 while printing `not ok`.
+      - name: RLS denial matrix and schema integrity
+        run: supabase test db
+
+      - name: Stop the stack
+        if: always()
+        run: supabase stop --no-backup

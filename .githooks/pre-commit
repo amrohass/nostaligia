@@ -1,0 +1,94 @@
+#!/bin/sh
+# Ramallah Memory Atlas — pre-commit secret scan (CLAUDE.md §6).
+#
+# WHAT THIS IS NOT: a security control. `git commit --no-verify` skips it, and a hook
+# cannot see a secret that is already in history. It is a fast local signal that stops
+# the common accident. The authority is the CI job, which scans FULL history on every
+# push and cannot be bypassed from a developer's machine. If you ever find yourself
+# reaching for --no-verify, the right move is a scoped allowlist in .gitleaks.toml
+# with a test in scripts/gitleaks-selftest.ps1 — not a bypass.
+#
+# Activate once per clone (hooks are not installed by cloning, by design):
+#     git config core.hooksPath .githooks
+
+set -e
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+# ── 1 · Paths that must never be committed ───────────────────────────────────
+# .gitignore already excludes these, but `git add -f` overrides .gitignore and is
+# exactly what someone does at speed when a file "should" be committed. This catches
+# the override; gitleaks below catches the contents. Note that a force-added .env full
+# of harmless-looking values would pass the content scan — this is the check that
+# stops it, not a duplicate of the one below.
+#
+# The patterns live in scripts/forbidden-paths.ere because CI applies the SAME list to
+# every tracked file. Two hand-kept copies of a security regex drift, and the drift is
+# silent in the direction that matters.
+blocked=$(git diff --cached --name-only --diff-filter=ACMR \
+  | grep -Ei -f "$root/scripts/forbidden-paths.ere" || true)
+if [ -n "$blocked" ]; then
+  echo ""
+  echo "  ✖ pre-commit: these staged paths are excluded by .gitignore and were force-added:"
+  echo "$blocked" | sed 's/^/      /'
+  echo ""
+  echo "    Unstage them:  git restore --staged <path>"
+  echo ""
+  exit 1
+fi
+
+# ── 2 · Locate the scanner ───────────────────────────────────────────────────
+# Repo-local pin first, so the hook and CI agree on a version. A hook that silently
+# skips when the tool is missing is worse than no hook: it manufactures the belief
+# that scanning happened. So this fails closed.
+if   [ -x "$root/.tools/gitleaks.exe" ]; then gitleaks="$root/.tools/gitleaks.exe"
+elif [ -x "$root/.tools/gitleaks" ];     then gitleaks="$root/.tools/gitleaks"
+elif command -v gitleaks >/dev/null 2>&1; then gitleaks=gitleaks
+else
+  echo ""
+  echo "  ✖ pre-commit: gitleaks not found — refusing to commit unscanned."
+  echo ""
+  echo "    Install the pinned copy:  pwsh -File scripts/install-gitleaks.ps1"
+  echo ""
+  exit 1
+fi
+
+# ── 3 · Scan the staged content ──────────────────────────────────────────────
+# --staged scans the index, not the working tree: what is about to be committed.
+#
+# --exit-code 2 separates the two failures that a bare exit 1 conflates. 2 means a
+# secret was found; 1 means gitleaks itself failed (bad config, unreadable file) and
+# nothing was scanned. Both block, but the second must not be reported as "clean" and
+# must not be reported as a leak either.
+#
+# --redact keeps the secret out of terminal scrollback. A hook that prints the key it
+# just caught has moved it somewhere else you now have to clean.
+set +e
+"$gitleaks" git --staged "$root" \
+  -c "$root/.gitleaks.toml" \
+  --redact --no-banner --exit-code 2
+status=$?
+set -e
+
+case "$status" in
+  0) exit 0 ;;
+  2)
+    echo ""
+    echo "  ✖ pre-commit: a secret was found in the STAGED changes (see above)."
+    echo ""
+    echo "    If it is a real secret: remove it, then rotate it. Treat it as burned"
+    echo "    the moment it touched the index."
+    echo "    If it is a false positive: add a scoped allowlist to .gitleaks.toml and"
+    echo "    an assertion to scripts/gitleaks-selftest.ps1 proving it did not widen."
+    echo ""
+    exit 1
+    ;;
+  *)
+    echo ""
+    echo "  ✖ pre-commit: gitleaks exited $status without completing a scan."
+    echo "    Nothing was verified, so this commit is blocked."
+    echo ""
+    exit 1
+    ;;
+esac

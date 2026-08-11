@@ -1,0 +1,89 @@
+title = "Ramallah Memory Atlas"
+
+# CLAUDE.md §6 draws the line precisely: "The Supabase anon key is designed to be
+# public and is not the concern; the service-role key, any third-party API key, and
+# any admin credential are."
+#
+# Gitleaks' default rules do not draw that line. Their generic `jwt` rule fires on
+# ANY JSON Web Token, which means it flags the service-role key (correct) and the
+# anon key (a false positive that will land in the client config in M3). An
+# unresolved false positive in a pre-commit hook is not a cosmetic problem — it is
+# how a maintainer learns to type `--no-verify`, and after that the hook is decoration.
+#
+# So this file does two things: it names the dangerous key as its own rule instead of
+# leaving it to hide inside "jwt", and it carves the public key out of `jwt` alone.
+#
+# ── How the base64 markers below were derived ────────────────────────────────
+#
+# A JWT's payload is base64url of JSON, so `"role":"service_role"` is not searchable
+# as text. base64 encodes in 3-byte groups, so the encoding of that substring depends
+# on its byte offset within the payload — which shifts with the length of every claim
+# before it. There are exactly three cases (offset mod 3), and for each one a
+# whole-group interior is stable regardless of what surrounds it:
+#
+#   offset%3 == 0  ->  base64('"role":"service_role"')   all 21 bytes, 7 whole groups
+#   offset%3 == 1  ->  base64('ole":"service_role')      bytes 2..19, 6 whole groups
+#   offset%3 == 2  ->  base64('role":"service_rol')      bytes 1..18, 6 whole groups
+#
+# All six markers here (three for service_role, three for anon) were verified against
+# generated tokens at each alignment: every alignment is matched by exactly its own
+# marker, and no service_role marker matches an anon token or vice versa. None
+# contains `+` or `/`, so they are identical in base64 and base64url — no second
+# alphabet to handle.
+#
+# The markers appear in this file as bare strings. The rules deliberately require the
+# full three-segment JWT shape around them, so this config does not flag itself.
+# That is asserted in scripts/gitleaks-selftest.ps1, not assumed.
+
+[extend]
+useDefault = true
+
+# ── The key that caused the ~24,000% billing incident ────────────────────────
+[[rules]]
+id          = "supabase-service-role-key"
+description = "Supabase service_role JWT — full database access, bypasses RLS entirely"
+regex = '''eyJ[A-Za-z0-9_=-]{8,}\.[A-Za-z0-9_=-]*(?:InJvbGUiOiJzZXJ2aWNlX3JvbGUi|b2xlIjoic2VydmljZV9yb2xl|cm9sZSI6InNlcnZpY2Vfcm9s)[A-Za-z0-9_=-]*\.[A-Za-z0-9_=-]{16,}'''
+tags = ["supabase", "critical"]
+# No `keywords` prefilter on purpose. Keywords are an optimisation that makes a rule
+# conditional on a cheap substring hit; this repo is small enough that the cost is
+# irrelevant and a prefilter is one more way for the rule to silently not run.
+
+# ── The newer, non-JWT secret key format ─────────────────────────────────────
+# The default `generic-api-key` rule happened to catch this in testing, but only
+# because the assignment `SUPABASE_SECRET_KEY=` sat next to it. `const k =
+# "sb_secret_..."` has no such keyword. Prefix-anchored, so context does not matter.
+[[rules]]
+id          = "supabase-secret-key"
+description = "Supabase secret key (sb_secret_…) — the successor to the service_role JWT"
+regex       = '''\bsb_secret_[A-Za-z0-9_-]{16,}'''
+tags        = ["supabase", "critical"]
+
+# ── The one carve-out ────────────────────────────────────────────────────────
+# Scoped with targetRules to `jwt` alone. It cannot suppress
+# supabase-service-role-key, which is the whole point of that rule existing
+# separately: a carve-out attached to a broad rule must not be able to widen into
+# the narrow one. Asserted in the self-test.
+[[allowlists]]
+description = "the anon/publishable key is public by design (CLAUDE.md §6)"
+targetRules = ["jwt"]
+regexTarget = "match"
+regexes = [
+  '''eyJ[A-Za-z0-9_=-]{8,}\.[A-Za-z0-9_=-]*(?:InJvbGUiOiJhbm9u|b2xlIjoiYW5v|cm9sZSI6ImFub24i)[A-Za-z0-9_=-]*\.[A-Za-z0-9_=-]{16,}''',
+]
+
+# The publishable key is the anon key's successor and is equally public, but it trips
+# a different default rule: `generic-api-key`, on the `SUPABASE_PUBLISHABLE_KEY=`
+# assignment rather than on the value's shape. Scoped to that rule and anchored to the
+# whole secret, so it carves out the literal `sb_publishable_…` value and nothing else.
+[[allowlists]]
+description = "the publishable key (sb_publishable_…) is public by design, like the anon key"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = [
+  '''^sb_publishable_[A-Za-z0-9_-]{16,}$''',
+]
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+[[allowlists]]
+description = "the pinned scanner binary bootstrapped by scripts/install-gitleaks.ps1"
+paths = ['''^\.tools/''']
