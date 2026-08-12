@@ -55,6 +55,7 @@
 // never reaches the signing step, whatever the gateway did or did not do.
 
 import { presignR2Put } from "../_shared/sigv4.ts";
+import { bearer, corsHeaders, env, fail, json, rpc, unverifiedClaim } from "../_shared/http.ts";
 
 // ── Caps, §6 ─────────────────────────────────────────────────
 // 1024-based, matching how every operating system reports a file size to the person
@@ -105,43 +106,6 @@ const ALLOWED_MIME: Record<string, "image" | "video" | "audio"> = {
   "audio/flac": "audio",
 };
 
-function env(name: string): string {
-  const v = Deno.env.get(name);
-  if (!v) throw new Error(`missing required environment variable: ${name}`);
-  return v;
-}
-
-// ── CORS ─────────────────────────────────────────────────────
-// Origins come from the environment, never from a constant — §2 keeps every origin in
-// one place, and this function is deployed separately from the site so it cannot read
-// config/site.json. An unset variable yields no CORS headers at all, which fails
-// closed for browsers while leaving curl (no Origin header) working, so the endpoint
-// is testable before the front end exists.
-function corsHeaders(req: Request): Record<string, string> {
-  const origin = req.headers.get("Origin");
-  if (!origin) return {};
-  const allowed = (Deno.env.get("UPLOAD_ALLOWED_ORIGINS") ?? "")
-    .split(",").map((s) => s.trim()).filter(Boolean);
-  if (!allowed.includes(origin)) return {};
-  return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Headers": "authorization, content-type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Vary": "Origin",
-  };
-}
-
-function json(body: unknown, status: number, req: Request): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", ...corsHeaders(req) },
-  });
-}
-
-function fail(error: string, status: number, req: Request, detail?: unknown) {
-  return json(detail === undefined ? { error } : { error, detail }, status, req);
-}
-
 /**
  * Reads app_metadata.user_role out of a JWT WITHOUT verifying it.
  *
@@ -149,16 +113,8 @@ function fail(error: string, status: number, req: Request, detail?: unknown) {
  * role and never raise it. Treat the return value as attacker-controlled — it is.
  */
 export function claimedRole(jwt: string): Role | null {
-  try {
-    const payload = jwt.split(".")[1];
-    if (!payload) return null;
-    const pad = payload.length % 4 === 0 ? "" : "=".repeat(4 - (payload.length % 4));
-    const decoded = atob(payload.replace(/-/g, "+").replace(/_/g, "/") + pad);
-    const role = JSON.parse(decoded)?.app_metadata?.user_role;
-    return role === "moderator" || role === "admin" || role === "member" ? role : null;
-  } catch {
-    return null;
-  }
+  const role = unverifiedClaim(jwt, ["app_metadata", "user_role"]);
+  return role === "moderator" || role === "admin" || role === "member" ? role : null;
 }
 
 /** Whichever of the two grants less. Unknown or missing resolves toward member. */
@@ -166,18 +122,6 @@ export function effectiveRole(claim: Role | null, db: Role): Role {
   if (claim === null) return db; // hook not enabled; the database still governs
   const rank: Record<Role, number> = { member: 0, moderator: 1, admin: 2 };
   return rank[claim] < rank[db] ? claim : db;
-}
-
-async function rpc(name: string, args: unknown, jwt: string): Promise<Response> {
-  return await fetch(`${env("SUPABASE_URL")}/rest/v1/rpc/${name}`, {
-    method: "POST",
-    headers: {
-      apikey: env("SUPABASE_ANON_KEY"),
-      Authorization: `Bearer ${jwt}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(args),
-  });
 }
 
 async function turnstileOk(token: string, remoteIp: string | null): Promise<boolean> {
@@ -270,9 +214,7 @@ export async function handleRequest(req: Request): Promise<Response> {
   }
 
   // ── 2 · auth ───────────────────────────────────────────────
-  const authHeader = req.headers.get("Authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) return fail("unauthenticated", 401, req);
-  const jwt = authHeader.slice(7).trim();
+  const jwt = bearer(req);
   if (!jwt) return fail("unauthenticated", 401, req);
 
   // ── 3 · Turnstile ──────────────────────────────────────────
@@ -315,15 +257,7 @@ export async function handleRequest(req: Request): Promise<Response> {
   // A random UUID under the uploader's id. Nothing the caller sent goes into the path: a
   // filename is attacker-controlled and belongs nowhere near an object key, and the
   // original name is metadata for the posts row, not a location.
-  const sub = (() => {
-    try {
-      const p = jwt.split(".")[1];
-      const pad = p.length % 4 === 0 ? "" : "=".repeat(4 - (p.length % 4));
-      return JSON.parse(atob(p.replace(/-/g, "+").replace(/_/g, "/") + pad))?.sub ?? null;
-    } catch {
-      return null;
-    }
-  })();
+  const sub = unverifiedClaim(jwt, ["sub"]);
   if (typeof sub !== "string" || !sub) return fail("unauthenticated", 401, req);
 
   const objectKey = `${sub}/${crypto.randomUUID()}`;

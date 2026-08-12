@@ -43,3 +43,10 @@ uri = "pg-functions://postgres/public/custom_access_token_hook"
 # gate and not the guard.
 [functions.request-upload]
 verify_jwt = true
+
+# complete-upload (M1). Same reasoning as above, and the guard behind it is the same
+# shape: begin_ingest derives auth.uid() from the token via PostgREST and refuses a key
+# that is not the caller's, so the gateway setting is the cheap outer gate and never the
+# thing that decides.
+[functions.complete-upload]
+verify_jwt = true
