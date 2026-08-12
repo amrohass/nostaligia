@@ -27,10 +27,14 @@ set search_path = public, extensions;
 
 -- ── The daily limits ─────────────────────────────────────────
 --
--- CLAUDE.md requires per-user daily quotas but does not name the numbers, so these
--- are CHOSEN, not derived, and are the one thing in this file worth arguing about.
+-- CLAUDE.md requires per-user daily quotas but did not name the numbers, so these were
+-- CHOSEN, not derived, and are the one thing in this file worth arguing about.
 -- They are sized off §6's per-file caps: a member's 1 GiB/day admits five 200 MB
 -- uploads or twenty small ones; a moderator's 40 GiB/day admits ten 4 GB masters.
+--
+-- Approved 12 Aug 2026 and written back into CLAUDE.md §6 under the cost-ceiling
+-- bullet, so the governance file stays the source of truth rather than this migration
+-- being the only place the numbers exist. Change them in both places or in neither.
 --
 -- Kept as a function rather than inlined so that the Edge Function's error message
 -- and the enforcement read the same numbers.

@@ -40,6 +40,34 @@
     "wired_by": "M1 — Turnstile on signup and submit (section 6)"
   },
 
+  "_function_cors_comment": [
+    "CORS allowlist for the Edge Functions -- today just request-upload (M1).",
+    "",
+    "Section 2 keeps every origin in this file, but an Edge Function is deployed separately",
+    "from the site and cannot read config/site.json at runtime. So the function reads the",
+    "environment variable UPLOAD_ALLOWED_ORIGINS, and the generator prints the exact",
+    "`supabase secrets set` line to copy. This file stays authoritative; the secret is",
+    "only its deployment. That is a real seam -- nothing can prove the hosted secret still",
+    "matches this list -- so re-run the generator and re-set the secret in the same breath.",
+    "",
+    "STAGING ONLY. No production custom domain is provisioned yet, so PLACEHOLDER_DOMAIN is",
+    "deliberately not expanded into this list: `https://PLACEHOLDER_DOMAIN` is not an origin",
+    "any browser will ever send, and the generator refuses it rather than shipping a line",
+    "that looks configured and matches nothing.",
+    "",
+    "The localhost entry is http, not https, and is the one value here that would be a",
+    "defect on a live site -- a plain-http origin in a CORS allowlist is reachable by",
+    "anyone who can spoof http on the network. It is acceptable only because this list is",
+    "staging: when the production origin is added it REPLACES these two rather than",
+    "joining them."
+  ],
+  "function_cors": {
+    "upload_allowed_origins": [
+      "https://nostaligia.pages.dev",
+      "http://localhost:3000"
+    ]
+  },
+
   "_csp_comment": [
     "No 'unsafe-inline' and no 'unsafe-eval' anywhere -- section 6. @tokens resolve to",
     "https://<domain> from the table above.",

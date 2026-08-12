@@ -58,6 +58,39 @@ for (const key of Object.keys(cfg.turnstile ?? {})) {
   }
 }
 
+// ── Edge Function CORS ──────────────────────────────────────────────────────
+// request-upload allowlists origins from UPLOAD_ALLOWED_ORIGINS, because a deployed
+// function cannot read this repository. The list still lives in config/site.json (section 2)
+// and is deployed from here, so the value is built and CHECKED here even though the only
+// output is a line for a human to run.
+//
+// Each rule below exists because the failure it prevents is silent: a wildcard, a
+// PLACEHOLDER that matches no real browser, a trailing slash or a path (neither of which
+// appears in an Origin header, so the entry can never match), or a plain-http origin that
+// is not localhost. In every case CORS simply stops working, or stops protecting, with no
+// error anywhere.
+const uploadOrigins = cfg.function_cors?.upload_allowed_origins ?? [];
+if (uploadOrigins.length === 0) {
+  throw new Error('config/site.json: function_cors.upload_allowed_origins is empty — request-upload would refuse every browser');
+}
+for (const origin of uploadOrigins) {
+  if (origin === '*' || origin.includes('*')) {
+    throw new Error(`function_cors: "${origin}" — a wildcard CORS origin is never correct for an authenticated endpoint`);
+  }
+  if (origin.includes('PLACEHOLDER')) {
+    throw new Error(`function_cors: "${origin}" — no browser sends a placeholder Origin; add the real one or leave it out`);
+  }
+  let u;
+  try { u = new URL(origin); } catch { throw new Error(`function_cors: "${origin}" is not a URL`); }
+  if (u.origin !== origin) {
+    throw new Error(`function_cors: "${origin}" is not a bare origin (got "${u.origin}") — an Origin header carries no path, so this could never match`);
+  }
+  if (u.protocol !== 'https:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') {
+    throw new Error(`function_cors: "${origin}" is plain http and is not localhost`);
+  }
+}
+const uploadOriginsValue = uploadOrigins.join(',');
+
 // ── _headers ────────────────────────────────────────────────────────────────
 // Cloudflare Pages format: a path pattern, then indented `Name: value` lines. `/*` matches
 // every route, which is what a security header set should do -- an exception carved out
@@ -150,3 +183,9 @@ for (const [rel, content] of outputs) {
 
 if (check && drifted) process.exit(1);
 if (check) console.log('\nboth generated files match config/site.json');
+
+// Not a generated file, so not drift-checkable: the hosted secret is outside this
+// repository and nothing here can read it back. Printing it on every run is the whole
+// mitigation — the value is in front of you at the moment you change the origins.
+console.log(`\nEdge Function CORS — set this whenever the list above changes:\n` +
+  `  npx supabase secrets set UPLOAD_ALLOWED_ORIGINS="${uploadOriginsValue}"`);

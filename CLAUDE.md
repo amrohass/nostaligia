@@ -218,6 +218,12 @@ Written after a real compromised-key incident (~24,000% billing spike).
 - **Cost ceiling, four layers:** media egress structurally $0 on R2; Supabase Spend Cap ON;
   per-user daily quotas enforced **in the database**; Cloudflare WAF rate limits + Turnstile
   on signup and submit. Budget alerts are a fifth layer and the least trustworthy.
+  - **Daily quota figures** (this spec originally named none; set in M1, approved
+    12 Aug 2026): **member 20 uploads / 1 GiB · moderator + admin 200 uploads / 40 GiB.**
+    Sized off the per-file caps above — a member's day admits five 200 MB uploads, a
+    moderator's admits ten 4 GB masters. They live in `public.upload_daily_limits()`;
+    change them there and here together. This is a cost ceiling, not a fairness
+    mechanism: raise it only against an actual R2 and Supabase bill.
 - CSP with no `unsafe-inline`, plus HSTS, via Cloudflare `_headers`.
 - Lifecycle rule purging rejected/orphaned objects after 30 days.
 
