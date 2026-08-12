@@ -218,6 +218,14 @@ export async function handleRequest(req: Request): Promise<Response> {
   const bytes = Number(body.bytes);
   const durationS = body.duration_s === undefined ? null : Number(body.duration_s);
   const turnstileToken = typeof body.turnstile_token === "string" ? body.turnstile_token : "";
+  const kind = typeof body.kind === "string" ? body.kind.trim() : "";
+  // Passed through to claim_upload_slot rather than validated here. The database already
+  // names the refusals (title_required, description_required) and enforces the matching
+  // constraints, so re-checking in the client-facing layer would be a second copy of a
+  // rule that can drift from the one that actually binds.
+  const draft = (body.draft && typeof body.draft === "object" && !Array.isArray(body.draft))
+    ? body.draft
+    : {};
 
   // §6 names SVG specifically, so it gets its own refusal rather than falling through
   // the allowlist as an anonymous "unsupported type". The reason is worth being able
@@ -253,6 +261,14 @@ export async function handleRequest(req: Request): Promise<Response> {
 
   if (!turnstileToken) return fail("turnstile_required", 400, req);
 
+  // The client declares what this is going to be. The alternative — inferring it from the
+  // sniffed family after ingest — would mean the worker mutating `kind`, and `kind` is
+  // inside the approval content hash, so a worker write there could un-approve a post.
+  // The front end knows the upload context, so it says so up front.
+  if (kind !== "media" && kind !== "voice" && kind !== "event") {
+    return fail("invalid_kind", 400, req);
+  }
+
   // ── 2 · auth ───────────────────────────────────────────────
   const authHeader = req.headers.get("Authorization") ?? "";
   if (!authHeader.startsWith("Bearer ")) return fail("unauthenticated", 401, req);
@@ -286,29 +302,19 @@ export async function handleRequest(req: Request): Promise<Response> {
     return fail("over_duration_cap", 413, req, { role, max_duration_s: caps.maxDurationS });
   }
 
-  // ── 5 · quota — the first thing that writes ────────────────
-  const quotaRes = await rpc("claim_upload_quota", { p_bytes: bytes }, jwt);
-  if (!quotaRes.ok) return fail("quota_check_failed", 502, req);
-  const quota = await quotaRes.json();
-
-  if (quota?.allowed !== true) {
-    const status = quota?.reason === "unauthenticated" ? 401 : 429;
-    return fail(quota?.reason ?? "quota_exceeded", status, req, {
-      count: quota?.count,
-      limit_count: quota?.limit_count,
-      bytes: quota?.bytes,
-      limit_bytes: quota?.limit_bytes,
-    });
-  }
-
-  // ── 6 · the signed URL ─────────────────────────────────────
+  // ── 5 · the object key ─────────────────────────────────────
   //
-  // The subject is taken from the token only after PostgREST has verified its
-  // signature twice over, so it is as trustworthy as auth.uid() by this point.
+  // Built before the quota is claimed, because the key is now part of what is claimed:
+  // the slot and the draft post are one transaction (migration 0027).
   //
-  // The key is a random UUID under the uploader's id. Nothing the caller sent goes
-  // into the path: a filename is attacker-controlled and belongs nowhere near an
-  // object key, and the original name is metadata for the posts row, not a location.
+  // The subject is read from the token, which PostgREST has already verified twice over
+  // by this point, so it is as trustworthy as auth.uid(). It is not trusted blindly
+  // either — claim_upload_slot re-derives auth.uid() itself and refuses a key that is not
+  // under it, so a bug here cannot attach a draft to somebody else's upload.
+  //
+  // A random UUID under the uploader's id. Nothing the caller sent goes into the path: a
+  // filename is attacker-controlled and belongs nowhere near an object key, and the
+  // original name is metadata for the posts row, not a location.
   const sub = (() => {
     try {
       const p = jwt.split(".")[1];
@@ -321,6 +327,41 @@ export async function handleRequest(req: Request): Promise<Response> {
   if (typeof sub !== "string" || !sub) return fail("unauthenticated", 401, req);
 
   const objectKey = `${sub}/${crypto.randomUUID()}`;
+
+  // ── 6 · quota and draft — the first thing that writes ──────
+  const slotRes = await rpc("claim_upload_slot", {
+    p_bytes: bytes,
+    p_object_key: objectKey,
+    p_kind: kind,
+    p_draft: draft,
+  }, jwt);
+  if (!slotRes.ok) return fail("quota_check_failed", 502, req);
+  const slot = await slotRes.json();
+
+  if (slot?.allowed !== true) {
+    // Refusals split three ways. The malformed-draft ones are the caller's mistake to
+    // fix and retry; the ownership one should be unreachable from this function and is a
+    // 403 rather than a 400 precisely so it stands out in the logs if it ever appears.
+    const reason = slot?.reason ?? "quota_exceeded";
+    const status = reason === "unauthenticated"
+      ? 401
+      : reason === "object_key_not_owned"
+      ? 403
+      : reason === "duplicate_object_key"
+      ? 409
+      : ["invalid_object_key", "title_required", "description_required", "invalid_bytes"]
+          .includes(reason)
+      ? 400
+      : 429;
+    return fail(reason, status, req, {
+      count: slot?.count,
+      limit_count: slot?.limit_count,
+      bytes: slot?.bytes,
+      limit_bytes: slot?.limit_bytes,
+    });
+  }
+
+  // ── 7 · the signed URL ─────────────────────────────────────
 
   let presigned;
   try {
@@ -344,12 +385,14 @@ export async function handleRequest(req: Request): Promise<Response> {
     upload: presigned,
     bucket: QUARANTINE_BUCKET,
     object_key: objectKey,
+    // The draft the client must reference when it calls complete-upload after the PUT.
+    post_id: slot.post_id,
     role,
     quota: {
-      count: quota.count,
-      limit_count: quota.limit_count,
-      bytes: quota.bytes,
-      limit_bytes: quota.limit_bytes,
+      count: slot.count,
+      limit_count: slot.limit_count,
+      bytes: slot.bytes,
+      limit_bytes: slot.limit_bytes,
     },
   }, 200, req);
 }

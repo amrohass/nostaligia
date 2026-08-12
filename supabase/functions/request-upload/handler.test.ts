@@ -116,6 +116,23 @@ Deno.test("a Turnstile token is required, and its absence is gate 1's last word"
   assertEquals(r.error, "turnstile_required", "named, so the client can prompt for one");
 });
 
+Deno.test("the post kind must be declared, and must be one the schema knows", async () => {
+  // Declared here rather than inferred from the sniffed family after ingest, because that
+  // would mean the worker mutating `kind` — and `kind` is inside the approval content
+  // hash, so a worker write there could un-approve a post.
+  const base = { mime: "image/jpeg", bytes: 1024, turnstile_token: "x" };
+  assertEquals((await refusal(base)).error, "invalid_kind", "absent");
+  assertEquals(
+    (await refusal({ ...base, kind: "photo" })).error,
+    "invalid_kind",
+    "a plausible-sounding kind the enum does not have",
+  );
+  for (const kind of ["media", "voice", "event"]) {
+    const r = await refusal({ ...base, kind });
+    assert(r.error !== "invalid_kind", `${kind} is accepted (got ${r.error})`);
+  }
+});
+
 Deno.test("a malformed body is refused before anything reads a field from it", async () => {
   const res = await handleRequest(
     new Request("https://example.test/request-upload", {
