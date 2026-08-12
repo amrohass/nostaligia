@@ -148,7 +148,7 @@ function fail(error: string, status: number, req: Request, detail?: unknown) {
  * That is safe only because of how the result is used: it can lower the effective
  * role and never raise it. Treat the return value as attacker-controlled — it is.
  */
-function claimedRole(jwt: string): Role | null {
+export function claimedRole(jwt: string): Role | null {
   try {
     const payload = jwt.split(".")[1];
     if (!payload) return null;
@@ -162,7 +162,7 @@ function claimedRole(jwt: string): Role | null {
 }
 
 /** Whichever of the two grants less. Unknown or missing resolves toward member. */
-function effectiveRole(claim: Role | null, db: Role): Role {
+export function effectiveRole(claim: Role | null, db: Role): Role {
   if (claim === null) return db; // hook not enabled; the database still governs
   const rank: Record<Role, number> = { member: 0, moderator: 1, admin: 2 };
   return rank[claim] < rank[db] ? claim : db;
