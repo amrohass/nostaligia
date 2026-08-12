@@ -105,6 +105,25 @@ jobs:
       - name: CSP survivability and origin ratchet
         run: node scripts/frontend-csp-test.mjs
 
+  # Gate 1 of request-upload: the refusals that happen before the function touches the
+  # network, reads an environment variable or learns who is asking. They need no
+  # deployment and no credential, so there is no excuse for them to be untested -- and
+  # the test doubles as an ordering assertion, since every request it sends is
+  # unauthenticated and would 401 if a gate-1 check ever drifted behind gate 2 or 3.
+  functions:
+    name: edge function gate 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: request-upload gate 1
+        run: deno test --allow-env supabase/functions/request-upload/
+
   database:
     name: schema, policies and the denial matrix
     runs-on: ubuntu-latest

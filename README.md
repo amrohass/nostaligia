@@ -535,7 +535,7 @@ the table. Leaving the hook off degrades M1, never M0.
 Static, no build step:
 
 ```powershell
-npx serve .
+npx serve site
 ```
 
 ### Conventions

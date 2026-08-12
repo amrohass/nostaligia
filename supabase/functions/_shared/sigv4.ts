@@ -32,7 +32,15 @@ async function sha256Hex(input: string): Promise<string> {
   return hex(await crypto.subtle.digest("SHA-256", encoder.encode(input)));
 }
 
-async function hmac(key: ArrayBuffer | Uint8Array, msg: string): Promise<ArrayBuffer> {
+// `Uint8Array<ArrayBuffer>`, not a bare `Uint8Array`. The unparameterised form widens to
+// `Uint8Array<ArrayBufferLike>`, which admits a SharedArrayBuffer-backed view, and
+// crypto.subtle.importKey does not accept one. Nothing here ever produces such a view —
+// the only caller passes encoder.encode(...) — so this narrows the type to what is
+// actually being handed over rather than changing any behaviour.
+async function hmac(
+  key: ArrayBuffer | Uint8Array<ArrayBuffer>,
+  msg: string,
+): Promise<ArrayBuffer> {
   const k = await crypto.subtle.importKey(
     "raw",
     key,
