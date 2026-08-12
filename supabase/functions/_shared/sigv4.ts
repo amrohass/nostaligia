@@ -72,6 +72,19 @@ export interface PresignInput {
   expiresIn: number;
   /** Injectable only so the signature is reproducible under test. */
   now?: Date;
+  /**
+   * Overrides the R2 endpoint. Production callers omit this and get R2.
+   *
+   * It exists so the signer can be pointed at a real S3 implementation running locally
+   * and the resulting URL actually used — which is the only way to find out whether an
+   * independent verifier accepts what we produce, short of holding live R2 credentials.
+   * See scripts/sigv4-roundtrip.ts.
+   *
+   * Not a security surface: the endpoint is not a secret, it is covered by the signature
+   * through the host header, and pointing it somewhere else cannot widen what the URL
+   * authorises — it only produces a URL that R2 would reject.
+   */
+  endpoint?: { host: string; protocol?: "http:" | "https:" };
 }
 
 export interface PresignResult {
@@ -83,7 +96,8 @@ export interface PresignResult {
 }
 
 export async function presignR2Put(i: PresignInput): Promise<PresignResult> {
-  const host = `${i.accountId}.r2.cloudflarestorage.com`;
+  const host = i.endpoint?.host ?? `${i.accountId}.r2.cloudflarestorage.com`;
+  const protocol = i.endpoint?.protocol ?? "https:";
   const region = "auto"; // R2 has one region and calls it this.
   const service = "s3";
 
@@ -141,7 +155,7 @@ export async function presignR2Put(i: PresignInput): Promise<PresignResult> {
   const signature = hex(await hmac(kSigning, stringToSign));
 
   return {
-    url: `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`,
+    url: `${protocol}//${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`,
     method: "PUT",
     headers: {
       "Content-Type": i.contentType,

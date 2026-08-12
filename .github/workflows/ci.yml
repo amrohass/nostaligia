@@ -121,8 +121,25 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: request-upload gate 1
-        run: deno test --allow-env supabase/functions/request-upload/
+      - name: gate 1, the role floor and the presigner
+        run: deno test --allow-env supabase/functions/
+
+      # The unit tests above prove the signature is deterministic and varies with
+      # content-length. They cannot prove it is CORRECT -- the only thing to compare
+      # against is the code that produced it. MinIO recomputes the signature from the
+      # request it receives, so it is an independent verifier of the whole
+      # canonicalisation, and it enforces the content-length binding that section 6's
+      # quota depends on. Throwaway credentials, no R2 involved.
+      - name: SigV4 round-trip against a real S3 implementation
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=rmatestkey -e MINIO_ROOT_PASSWORD=rmatestsecret123 \
+            --entrypoint sh minio/minio \
+            -c "mkdir -p /data/quarantine && minio server /data"
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && break || sleep 2
+          done
+          deno run --allow-net --allow-env scripts/sigv4-roundtrip.ts
 
   database:
     name: schema, policies and the denial matrix
