@@ -43,6 +43,7 @@ Plus: profiles, an info page (About / Contact / Support / Donate), and an admin 
 | Auth | Supabase Auth, **email + password only** |
 | Geo | **PostGIS** `geography(Point,4326)` + GiST. Geohash is a derived publish-time shard key ONLY |
 | Basemap | **PMTiles** (Palestine extract) on R2. NEVER the public OSM tile endpoint |
+| Media processing | **One containerised worker for all media** (added M1, 12 Aug 2026 — see §6) |
 | Front end | **Vanilla JS** — no framework, no build step beyond the publish script |
 | Routing | **History API** (NOT hash routing) |
 | Read path | Static sharded JSON releases on CDN. **Zero database reads for public visitors** |
@@ -209,8 +210,18 @@ Written after a real compromised-key incident (~24,000% billing spike).
     directly. Do not build the automated pipeline for the ~300 launch items — build it only
     for ongoing member uploads.
   - Transcoding a 4K master will exceed a standard Edge Function timeout. Use a
-    longer-running worker for the video path only. Do not use a per-minute-billed streaming
+    longer-running worker. Do not use a per-minute-billed streaming
     service — it reintroduces unbounded usage billing.
+  - **Amended 12 Aug 2026 — the worker handles ALL media, not just video.** This bullet
+    originally said "for the video path only". That carve-out does not survive contact
+    with the other two formats: audio normalization needs ffmpeg, which an Edge Function
+    does not have, and a member may upload 200 MB, which will exhaust a Deno isolate
+    before a WASM decoder finishes. Splitting by format would mean two codec toolchains
+    to harden and a per-format size cap this file does not define. So the Edge Function
+    orchestrates and the worker decodes — image, audio and video alike.
+    The worker is a plain container with no host-specific SDK, so **which host runs it is
+    a deployment choice, not an architectural one.** It must scale to zero: at ~300 items
+    an always-on instance is the largest avoidable line on a grant-funded budget.
 - **Audio:** Opus/AAC mono 48–64 kbps.
 - **XSS:** `textContent` only, or DOMPurify. Every `innerHTML` / `insertAdjacentHTML` /
   `outerHTML` on user content is a defect.
