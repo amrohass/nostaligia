@@ -3,4 +3,8 @@
 
 import { handleRequest } from "./handler.ts";
 
-Deno.serve(handleRequest);
+// Wrapped rather than passed directly. Deno.serve calls its handler with (request, info),
+// and handleRequest's second parameter is now its injectable dependencies — passing it bare
+// would hand the connection info in as `deps` and the function would call undefined.rpc on
+// the first request.
+Deno.serve((req) => handleRequest(req));

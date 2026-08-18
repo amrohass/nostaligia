@@ -1,0 +1,32 @@
+-- 0029 · A rung the ladder enum cannot currently express: audio
+--
+-- 0007 wrote the preservation/delivery split as a constraint:
+--
+--     (role = 'rendition') = (rendition is not null)
+--     (role = 'master')    = (bucket = 'originals')
+--
+-- Together those say every row in `public/` is a thumb, a poster, or a rendition carrying
+-- a rung. §6 requires the worker to normalize audio to "Opus/AAC mono 48–64 kbps" and put
+-- the result somewhere a browser can reach it — and there is no value in media_rendition
+-- that an audio derivative can honestly take. The audio path is unbuildable without this.
+--
+-- ── Why a new value and not '480p' ───────────────────────────
+--
+-- '480p' would satisfy the constraint and put a lie in the row. M3's player selects a rung
+-- "by viewport and connection" (§6); a voice note labelled 480p is a video rung as far as
+-- that code can tell, and the bug surfaces as a player choosing a resolution for a file
+-- that has none. The enum is a DELIVERY VARIANT, not strictly a pixel height — 0003
+-- already stretched it once by carrying 2160p, which is a master and never a rendition.
+--
+-- ── Why its own migration ────────────────────────────────────
+--
+-- Since PostgreSQL 12, ALTER TYPE ... ADD VALUE may run inside a transaction block, but
+-- the new value cannot be USED until that transaction commits. Alone in a file, nothing
+-- can be tempted to use it too early. 13_ingest_attempts asserts a media_assets row can
+-- actually be written with it, from a later session, which is the only proof that matters.
+--
+-- Appended rather than positioned. Enum order is sort order, and the visual ladder sorts
+-- 2160p → 480p by descending quality; audio does not belong anywhere in that sequence, so
+-- it goes at the end where it cannot disturb it.
+
+alter type public.media_rendition add value if not exists 'audio';

@@ -19,7 +19,7 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | M | Contents | State |
 |---|---|---|
 | **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **complete** — 8/8 items, exit criteria met, CSP/HSTS verified live |
-| M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | not started |
+| M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | **in progress** — pieces 1–3 done (upload gates, ingest lifecycle, media worker); Turnstile wiring, approval trigger and the moderation queue remain |
 | M2 | Sharding · versioned releases · single-writer lock · takedown | not started |
 | M3 | Front end on shards · History API · prerendered item pages · XSS/bidi sweep | not started |
 | M4 | PostGIS geo · decade slider · PMTiles basemap | not started |

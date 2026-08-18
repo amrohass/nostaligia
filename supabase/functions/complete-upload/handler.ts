@@ -34,6 +34,23 @@ interface WorkerJob {
 }
 
 /**
+ * The two things this function does that reach outside itself.
+ *
+ * Injectable for one reason: the rollback below is the fix for a defect that only appears
+ * when the worker invocation FAILS, and a failure that cannot be simulated cannot be
+ * asserted. Without this seam the most consequential branch in the file would ship with
+ * every other branch tested and this one reasoned about.
+ *
+ * Production passes nothing and gets the real pair.
+ */
+export interface Deps {
+  rpc: typeof rpc;
+  fetch: typeof fetch;
+}
+
+const LIVE: Deps = { rpc, fetch: (...a: Parameters<typeof fetch>) => fetch(...a) };
+
+/**
  * Signs the job with a shared secret so the worker will not take work from anyone else.
  *
  * The timestamp is inside the signed payload rather than beside it: a signature that does
@@ -56,7 +73,7 @@ async function signJob(job: WorkerJob, secret: string): Promise<{ body: string; 
   return { body, signature };
 }
 
-export async function handleRequest(req: Request): Promise<Response> {
+export async function handleRequest(req: Request, deps: Deps = LIVE): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders(req) });
   }
@@ -78,7 +95,7 @@ export async function handleRequest(req: Request): Promise<Response> {
   if (!jwt) return fail("unauthenticated", 401, req);
 
   // ── 3 · claim the transition ───────────────────────────────
-  const res = await rpc("begin_ingest", { p_object_key: objectKey }, jwt);
+  const res = await deps.rpc("begin_ingest", { p_object_key: objectKey }, jwt);
   if (res.status === 401 || res.status === 403) return fail("unauthenticated", 401, req);
   if (!res.ok) return fail("begin_ingest_failed", 502, req);
 
@@ -93,8 +110,16 @@ export async function handleRequest(req: Request): Promise<Response> {
       ? 404
       : reason === "terminal_state"
       ? 409
+      // Out of retries (migration 0031). 429 rather than 400: nothing about the request is
+      // malformed, the caller has simply exhausted a ceiling, which is what 429 means.
+      : reason === "too_many_attempts"
+      ? 429
       : 400;
-    return fail(reason, status, req, { state: begun?.state });
+    return fail(reason, status, req, {
+      state: begun?.state,
+      attempts: begun?.attempts,
+      max_attempts: begun?.max_attempts,
+    });
   }
 
   // Already handed to a worker by an earlier call. Reporting 200 rather than an error is
@@ -106,13 +131,41 @@ export async function handleRequest(req: Request): Promise<Response> {
 
   // ── 4 · wake the worker ────────────────────────────────────
   //
+  // Every exit from here that is not a successful hand-off releases the row first. That is
+  // the fix for a defect worth naming precisely, because the 502s below always looked
+  // correct and the damage was one call later:
+  //
+  //   1  begin_ingest moves the row to 'processing'
+  //   2  the invocation fails — the function returns 502, honestly
+  //   3  the client retries; begin_ingest answers already_processing
+  //   4  this function returns 200 { status: "processing" } — for a job no worker ever saw
+  //
+  // Step 4 is the lie, and it is permanent: the client is told to stop worrying, so nothing
+  // ever retries and the upload neither completes nor fails. Releasing at step 2 means
+  // step 3 finds the row back in 'awaiting_bytes' and actually re-invokes.
+  //
+  // The retry is bounded by posts.ingest_attempts (migration 0031), which is what stops
+  // this from becoming a way to spawn Cloud Run instances in a loop.
+  const abandon = async (error: string, status: number, detail: Record<string, unknown>) => {
+    let released = false;
+    try {
+      const r = await deps.rpc("release_ingest", { p_object_key: objectKey }, jwt);
+      released = r.ok && (await r.json())?.ok === true;
+    } catch {
+      // The database is unreachable too. The row stays in 'processing' — the state this
+      // whole block exists to avoid — but there is nothing further to try, and reporting
+      // `released: false` is what tells an operator which of the two happened.
+      released = false;
+    }
+    return fail(error, status, req, { ...detail, post_id: begun.post_id, released });
+  };
+
   // Unset until the worker is deployed. Reported as 503 rather than pretending success,
-  // because the post is now in 'processing' and a client told "ok" would never retry —
-  // it would simply never finish. The state is recoverable; a silent lie is not.
+  // because the post is now in 'processing' and a client told "ok" would never retry.
   const workerUrl = Deno.env.get("MEDIA_WORKER_URL");
   const workerSecret = Deno.env.get("MEDIA_WORKER_SECRET");
   if (!workerUrl || !workerSecret) {
-    return fail("worker_not_configured", 503, req, { post_id: begun.post_id });
+    return await abandon("worker_not_configured", 503, {});
   }
 
   const { body: jobBody, signature } = await signJob(
@@ -121,22 +174,23 @@ export async function handleRequest(req: Request): Promise<Response> {
   );
 
   try {
-    const workerRes = await fetch(`${workerUrl.replace(/\/$/, "")}/jobs`, {
+    const workerRes = await deps.fetch(`${workerUrl.replace(/\/$/, "")}/jobs`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Signature": signature },
       body: jobBody,
     });
     if (!workerRes.ok) {
-      // The row stays in 'processing'. Until the M6 reaper exists that is a stuck job
-      // rather than a lost one, and saying so is more useful than a generic 502.
-      return fail("worker_rejected_job", 502, req, {
-        post_id: begun.post_id,
-        worker_status: workerRes.status,
-      });
+      // Includes the worker's own 503 when it is already busy: that is a job it did not
+      // take, so releasing sends the retry to a different instance rather than stranding
+      // this one behind a queue that does not exist.
+      return await abandon("worker_rejected_job", 502, { worker_status: workerRes.status });
     }
   } catch {
-    return fail("worker_unreachable", 502, req, { post_id: begun.post_id });
+    return await abandon("worker_unreachable", 502, {});
   }
 
+  // Handed over. From here the row is genuinely a worker's responsibility, and a worker
+  // that accepts a job and then dies is the stuck-job gap 0028 named — still open, still
+  // M6's, and now the only way to reach it.
   return json({ ok: true, post_id: begun.post_id, status: "processing" }, 202, req);
 }

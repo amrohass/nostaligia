@@ -61,15 +61,34 @@ function uriEncode(s: string): string {
   );
 }
 
-export interface PresignInput {
+/**
+ * The methods anything here may presign.
+ *
+ * POST is deliberately absent. R2 accepts POST for multipart and for browser form uploads,
+ * and a presigner that can emit one is a presigner that can hand out a URL whose semantics
+ * nobody in this repository has reasoned about.
+ */
+export type PresignMethod = "GET" | "PUT" | "DELETE";
+
+export interface PresignRequestInput {
   accountId: string;
   accessKeyId: string;
   secretAccessKey: string;
   bucket: string;
   key: string;
-  contentType: string;
-  contentLength: number;
+  method: PresignMethod;
   expiresIn: number;
+  /**
+   * Headers to include in the SIGNATURE. `host` is added automatically and must not be
+   * passed. Names are lowercased and sorted here, because SigV4 canonicalisation is
+   * byte-exact and a caller getting the order right is a caller who will eventually get
+   * it wrong.
+   *
+   * Anything signed must be sent verbatim by whoever uses the URL; anything NOT signed is
+   * ignored by the signature check, which is why Range can be added freely at fetch time
+   * and x-amz-copy-source cannot.
+   */
+  signHeaders?: Record<string, string>;
   /** Injectable only so the signature is reproducible under test. */
   now?: Date;
   /**
@@ -87,15 +106,24 @@ export interface PresignInput {
   endpoint?: { host: string; protocol?: "http:" | "https:" };
 }
 
-export interface PresignResult {
+export interface PresignedRequest {
   url: string;
-  method: "PUT";
-  /** Exactly what the client must send. Any deviation invalidates the signature. */
+  method: PresignMethod;
+  /** Exactly what the caller must send. Any deviation invalidates the signature. */
   headers: Record<string, string>;
   expiresAt: string;
 }
 
-export async function presignR2Put(i: PresignInput): Promise<PresignResult> {
+/**
+ * The signer. Everything else in this file is a wrapper that fills in its arguments.
+ *
+ * It is one function rather than one per verb on purpose: the worker added three more
+ * operations (read the quarantine object, copy the master to originals/, delete the
+ * quarantine object) and a second canonicalisation path would be a second place for the
+ * byte-exact rules above to be got subtly wrong — in a file whose header explains that a
+ * mistake here reads like a credentials problem and is not.
+ */
+export async function presignR2(i: PresignRequestInput): Promise<PresignedRequest> {
   const host = i.endpoint?.host ?? `${i.accountId}.r2.cloudflarestorage.com`;
   const protocol = i.endpoint?.protocol ?? "https:";
   const region = "auto"; // R2 has one region and calls it this.
@@ -110,11 +138,16 @@ export async function presignR2Put(i: PresignInput): Promise<PresignResult> {
   const canonicalUri = "/" +
     [i.bucket, ...i.key.split("/")].map(uriEncode).join("/");
 
-  const signedHeaders = "content-length;content-type;host";
-  const canonicalHeaders =
-    `content-length:${i.contentLength}\n` +
-    `content-type:${i.contentType}\n` +
-    `host:${host}\n`;
+  // host is always signed; a URL whose host is not covered can be replayed against another
+  // endpoint. Sorted byte-wise by name, which is what SigV4 requires and what a caller
+  // passing headers in a literal will not reliably do.
+  const toSign: Record<string, string> = { host };
+  for (const [k, v] of Object.entries(i.signHeaders ?? {})) {
+    toSign[k.toLowerCase()] = v;
+  }
+  const names = Object.keys(toSign).sort();
+  const signedHeaders = names.join(";");
+  const canonicalHeaders = names.map((n) => `${n}:${toSign[n]}\n`).join("");
 
   // Sorted by key, byte-wise. These five are already in order, but the sort is left in
   // so adding a parameter later cannot quietly break the signature.
@@ -133,7 +166,7 @@ export async function presignR2Put(i: PresignInput): Promise<PresignResult> {
   // UNSIGNED-PAYLOAD: the body is not available to hash at signing time, which is the
   // entire point of a presigned URL. The length binding above is what replaces it.
   const canonicalRequest = [
-    "PUT",
+    i.method,
     canonicalUri,
     canonicalQuery,
     canonicalHeaders,
@@ -156,11 +189,56 @@ export async function presignR2Put(i: PresignInput): Promise<PresignResult> {
 
   return {
     url: `${protocol}//${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`,
-    method: "PUT",
-    headers: {
-      "Content-Type": i.contentType,
-      "Content-Length": String(i.contentLength),
-    },
+    method: i.method,
+    // host is excluded: fetch() sets it from the URL and refuses to let a caller override
+    // it, so listing it here would be an instruction nobody can follow.
+    headers: Object.fromEntries(
+      Object.entries(i.signHeaders ?? {}).filter(([k]) => k.toLowerCase() !== "host"),
+    ),
     expiresAt: new Date(now.getTime() + i.expiresIn * 1000).toISOString(),
   };
+}
+
+/** What request-upload hands the browser. See the header for why the length is signed. */
+export interface PresignInput {
+  accountId: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  bucket: string;
+  key: string;
+  contentType: string;
+  contentLength: number;
+  expiresIn: number;
+  now?: Date;
+  endpoint?: { host: string; protocol?: "http:" | "https:" };
+}
+
+export interface PresignResult extends PresignedRequest {
+  method: "PUT";
+}
+
+/**
+ * A presigned PUT bound to a declared type and size.
+ *
+ * Header casing here is what the browser is told to send, and the signature is computed
+ * over the lowercased names, so these two are not in conflict — HTTP header names are
+ * case-insensitive and SigV4 canonicalisation is not.
+ */
+export async function presignR2Put(i: PresignInput): Promise<PresignResult> {
+  const signed = await presignR2({
+    accountId: i.accountId,
+    accessKeyId: i.accessKeyId,
+    secretAccessKey: i.secretAccessKey,
+    bucket: i.bucket,
+    key: i.key,
+    method: "PUT",
+    expiresIn: i.expiresIn,
+    signHeaders: {
+      "Content-Length": String(i.contentLength),
+      "Content-Type": i.contentType,
+    },
+    now: i.now,
+    endpoint: i.endpoint,
+  });
+  return { ...signed, method: "PUT" };
 }
