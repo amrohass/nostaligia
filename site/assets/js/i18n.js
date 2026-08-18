@@ -340,6 +340,31 @@
     'q.sentBack':  { ar: 'أُعيدت «{t}» إلى صاحبها مع ملاحظتك.', en: '"{t}" went back to its contributor with your note.' },
     'q.rejected':  { ar: 'رُفضت «{t}».', en: '"{t}" was rejected.' },
     'q.clear':     { ar: 'انتهت القائمة — لا شيء بانتظار القرار.', en: 'Queue clear — nothing awaiting a decision.' },
+    'q.loading':   { ar: 'نجلب القائمة…', en: 'Loading the queue…' },
+    // §7: nothing goes public without a recorded licence and provenance. The share sheet
+    // does not collect either until M5, so a moderator meets this on most member uploads.
+    'q.rightsMissing': { ar: 'لا يمكن النشر: الترخيص أو المصدر غير مسجَّل (§7).',
+                         en: 'Cannot publish: licence or provenance is not recorded (§7).' },
+    // "Send back to the contributor" has no post_status to map onto — 'withdrawn' means the
+    // AUTHOR pulled it. Saying so is better than quietly filing it as something else.
+    'q.err.sendBackUnsupported': { ar: 'الإعادة إلى المساهم غير مفعّلة بعد.',
+                                   en: 'Sending back to the contributor is not enabled yet.' },
+
+    // ── Dashboard gate and errors ───────────────────────────
+    // The gate is UX (§5). These strings explain a refusal; they never cause one.
+    'admin.checking':    { ar: 'نتحقّق من صلاحياتك…', en: 'Checking your access…' },
+    'admin.signInTitle': { ar: 'دخول لوحة الإدارة', en: 'Dashboard sign-in' },
+    'admin.refusedTitle':{ ar: 'لا صلاحية', en: 'No access' },
+    'admin.refusedBody': { ar: 'هذه اللوحة للمشرفين والإداريين. حسابك مسجَّل كـ {role}.',
+                           en: 'This dashboard is for moderators and admins. Your account is a {role}.' },
+    'admin.toArchive':   { ar: 'العودة إلى الأرشيف', en: 'Back to the archive' },
+    'admin.err.denied':  { ar: 'رفضت قاعدة البيانات هذا الإجراء.', en: 'The database refused that action.' },
+    'admin.err.conflict':{ ar: 'تغيّر هذا العنصر منذ فتح الصفحة. حدّث القائمة.',
+                           en: 'This item changed since the page loaded. Refresh the queue.' },
+    'admin.err.signedOut': { ar: 'انتهت جلستك. سجّل الدخول من جديد.', en: 'Your session ended. Sign in again.' },
+    'admin.err.offline': { ar: 'لا يوجد اتصال بقاعدة البيانات.', en: 'No connection to the database.' },
+    'admin.err.loadFailed': { ar: 'تعذّر تحميل اللوحة.', en: 'The dashboard failed to load.' },
+    'admin.err.generic': { ar: 'تعذّر إتمام الطلب.', en: 'That request did not go through.' },
 
     // ── Admin: published archive ────────────────────────────
     'ar.title':   { ar: 'الأرشيف المنشور', en: 'Published archive' },

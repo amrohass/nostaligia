@@ -15,9 +15,17 @@
   /* Working state. Everything starts from DATA and is copied so decisions in one
      session never mutate the seed. */
   var work = {
-    queue: DATA.QUEUE.slice(),
+    /* Empty until loadQueue() answers. The review queue is the one screen wired to the
+       real database (M1 piece 5) — every other section below still reads DATA and is
+       M3's to replace. `queueError` and `queueLoaded` exist so the screen can tell
+       "nothing pending" apart from "could not ask", which look identical otherwise and
+       mean opposite things to a moderator. */
+    queue: [],
+    queueLoaded: false,
+    queueError: null,
+    queueBusy: null,          // id of the item whose decision is in flight
     queueFilter: 'all',
-    queueSelected: DATA.QUEUE[0].id,
+    queueSelected: null,
     events: DATA.QUEUE.filter(function (item) { return item.kind === 'event'; }).slice(),
     eventsTab: 'pending',
     eventSelected: null,
@@ -247,7 +255,131 @@
     ]);
   }
 
-  /* ── 4a Review queue ─────────────────────────────────────── */
+  /* ── 4a Review queue — the one screen on real data ────────── */
+
+  /* The queue predicate, and it is the schema's rather than this file's: migration 0025
+     narrowed posts_moderation_queue_idx to exactly `status = 'pending' and ingest_state =
+     'ready'`, because an item whose media is still being transcoded reaches a moderator as
+     a row with nothing to look at.
+
+     Both halves are also a REQUEST, not a guard (§5). If policy 0018 were wrong this would
+     return whatever the database chose to hand over; what keeps another member's pending
+     post out of this list is the policy, not the filter. */
+  /* created_on, not created_at — and created_by is absent entirely.
+   *
+   * 0015 grants SELECT column by column, and `created_at` is not among them for ANY browser
+   * role. §7: "Public timestamps are day-precision. Never expose exact submission times
+   * publicly." Column grants cannot distinguish a moderator from a member, so that rule
+   * reaches this dashboard too: the arrival time it can show is a DATE.
+   *
+   * The first draft of this query asked for created_at and created_by. PostgREST refuses
+   * the whole request when it names an ungranted column, so the queue would have been
+   * empty with a 403 — found by 15_moderation_queue, which had the same mistake in its
+   * ORDER BY.
+   */
+  var QUEUE_QUERY = [
+    'select=id,kind,title_ar,title_en,body_ar,body_en,created_on,' +
+      'license,provenance,decade,media_assets(role,rendition,storage_path,bucket,mime,width,height,bytes,duration_s)',
+    'status=eq.pending',
+    'ingest_state=eq.ready',
+    'order=created_on.asc',
+    'limit=100'
+  ].join('&');
+
+  /* §1 promises a reply within 48 hours and the share sheet says so to every contributor.
+     The countdown a moderator sees is that promise, not a setting. */
+  var SLA_HOURS = 48;
+
+  /* Day precision in, hours out — see QUEUE_QUERY. The number a moderator reads is
+     therefore coarse, and honestly so: it cannot be finer than the column allows. */
+  function hoursSince(dateOnly) {
+    var then = Date.parse(dateOnly);
+    if (!isFinite(then)) return 0;
+    return Math.max(0, Math.floor((Date.now() - then) / 86400000) * 24);
+  }
+
+  /* The UI filters on photo/voice/video/event; the database stores media/voice/event. The
+     difference that matters to a reviewer is what they are about to look at, so the display
+     kind is derived from the master's mime rather than from `kind`. */
+  function displayKind(row, master) {
+    if (row.kind === 'event') return 'event';
+    var mime = (master && master.mime) || '';
+    if (mime.indexOf('video/') === 0) return 'video';
+    if (mime.indexOf('audio/') === 0) return 'voice';
+    if (row.kind === 'voice') return 'voice';
+    return 'photo';
+  }
+
+  /* A CDN URL for a derivative.
+
+     Only ever called for bucket='public' rows. §3: "NEVER serve a row with
+     bucket='originals' through the public CDN path" — and the master is filtered out
+     before this is reached, not checked inside it, so there is no path where an
+     originals/ row could acquire a public URL by accident. */
+  function cdnUrl(asset) {
+    return CONFIG.origins.cdn + '/' + asset.storage_path;
+  }
+
+  function mapRow(row) {
+    var assets = row.media_assets || [];
+    var master = null;
+    var thumb = null;
+    var renditions = [];
+    assets.forEach(function (a) {
+      if (a.role === 'master') master = a;
+      else if (a.role === 'thumb') thumb = a;
+      else if (a.role === 'rendition') renditions.push(a);
+    });
+
+    var arrived = hoursSince(row.created_on);
+    var titlePair = { ar: row.title_ar || row.title_en || '', en: row.title_en || row.title_ar || '' };
+    var storyPair = { ar: row.body_ar || row.body_en || '', en: row.body_en || row.body_ar || '' };
+
+    return {
+      id: row.id,
+      kind: displayKind(row, master),
+      arrivedHours: arrived,
+      hoursLeft: Math.max(0, SLA_HOURS - arrived),
+      title: titlePair,
+      story: storyPair,
+      /* Everything the prototype invented per item and the database does not carry yet.
+         Left as empty pairs rather than removed, so the existing detail panel renders
+         unchanged instead of needing a rewrite it will get in M3 anyway. */
+      by: { ar: '', en: '' },
+      byInitial: { ar: '؟', en: '?' },
+      place: { ar: '', en: '' },
+      decade: row.decade ? { ar: String(row.decade), en: String(row.decade) } : { ar: '', en: '' },
+      tags: [],
+      thumbs: [],
+      imageCount: renditions.length,
+      /* Provenance and licence are the two §7 fields a reviewer actually has to read: a
+         contributor granting a licence they do not hold is how heritage archives acquire
+         liability. */
+      license: row.license || '',
+      provenance: row.provenance || '',
+      plate: [master && master.mime,
+              master && master.width ? master.width + '×' + master.height : null,
+              master && master.bytes ? Math.round(master.bytes / 1024) + ' KB' : null]
+        .filter(Boolean).join(' · '),
+      thumbUrl: thumb ? cdnUrl(thumb) : null,
+      previewUrl: renditions.length ? cdnUrl(renditions[0]) : null,
+      previewMime: renditions.length ? renditions[0].mime : null
+    };
+  }
+
+  function loadQueue() {
+    return DB.select('posts', QUEUE_QUERY).then(function (rows) {
+      work.queue = (rows || []).map(mapRow);
+      work.queueLoaded = true;
+      work.queueError = null;
+      if (!work.queueSelected && work.queue.length) work.queueSelected = work.queue[0].id;
+      render();
+    }).catch(function (err) {
+      work.queueLoaded = true;
+      work.queueError = err && err.key ? err.key : 'admin.err.generic';
+      render();
+    });
+  }
 
   function slaClass(hoursLeft) {
     if (hoursLeft <= 12) return '.sla--soon';
@@ -312,8 +444,18 @@
                 })
               ]);
             })
-          : el('p.queue-item__sub', { style: 'padding:20px', text: t('q.empty') })),
-        selected ? queueDetail(selected) : el('div.empty-pane', { text: t('q.clear') })
+          /* Three states, not one. "Nothing pending", "still asking" and "could not ask"
+             look identical if they share a message, and they mean opposite things: the
+             first is a moderator's job done, the last is a moderator being shown a clear
+             queue that is not clear. */
+          : el('p.queue-item__sub', { style: 'padding:20px', text:
+              work.queueError ? t(work.queueError)
+                : !work.queueLoaded ? t('q.loading')
+                : t('q.empty') })),
+        selected ? queueDetail(selected) : el('div.empty-pane', { text:
+          work.queueError ? t(work.queueError)
+            : !work.queueLoaded ? t('q.loading')
+            : t('q.clear') })
       ])
     ];
   }
@@ -381,11 +523,37 @@
             b: t('time.hours', { n: num(item.hoursLeft) })
           })
         }),
-        el('div.decisions__actions', null, [
-          el('button.abtn.abtn--quiet', { type: 'button', onclick: function () { decide(item, 'rejected'); }, text: t('q.reject') }),
-          el('button.abtn.abtn--ghost', { type: 'button', onclick: function () { decide(item, 'sentBack'); }, text: t('q.sendBack') }),
-          el('button.abtn.abtn--primary', { type: 'button', onclick: function () { decide(item, 'published'); }, text: t('q.publish') })
-        ])
+        /* §7, enforced by posts_approved_has_rights: "nothing goes public without recorded
+           provenance and a license." A post missing either CANNOT be approved by anyone,
+           so the button says so rather than sending an UPDATE that comes back as a raw
+           constraint violation. The share sheet does not collect these fields until M5,
+           so today this is the state most member uploads arrive in.
+
+           Rejecting is still allowed — a post with no rights is exactly the kind a
+           moderator needs to be able to turn away. */
+        (function () {
+          var hasRights = Boolean(item.license) && Boolean(item.provenance);
+          var busy = work.queueBusy === item.id;
+          var actions = [
+            el('button.abtn.abtn--quiet', {
+              type: 'button', disabled: busy || null,
+              onclick: function () { decide(item, 'rejected'); }, text: t('q.reject')
+            }),
+            el('button.abtn.abtn--ghost', {
+              type: 'button', disabled: busy || null,
+              onclick: function () { decide(item, 'sentBack'); }, text: t('q.sendBack')
+            }),
+            el('button.abtn.abtn--primary', {
+              type: 'button',
+              disabled: busy || !hasRights || null,
+              title: hasRights ? null : t('q.rightsMissing'),
+              onclick: function () { decide(item, 'published'); },
+              text: busy ? t('auth.working') : t('q.publish')
+            })
+          ];
+          if (!hasRights) actions.unshift(el('span.decisions__warn', { text: t('q.rightsMissing') }));
+          return el('div.decisions__actions', null, actions);
+        }())
       ])
     ]);
   }
@@ -397,12 +565,60 @@
     ]);
   }
 
+  /* A real decision.
+   *
+   * The client sends `status` and NOTHING else. approved_by, approved_at and content_hash
+   * are written by the trigger from migration 0012 and are ungranted at the privilege
+   * layer for every role (0015) — so approval attribution cannot be forged from here even
+   * if this function tried. That is the design: a moderator approves by asking, and the
+   * database records who asked.
+   *
+   * The row is removed from the local queue only AFTER the database confirms. Removing it
+   * optimistically would show a moderator a drained queue built from updates that were
+   * refused — the exact failure §5 warns about, where the client's picture of authorization
+   * and the database's disagree and the client's is the one on screen.
+   */
+  var OUTCOME_STATUS = {
+    published: 'approved',
+    rejected: 'rejected',
+    /* "Send back" returns it to the contributor to fix. There is no post_status value for
+       that — 'withdrawn' means the AUTHOR pulled it — so the button is disabled rather
+       than mapped onto something that means something else. Adding a state is a schema
+       change and a moderation-policy decision, not something to improvise here. */
+    sentBack: null
+  };
+
   function decide(item, outcome) {
-    work.queue = work.queue.filter(function (row) { return row.id !== item.id; });
-    var next = pendingQueue()[0];
-    work.queueSelected = next ? next.id : null;
+    var status = OUTCOME_STATUS[outcome];
+    if (!status) { UI.toast(t('q.err.sendBackUnsupported')); return; }
+    if (work.queueBusy) return;
+
+    work.queueBusy = item.id;
     render();
-    UI.toast(t('q.' + outcome, { t: pick(item.title) }));
+
+    DB.patch('posts', 'id=eq.' + encodeURIComponent(item.id), { status: status })
+      .then(function (rows) {
+        work.queueBusy = null;
+        /* PostgREST answers 200 with an EMPTY array when the row exists but no policy
+           allowed the update — not an error. Treating that as success is how a dashboard
+           tells a moderator an item was published while the database refused it. */
+        if (!rows || rows.length === 0) {
+          work.queueError = 'admin.err.denied';
+          render();
+          return;
+        }
+        work.queue = work.queue.filter(function (row) { return row.id !== item.id; });
+        var next = pendingQueue()[0];
+        work.queueSelected = next ? next.id : null;
+        work.queueError = null;
+        render();
+        UI.toast(t('q.' + outcome, { t: pick(item.title) }));
+      })
+      .catch(function (err) {
+        work.queueBusy = null;
+        work.queueError = err && err.key ? err.key : 'admin.err.generic';
+        render();
+      });
   }
 
   /* ── 4c Published archive ────────────────────────────────── */
@@ -1040,4 +1256,9 @@
   global.addEventListener('langchange', render);
 
   render();
+
+  /* The one fetch this dashboard makes. Everything else on screen is still seed data and
+     is M3's to replace — the review queue is wired now because it is what M1's exit
+     criterion turns on: "full contribution lifecycle works". */
+  loadQueue();
 })(window);

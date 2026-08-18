@@ -1010,3 +1010,52 @@ html[dir="rtl"] .toast { transform: translateX(50%); }
   .table__row { min-width: 720px; }
   .place-legend { position: static; margin: 10px; max-width: none; }
 }
+
+/* ── The gate (M1 piece 5) ───────────────────────────────────
+   Shown by admin-boot.js while it checks the role, and instead of the dashboard when the
+   answer is no. It is UX only — CLAUDE.md §5 — so it is deliberately plain: nothing here
+   protects anything, and dressing it up as a security screen would misrepresent it. */
+
+.admin-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-block-size: 100vh;
+  padding: 32px;
+  text-align: center;
+  background: var(--paper);
+}
+
+.admin-gate__title {
+  font: 600 20px var(--font-ar);
+  color: var(--ink);
+  margin: 0;
+}
+html[lang="en"] .admin-gate__title { font: 600 19px var(--font-en); }
+
+.admin-gate__note {
+  font: 400 13.5px var(--font-ar);
+  color: var(--ink-65);
+  margin: 0;
+  max-inline-size: 42ch;
+}
+html[lang="en"] .admin-gate__note { font: 400 13px var(--font-en); }
+
+.admin-gate__form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  inline-size: min(340px, 100%);
+  text-align: start;
+}
+
+/* Shown beside the publish button when §7's rights precondition is not met. */
+.decisions__warn {
+  font: 500 12px var(--font-ar);
+  color: var(--terracotta);
+  align-self: center;
+  margin-inline-end: auto;
+}
+html[lang="en"] .decisions__warn { font: 500 11.5px var(--font-en); }
