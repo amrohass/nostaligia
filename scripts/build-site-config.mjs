@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { assertAnonKey } from './lib/anon-key.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const check = process.argv.includes('--check');
@@ -57,6 +58,16 @@ for (const key of Object.keys(cfg.turnstile ?? {})) {
     );
   }
 }
+
+// ── The Supabase anon key ───────────────────────────────────────────────────
+// The one Supabase credential section 6 permits in the client. The check that it is
+// actually that one lives in scripts/lib/anon-key.mjs, where it can be tested against a
+// service_role token directly — see scripts/frontend-auth-test.mjs.
+//
+// Empty is a legitimate state: the hosted key has not been pasted in yet. The client throws
+// a named error in that case rather than sending requests that 401 for no visible reason.
+const anonKey = (cfg.supabase?.anon_key ?? '').trim();
+if (anonKey) assertAnonKey(anonKey, 'config/site.json: supabase.anon_key');
 
 // ── Edge Function CORS ──────────────────────────────────────────────────────
 // request-upload allowlists origins from UPLOAD_ALLOWED_ORIGINS, because a deployed
@@ -148,6 +159,15 @@ ${Object.entries(cfg.domains).map(([k, v]) => `      ${k}: 'https://${v}'`).join
     // GitHub Actions secrets and the Edge Function environment only (CLAUDE.md §6).
     turnstile: Object.freeze({
       siteKey: ${JSON.stringify(cfg.turnstile.site_key)}
+    }),
+
+    // The anon key — public by construction, and the ONLY Supabase credential permitted
+    // here (§6). The generator decodes it and refuses any token whose role is not "anon",
+    // so a service_role key pasted into config/site.json fails the build rather than
+    // reaching a visitor. Empty until the hosted key is filled in; auth.js throws a named
+    // error in that state rather than sending requests that 401 for no visible reason.
+    supabase: Object.freeze({
+      anonKey: ${JSON.stringify(anonKey)}
     }),
 
     // The exact policy served by _headers. Exposed so a page can assert at runtime that the

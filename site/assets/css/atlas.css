@@ -888,27 +888,45 @@ html[lang="en"] .pact { font: 400 11.5px/1.7 var(--font-en); }
 html[lang="en"] .checkbox { font: 400 12px var(--font-en); }
 .checkbox input { width: 16px; height: 16px; accent-color: var(--olive); }
 
-.rule { display: flex; align-items: center; gap: 12px; }
-.rule::before,
-.rule::after { content: ""; flex: 1; height: 1px; background: var(--olive-a16); }
-.rule span { font: 400 11.5px var(--font-ar); color: var(--ink-50); }
-html[lang="en"] .rule span { font: 400 11px var(--font-en); }
+/* .rule was the "or" divider above the social buttons. Both went with M1 piece 4 — see
+   §2. Nothing else used it. */
 
-.social-row { display: flex; gap: 10px; }
-.social {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font: 600 12.5px var(--font-ar);
-  color: var(--ink);
-  border: 1px solid rgba(62, 74, 46, .28);
-  padding: 10px;
-  border-radius: var(--r-lg);
+/* .social-row / .social lived here. CLAUDE.md §2: email + password only — the Google and
+   Apple buttons were prototype decoration and went with M1 piece 4. */
+
+/* ── Turnstile, upload progress and form messages ──────────── */
+
+/* The widget renders its own iframe at a fixed size; this only reserves the room and keeps
+   it from shoving the submit button around when it appears. */
+.captcha { min-block-size: 66px; margin-block: 4px; }
+.captcha:empty { min-block-size: 0; }
+
+.progress {
+  block-size: 4px;
+  background: var(--olive-a12);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+  margin-block: 8px;
 }
-html[lang="en"] .social { font: 600 12px var(--font-en); }
-.social:hover { background: var(--olive-a08); }
+.progress__fill {
+  block-size: 100%;
+  inline-size: 0;
+  background: var(--olive);
+  /* Logical, not `width` — §9 requires logical properties throughout, and a bar that
+     fills left-to-right in an Arabic-first interface is a bar running backwards. */
+  transition: inline-size .2s ease-out;
+}
+
+.form-status,
+.form-error {
+  font: 500 12.5px var(--font-ar);
+  margin-block: 6px 0;
+}
+html[lang="en"] .form-status,
+html[lang="en"] .form-error { font: 500 12px var(--font-en); }
+.form-status { color: var(--ink-65); }
+.form-error { color: var(--terracotta); }
+.form-status[hidden], .form-error[hidden], .progress[hidden] { display: none; }
 
 /* Share sheet */
 .kind-row { display: flex; gap: 10px; }
@@ -1631,5 +1649,4 @@ html[lang="en"] .donate-contact__note { font: 400 11.5px/1.7 var(--font-en); }
   .masthead__actions .btn--quiet:not(.masthead__signout) { display: none; }
   .masthead__signout { font-size: 12px; padding-inline: 0; }
   .kind-row { flex-direction: column; }
-  .social-row { flex-direction: column; }
 }

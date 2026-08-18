@@ -100,9 +100,78 @@
     'field.cityPh':    { ar: 'رام الله، عمّان، ديترويت…', en: 'Ramallah, Amman, Detroit…' },
     'auth.pact':       { ar: 'بإنشاء الحساب توافق على ميثاق المجتمع: احترام أصحاب الذكريات، ودقة النسبة والتاريخ قدر المستطاع.',
                          en: 'By creating an account you agree to the community pact: respect the owners of memories, and attribute and date as accurately as you can.' },
-    'auth.or':         { ar: 'أو', en: 'or' },
-    'auth.google':     { ar: 'غوغل', en: 'Google' },
-    'auth.apple':      { ar: 'آبل', en: 'Apple' },
+    // Google and Apple are gone, not hidden. CLAUDE.md §2: email + password only. The
+    // buttons were prototype decoration and a social provider is not something to leave a
+    // string lying around for.
+    'auth.confirmSent': { ar: 'أرسلنا رسالة تأكيد إلى بريدك. افتحها لتفعيل حسابك.',
+                          en: 'We have sent a confirmation email. Open it to activate your account.' },
+    'auth.working':     { ar: 'لحظة…', en: 'One moment…' },
+
+    // ── Auth refusals ───────────────────────────────────────
+    // Mapped from the Auth API's own codes in auth.js. Its raw messages are English, shift
+    // between versions, and occasionally say more than a visitor should be told.
+    'auth.err.credentials':   { ar: 'البريد الإلكتروني أو كلمة المرور غير صحيحة.',
+                                en: 'That email or password is not right.' },
+    'auth.err.emailTaken':    { ar: 'هذا البريد مسجَّل لدينا. جرّب تسجيل الدخول.',
+                                en: 'That email is already registered. Try signing in.' },
+    'auth.err.weakPassword':  { ar: 'كلمة المرور قصيرة جدًا — ثمانية أحرف على الأقل.',
+                                en: 'That password is too short — eight characters at least.' },
+    'auth.err.rateLimit':     { ar: 'محاولات كثيرة خلال وقت قصير. انتظر قليلًا ثم أعد المحاولة.',
+                                en: 'Too many attempts just now. Wait a little and try again.' },
+    'auth.err.unconfirmed':   { ar: 'فعِّل حسابك من رسالة التأكيد التي وصلتك أولًا.',
+                                en: 'Activate your account from the confirmation email first.' },
+    'auth.err.invalidEmail':  { ar: 'تحقّق من صيغة البريد الإلكتروني.',
+                                en: 'Check the format of that email address.' },
+    'auth.err.signedOut':     { ar: 'انتهت جلستك. سجّل الدخول من جديد.',
+                                en: 'Your session ended. Please sign in again.' },
+    'auth.err.offline':       { ar: 'لا يوجد اتصال. تحقّق من الشبكة وأعد المحاولة.',
+                                en: 'No connection. Check the network and try again.' },
+    'auth.err.notConfigured': { ar: 'تسجيل الدخول غير مهيّأ على هذه النسخة بعد.',
+                                en: 'Sign-in is not configured on this deployment yet.' },
+    'auth.err.generic':       { ar: 'تعذّر إتمام الطلب. أعد المحاولة بعد قليل.',
+                                en: 'That did not go through. Try again shortly.' },
+
+    // ── Upload refusals ─────────────────────────────────────
+    // One message per refusal request-upload and complete-upload can return. A generic
+    // "something went wrong" over a quota ceiling or an oversized file is worse than
+    // useless — the member retries the identical upload and gets the identical nothing.
+    'up.err.svg':        { ar: 'صيغة SVG غير مقبولة في الأرشيف.', en: 'SVG files are not accepted.' },
+    'up.err.type':       { ar: 'صيغة الملف غير مدعومة.', en: 'That file type is not supported.' },
+    'up.err.tooBig':     { ar: 'الملف أكبر من الحدّ المسموح ({n} ميغابايت).',
+                           en: 'That file is over the size limit ({n} MB).' },
+    'up.err.tooLong':    { ar: 'المقطع أطول من الحدّ المسموح ({n} دقيقة).',
+                           en: 'That clip is longer than the limit ({n} minutes).' },
+    'up.err.duration':   { ar: 'تعذّر قراءة مدة المقطع. جرّب ملفًا آخر.',
+                           en: 'The length of that clip could not be read. Try another file.' },
+    'up.err.robot':      { ar: 'أكمل التحقّق من أنك لست روبوتًا.', en: 'Complete the human check first.' },
+    'up.err.robotUnavailable': { ar: 'تعذّر تحميل أداة التحقّق. عطّل مانع الإعلانات وأعد المحاولة.',
+                                 en: 'The human check could not load. Disable your ad blocker and retry.' },
+    'up.err.signedOut':  { ar: 'انتهت جلستك. سجّل الدخول ثم أعد الإرسال.',
+                           en: 'Your session ended. Sign in and send again.' },
+    'up.err.quota':      { ar: 'بلغت حدّك اليومي للرفع. جرّب غدًا.',
+                           en: 'You have reached your daily upload limit. Try tomorrow.' },
+    'up.err.title':      { ar: 'العنوان مطلوب.', en: 'A title is required.' },
+    'up.err.description':{ ar: 'الوصف مطلوب — هو ما يجعل المادة قابلة للبحث لاحقًا.',
+                           en: 'A description is required — it is what makes this findable later.' },
+    'up.err.alreadyDone':{ ar: 'عولجت هذه المساهمة سابقًا.', en: 'This contribution was already processed.' },
+    'up.err.retriesSpent': { ar: 'استُنفدت محاولات المعالجة لهذا الملف. ارفعه من جديد.',
+                             en: 'Processing attempts for this file are used up. Upload it again.' },
+    'up.err.processing': { ar: 'تعذّر بدء المعالجة. أعد المحاولة بعد قليل.',
+                           en: 'Processing could not start. Try again shortly.' },
+    'up.err.transfer':   { ar: 'انقطع الرفع قبل اكتماله.', en: 'The upload stopped before it finished.' },
+    'up.err.cancelled':  { ar: 'أُلغي الرفع.', en: 'Upload cancelled.' },
+    'up.err.empty':      { ar: 'الملف فارغ.', en: 'That file is empty.' },
+    'up.err.noFile':     { ar: 'اختر ملفًا أولًا.', en: 'Choose a file first.' },
+    'up.err.offline':    { ar: 'لا يوجد اتصال. تحقّق من الشبكة وأعد المحاولة.',
+                           en: 'No connection. Check the network and try again.' },
+    'up.err.generic':    { ar: 'تعذّر إتمام الرفع. أعد المحاولة.', en: 'The upload did not go through. Try again.' },
+
+    // ── Upload progress ─────────────────────────────────────
+    'up.stage.probing':    { ar: 'نقرأ الملف…', en: 'Reading the file…' },
+    'up.stage.requesting': { ar: 'نطلب إذن الرفع…', en: 'Requesting permission…' },
+    'up.stage.uploading':  { ar: 'يجري الرفع…', en: 'Uploading…' },
+    'up.stage.finishing':  { ar: 'ننهي المعالجة…', en: 'Finishing up…' },
+    'up.stage.done':       { ar: 'اكتمل الرفع.', en: 'Upload complete.' },
 
     // ── Share sheet ─────────────────────────────────────────
     'share.title':  { ar: 'شارك ذكرى', en: 'Share a memory' },
@@ -119,7 +188,10 @@
     'share.fStoryPh': { ar: 'ما الذي تذكره — أو تذكره عائلتك — من هذه اللحظة؟',
                         en: 'What do you — or your family — remember of this moment?' },
     'share.drop':   { ar: 'اسحب الملف إلى هنا أو تصفّح جهازك', en: 'Drag the file here, or browse your device' },
-    'share.dropNote': { ar: 'JPG · PNG · MP3 · MP4 — حتى ٥٠ ميغابايت', en: 'JPG · PNG · MP3 · MP4 — up to 50 MB' },
+    // 200 MB, not 50: §6 sets the member cap and this string was prototype copy that
+    // contradicted it. A limit shown lower than the one enforced turns an allowed upload
+    // into one the member never attempts.
+    'share.dropNote': { ar: 'JPG · PNG · MP3 · MP4 — حتى ٢٠٠ ميغابايت', en: 'JPG · PNG · MP3 · MP4 — up to 200 MB' },
     'share.review': { ar: 'تمرّ كل مساهمة بمراجعة الفريق قبل النشر. نتعهّد بالردّ خلال ٤٨ ساعة.',
                       en: 'Every contribution is reviewed by the team before publishing. We promise a reply within 48 hours.' },
     'share.submit': { ar: 'أرسل للمراجعة', en: 'Send for review' },

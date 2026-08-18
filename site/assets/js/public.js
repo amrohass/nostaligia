@@ -34,28 +34,38 @@
     return pick(Store.copy(id));
   }
 
-  /* Signing in binds the session to a real member record, so #/me has a profile
-     to show and new comments have an author. */
+  /* The session is AUTH's now, not this file's.
+
+     Until M1 piece 4 this module kept its own `rma.signedIn` flag in sessionStorage and a
+     hardcoded member record. Both are gone: `state.signedIn` mirrors AUTH so the views can
+     read it synchronously while rendering, and AUTH.onChange keeps that mirror honest.
+
+     `state.userId` still points at a Store record, because profiles, comments and
+     attribution all read from the prototype store and that store is M3's to replace. The
+     bridge is deliberately one line and deliberately ugly, so it is obvious what has to go
+     when the store becomes real: a signed-in member is shown against the demo profile. */
   var DEMO_USER_ID = 'm1';
 
   var state = {
-    signedIn: readSession(),
-    userId: readSession() ? DEMO_USER_ID : null,
+    signedIn: false,
+    userId: null,
+    account: null,     // { id, email, role } from AUTH — the real identity
     likes: {},
     decade: 'all',
     viewer: null,      // { index }
     mapCard: null,     // memory id
     editOpen: false,   // profile edit panel
-    releaseTrap: null
+    releaseTrap: null,
+    /* §9: "The sign-in gate always preserves intent — the pending action and its item
+       survive the auth round-trip and the user returns exactly where they were." This is
+       where that intent is parked while the member signs in. */
+    pending: null      // { run: function, label: string }
   };
 
-  function readSession() {
-    try { return global.sessionStorage.getItem('rma.signedIn') === '1'; }
-    catch (e) { return false; }
-  }
-  function writeSession(value) {
-    try { global.sessionStorage.setItem('rma.signedIn', value ? '1' : '0'); }
-    catch (e) { /* private mode — session state stays in memory only */ }
+  function adoptAccount(account) {
+    state.account = account;
+    state.signedIn = account !== null;
+    state.userId = account ? DEMO_USER_ID : null;
   }
 
   function currentUser() {
@@ -451,10 +461,14 @@
     renderViewerChrome(state.viewer.index);
   }
 
-  /** Wraps a member-only action so a signed-out visitor gets the gate instead. */
+  /** Wraps a member-only action so a signed-out visitor gets the gate instead.
+   *
+   *  The action is handed to the gate as the pending intent (§9), so liking an item from
+   *  the viewer signs you in and then likes it — rather than signing you in and leaving
+   *  you to find the item again and work out whether the first press registered. */
   function guard(action) {
     return function () {
-      if (!state.signedIn) { openGate(); return; }
+      if (!state.signedIn) { openGate(action); return; }
       action();
     };
   }
@@ -478,7 +492,17 @@
     node.remove();
   }
 
-  function openGate() {
+  /**
+   * The sign-in gate.
+   *
+   * §9 requires it to preserve intent: whatever the member was trying to do is parked in
+   * `state.pending` and replayed the moment they are signed in, so they land back on the
+   * same item rather than on the archive with their action forgotten.
+   *
+   * @param {function} [intent]  what to re-run once signed in
+   */
+  function openGate(intent) {
+    state.pending = typeof intent === 'function' ? { run: intent } : null;
     var scrim = overlayShell('scrim', [
       el('div.dialog.dialog--gate', null, [
         el('div.dialog__lock', { html: ICONS.lockLarge('#A67B24') }),
@@ -502,14 +526,11 @@
     return scrim;
   }
 
-  function socialRow() {
-    return el('div.social-row', null, [
-      el('button.social', { type: 'button', onclick: function () { UI.toast(t('auth.google')); } },
-        [el('span', { html: ICONS.google }), t('auth.google')]),
-      el('button.social', { type: 'button', onclick: function () { UI.toast(t('auth.apple')); } },
-        [el('span', { html: ICONS.apple }), t('auth.apple')])
-    ]);
-  }
+  /* socialRow() lived here. CLAUDE.md §2 is unambiguous — "Auth | Supabase Auth, email +
+     password only" — and the Google and Apple buttons were prototype decoration wired to a
+     toast. Removed rather than hidden: a disabled social button is a promise, and this
+     archive is not going to hand a third-party identity provider the list of who
+     contributes to it (§7). */
 
   function field(labelText, inputProps, extras) {
     var id = 'f-' + Math.random().toString(36).slice(2, 8);
@@ -533,7 +554,22 @@
 
   function openAuth(mode) {
     var scrim;
-    function close() { closeOverlay(scrim); }
+    function close() { closeOverlay(scrim); if (widget) widget.remove(); }
+
+    /* §6: Turnstile on signup. It is mounted for sign-in too — credential stuffing against
+       a password endpoint is the same bot problem, and the widget is invisible when the
+       visitor is unremarkable. */
+    var captchaSlot = el('div.captcha');
+    var widget = null;
+
+    var errorNote = el('p.form-error', { role: 'alert', hidden: true });
+    function showError(key, vars) {
+      /* textContent, never innerHTML — §6. These strings are ours, but the habit is the
+         defence: the day one of them interpolates a server value, this is already safe. */
+      errorNote.textContent = t(key, vars);
+      errorNote.hidden = false;
+    }
+    function clearError() { errorNote.hidden = true; errorNote.textContent = ''; }
 
     var body = [
       el('div.dialog__head', null, [
@@ -568,37 +604,90 @@
       body.push(el('button.btn.btn--olive.btn--block', { type: 'submit', text: t('login.submit') }));
     }
 
-    body.push(el('div.rule', null, el('span', { text: t('auth.or') })));
-    body.push(socialRow());
+    body.push(captchaSlot);
+    body.push(errorNote);
     body.push(el('div.dialog__foot', null, mode === 'signup'
       ? [t('signup.haveAcct') + ' ', el('a', { href: '#', onclick: function (e) { e.preventDefault(); close(); openAuth('login'); }, text: t('action.signIn') })]
       : [t('login.newHere') + ' ', el('a', { href: '#', onclick: function (e) { e.preventDefault(); close(); openAuth('signup'); }, text: t('login.createOne') })]
     ));
 
+    var busy = false;
+
     var form = el('form.dialog.dialog--form', {
       onsubmit: function (event) {
         event.preventDefault();
-        close();
-        signIn();
+        if (busy) return;
+
+        var email = (UI.qs('input[type=email]', form) || {}).value || '';
+        var password = (UI.qs('input[type=password]', form) || {}).value || '';
+        var submitButton = UI.qs('button[type=submit]', form);
+
+        clearError();
+        busy = true;
+        if (submitButton) { submitButton.disabled = true; submitButton.textContent = t('auth.working'); }
+
+        function finish() {
+          busy = false;
+          if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent = t(mode === 'signup' ? 'signup.submit' : 'login.submit');
+          }
+          /* A Turnstile token is single-use and was just spent. Without this reset the
+             member's second attempt sends a token the server has already seen and is told
+             they are a robot for pressing the button twice. */
+          if (widget) widget.reset();
+        }
+
+        widget.token().then(function (captcha) {
+          return mode === 'signup'
+            ? AUTH.signUp(email, password, captcha).then(function (result) {
+              if (result.confirmationRequired) {
+                close();
+                UI.toast(t('auth.confirmSent'));
+                return null;
+              }
+              return result.user;
+            })
+            : AUTH.signIn(email, password, captcha);
+        }).then(function (account) {
+          if (account === null) return;   // awaiting email confirmation
+          close();
+          onSignedIn(account);
+        }).catch(function (err) {
+          showError(err && err.key ? err.key : 'auth.err.generic');
+          finish();
+        });
       }
     }, body);
 
     scrim = overlayShell('scrim', [form], close);
+    widget = TURNSTILE.mount(captchaSlot);
   }
 
-  function signIn() {
-    state.signedIn = true;
-    state.userId = DEMO_USER_ID;
-    writeSession(true);
+  /* Everything that has to happen once a real session exists. Called from the auth dialog
+     and from AUTH.restore() at startup, so a restored session and a fresh sign-in take
+     exactly the same path — the bug that pattern avoids is the one where a reloaded page
+     looks signed in but never replays the pending intent. */
+  function onSignedIn(account) {
+    adoptAccount(account);
     renderMasthead();
     if (state.viewer) renderViewerChrome(state.viewer.index);
-    UI.toast(t('login.title'));
+
+    /* §9. The action that hit the gate runs now, and the member ends up where they were
+       rather than being returned to the archive to find their own way back. */
+    var pending = state.pending;
+    state.pending = null;
+    if (pending && pending.run) {
+      try { pending.run(); } catch (e) { /* a stale intent must not break the sign-in */ }
+    } else {
+      UI.toast(t('login.title'));
+    }
   }
 
   function signOut() {
-    state.signedIn = false;
-    state.userId = null;
-    writeSession(false);
+    AUTH.signOut();
+    adoptAccount(null);
+    state.pending = null;
     // A profile route is member-only; drop back to the archive on the way out.
     if (route() === 'profile') { global.location.hash = '#/archive'; return; }
     renderMasthead();
@@ -608,9 +697,30 @@
   /* ── Share sheet ─────────────────────────────────────────── */
 
   function openShareSheet() {
+    /* §9's gate, with intent: a signed-out visitor who presses Share is returned to this
+       sheet after signing in, not to the archive. */
+    if (!state.signedIn) { openGate(openShareSheet); return; }
+
     var scrim;
     var kind = 'photo';
-    function close() { closeOverlay(scrim); }
+    function close() { closeOverlay(scrim); if (widget) widget.remove(); }
+
+    var captchaSlot = el('div.captcha');
+    var widget = null;
+    var fileInput = el('input', { type: 'file', 'class': 'sr-only', accept: 'image/*,video/*,audio/*' });
+
+    var statusNote = el('p.form-status', { role: 'status', hidden: true });
+    var errorNote = el('p.form-error', { role: 'alert', hidden: true });
+    var progressBar = el('div.progress__fill');
+    var progress = el('div.progress', { hidden: true, role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, progressBar);
+
+    function say(key) { statusNote.textContent = t(key); statusNote.hidden = false; }
+    function fail(key, vars) { errorNote.textContent = t(key, vars); errorNote.hidden = false; }
+    function clearNotes() {
+      errorNote.hidden = true; errorNote.textContent = '';
+      statusNote.hidden = true; statusNote.textContent = '';
+      progress.hidden = true;
+    }
 
     var kinds = [
       { id: 'photo', label: t('share.photo'), icon: ICONS.camera },
@@ -642,11 +752,68 @@
       return el('option', { value: String(d), selected: d === 1960 ? true : null, text: t('decade.' + d) });
     }));
 
+    var busy = false;
+
     var form = el('form.dialog.dialog--sheet', {
       onsubmit: function (event) {
         event.preventDefault();
-        close();
-        UI.toast(t('share.sent'));
+        if (busy) return;
+
+        var inputs = UI.qsa('.input', form);
+        var titleValue = (inputs[0] || {}).value || '';
+        var storyValue = (UI.qs('textarea.input', form) || {}).value || '';
+        var file = fileInput.files && fileInput.files[0];
+        var submitButton = UI.qs('button[type=submit]', form);
+
+        clearNotes();
+        if (!file) { fail('up.err.noFile'); return; }
+
+        /* The archive is Arabic-first (§9) but a contributor writes in whichever language
+           they think in, and nothing here can tell which. Sending the text as `_ar` would
+           file an English caption under Arabic; the database only requires ONE of the pair
+           (posts_has_a_title), so the honest move is to fill the side matching the
+           interface they are using and leave the other for a moderator. */
+        var lang = I18N.lang === 'en' ? 'en' : 'ar';
+        var draft = { kind: kind === 'voice' ? 'voice' : kind === 'event' ? 'event' : 'media' };
+        draft['title_' + lang] = titleValue;
+        draft['body_' + lang] = storyValue;
+
+        busy = true;
+        if (submitButton) { submitButton.disabled = true; submitButton.textContent = t('auth.working'); }
+
+        function release() {
+          busy = false;
+          if (submitButton) { submitButton.disabled = false; submitButton.textContent = t('share.submit'); }
+          /* Single-use, and just spent. See openAuth for the failure this prevents. */
+          if (widget) widget.reset();
+        }
+
+        widget.token().then(function (captcha) {
+          return UPLOAD.submit(file, draft, captcha, {
+            onStage: function (name) {
+              say('up.stage.' + name);
+              progress.hidden = name !== 'uploading';
+            },
+            onProgress: function (fraction) {
+              var pct = Math.round(fraction * 100);
+              progressBar.style.inlineSize = pct + '%';
+              progress.setAttribute('aria-valuenow', String(pct));
+            }
+          });
+        }).then(function () {
+          close();
+          UI.toast(t('share.sent'));
+        }).catch(function (err) {
+          var key = err && err.key ? err.key : 'up.err.generic';
+          /* The limits are in the message because "too big" without a number is a message
+             that cannot be acted on. */
+          fail(key, key === 'up.err.tooBig'
+            ? { n: Math.round(UPLOAD._limits.maxBytes / (1024 * 1024)) }
+            : key === 'up.err.tooLong'
+            ? { n: Math.round(UPLOAD._limits.maxDurationS / 60) }
+            : undefined);
+          release();
+        });
       }
     }, [
       el('div.dialog__head', null, [
@@ -673,8 +840,12 @@
         el('span', { html: ICONS.upload }),
         el('span', { text: t('share.drop') }),
         el('span.dropzone__note', { text: t('share.dropNote') }),
-        el('input', { type: 'file', 'class': 'sr-only' })
+        fileInput
       ]),
+      captchaSlot,
+      progress,
+      statusNote,
+      errorNote,
       el('div.review-note', { text: t('share.review') }),
       el('div.dialog__actions', null, [
         el('button.btn.btn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
@@ -683,6 +854,7 @@
     ]);
 
     scrim = overlayShell('scrim.scrim--heavy', [form], close);
+    widget = TURNSTILE.mount(captchaSlot);
   }
 
   /* ── Profile ─────────────────────────────────────────────────
@@ -1132,11 +1304,14 @@
     // Profiles are member-only: a signed-out visitor meets the gate and lands back
     // on the archive rather than on an empty page.
     if (name === 'profile' && !state.signedIn) {
+      // Captured before the redirect, so signing in returns them to the profile they asked
+      // for rather than to the archive they were bounced to (§9).
+      var wanted = global.location.hash;
       global.location.replace('#/archive');
       renderMasthead();
       renderFooter();
       mount(qs('#view'), renderArchive());
-      openGate();
+      openGate(function () { global.location.hash = wanted; });
       return;
     }
 
@@ -1195,4 +1370,24 @@
   });
 
   render();
+
+  /* Restore a session before first paint settles, so a reload does not flash the
+     signed-out masthead at a member who never left.
+
+     Deliberately not awaited by render(): the archive is public (§1, "browsing is open"),
+     so it must paint whether or not there is a session to restore, and whether or not the
+     refresh call succeeds. A failed restore is the ordinary signed-out case. */
+  AUTH.restore().then(function (account) {
+    if (account) onSignedIn(account);
+  });
+
+  /* The session can end without anyone pressing sign-out — a refresh token that has been
+     rotated away, or an expiry. AUTH says so; the masthead has to agree. */
+  AUTH.onChange(function (account) {
+    if (!account && state.signedIn) {
+      adoptAccount(null);
+      renderMasthead();
+      if (route() === 'profile') global.location.hash = '#/archive';
+    }
+  });
 })(window);

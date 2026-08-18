@@ -25,11 +25,18 @@
 <div id="overlays"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Turnstile (CLAUDE.md §6: on signup and submit). Loaded async and explicitly rendered,
+     so the widget appears only in the dialog that needs it rather than on every page view.
+     The origin is declared in config/site.json and allowed by script-src and frame-src. -->
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 <script src="assets/js/config.js"></script>
 <script src="assets/js/i18n.js"></script>
 <script src="assets/js/data.js"></script>
 <script src="assets/js/store.js"></script>
 <script src="assets/js/ui.js"></script>
+<script src="assets/js/auth.js"></script>
+<script src="assets/js/turnstile.js"></script>
+<script src="assets/js/upload.js"></script>
 <script src="assets/js/public.js"></script>
 </body>
 </html>

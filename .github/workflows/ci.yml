@@ -105,6 +105,15 @@ jobs:
       - name: CSP survivability and origin ratchet
         run: node scripts/frontend-csp-test.mjs
 
+      # Where the session is kept, whether every Edge Function refusal has a message a
+      # member can act on, and whether the anon-key guard still tells a service_role key
+      # from an anon one. All three fail silently: the session decision is one
+      # localStorage.setItem away from being reversed with nothing looking different, and
+      # an unmapped refusal reaches a contributor as "something went wrong" over a quota
+      # ceiling they would then retry into forever.
+      - name: auth, upload refusals and the anon-key guard
+        run: node scripts/frontend-auth-test.mjs
+
   # Gate 1 of request-upload: the refusals that happen before the function touches the
   # network, reads an environment variable or learns who is asking. They need no
   # deployment and no credential, so there is no excuse for them to be untested -- and

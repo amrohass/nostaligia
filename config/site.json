@@ -13,7 +13,28 @@
   "domains": {
     "site": "PLACEHOLDER_DOMAIN",
     "cdn": "PLACEHOLDER_CDN_DOMAIN",
-    "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co"
+    "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co",
+    "turnstile": "challenges.cloudflare.com"
+  },
+
+  "_supabase_comment": [
+    "The anon key, which section 6 draws a line under explicitly: 'The Supabase anon key is",
+    "designed to be public and is not the concern; the service-role key, any third-party API",
+    "key, and any admin credential are.' It ships to every visitor in assets/js/config.js,",
+    "exactly like the Turnstile site key beside it. .gitleaks.toml already carved it out of",
+    "the generic `jwt` rule for this moment.",
+    "",
+    "It is EMPTY until the hosted key is pasted in. Empty is deliberate rather than a",
+    "placeholder string: the generator refuses to emit anything that is not an anon token,",
+    "and auth.js throws a named error rather than sending unauthenticated requests that fail",
+    "with a 401 nobody can explain.",
+    "",
+    "The generator DECODES this and refuses any token whose role claim is not 'anon'. That",
+    "check is the point of the field being here at all — the field a service-role key gets",
+    "pasted into by mistake is the field next to the word 'supabase' in a config file."
+  ],
+  "supabase": {
+    "anon_key": ""
   },
 
   "_turnstile_comment": [
@@ -27,17 +48,18 @@
     "There is deliberately no field for it here, not even an empty one, because an empty",
     "field is an invitation.",
     "",
-    "`origin` is NOT in `csp` yet, and that is on purpose. Nothing loads the widget until",
-    "M1 wires it, and a CSP that allows an origin the site does not use is weaker than it",
-    "needs to be today -- 'we will need it eventually' is how an allowlist grows. Adding",
-    "the widget in M1 means moving that origin into script-src and frame-src: one line,",
-    "in this file. Until then the site key is carried but unused, which costs nothing."
+    "WIRED, M1 piece 4. The origin moved out of this block and into `domains` as",
+    "`turnstile`, which is what lets `csp` reference it as @turnstile in script-src and",
+    "frame-src -- and, just as importantly, what stops the origin ratchet in",
+    "scripts/frontend-csp-test.mjs reading the widget script in index.html as an",
+    "undeclared third-party origin. It is now a declared one, allowed on purpose.",
+    "",
+    "Both directives are needed and neither is redundant: script-src admits the widget's",
+    "own JS, frame-src admits the challenge iframe it creates. Allow only the first and",
+    "the widget loads and then silently fails to render."
   ],
   "turnstile": {
-    "site_key": "0x4AAAAAAENYWuxg_BTOj47Q",
-    "origin": "https://challenges.cloudflare.com",
-    "csp_needs": ["script-src", "frame-src"],
-    "wired_by": "M1 — Turnstile on signup and submit (section 6)"
+    "site_key": "0x4AAAAAAENYWuxg_BTOj47Q"
   },
 
   "_function_cors_comment": [
@@ -85,9 +107,10 @@
     "form-action": ["'none'"],
     "frame-ancestors": ["'none'"],
     "object-src": ["'none'"],
-    "script-src": ["'self'"],
+    "script-src": ["'self'", "@turnstile"],
     "style-src": ["'self'"],
     "font-src": ["'self'"],
+    "frame-src": ["@turnstile"],
     "img-src": ["'self'", "data:", "blob:", "@cdn"],
     "media-src": ["'self'", "blob:", "@cdn"],
     "connect-src": ["'self'", "@cdn", "@supabase"],

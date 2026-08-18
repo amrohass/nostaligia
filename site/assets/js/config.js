@@ -10,13 +10,15 @@
     domains: Object.freeze({
           "site": "PLACEHOLDER_DOMAIN",
           "cdn": "PLACEHOLDER_CDN_DOMAIN",
-          "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co"
+          "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co",
+          "turnstile": "challenges.cloudflare.com"
     }),
 
     origins: Object.freeze({
       site: 'https://PLACEHOLDER_DOMAIN',
       cdn: 'https://PLACEHOLDER_CDN_DOMAIN',
-      supabase: 'https://pjqvtmhizbnimqyxjbyq.supabase.co'
+      supabase: 'https://pjqvtmhizbnimqyxjbyq.supabase.co',
+      turnstile: 'https://challenges.cloudflare.com'
     }),
 
     // Cloudflare Turnstile. The site key is public by construction — it ships in the
@@ -32,8 +34,17 @@
       siteKey: "0x4AAAAAAENYWuxg_BTOj47Q"
     }),
 
+    // The anon key — public by construction, and the ONLY Supabase credential permitted
+    // here (§6). The generator decodes it and refuses any token whose role is not "anon",
+    // so a service_role key pasted into config/site.json fails the build rather than
+    // reaching a visitor. Empty until the hosted key is filled in; auth.js throws a named
+    // error in that state rather than sending requests that 401 for no visible reason.
+    supabase: Object.freeze({
+      anonKey: ""
+    }),
+
     // The exact policy served by _headers. Exposed so a page can assert at runtime that the
     // policy it is running under is the one this repository generated, rather than assuming.
-    csp: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: blob: https://PLACEHOLDER_CDN_DOMAIN; media-src 'self' blob: https://PLACEHOLDER_CDN_DOMAIN; connect-src 'self' https://PLACEHOLDER_CDN_DOMAIN https://pjqvtmhizbnimqyxjbyq.supabase.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
+    csp: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; font-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob: https://PLACEHOLDER_CDN_DOMAIN; media-src 'self' blob: https://PLACEHOLDER_CDN_DOMAIN; connect-src 'self' https://PLACEHOLDER_CDN_DOMAIN https://pjqvtmhizbnimqyxjbyq.supabase.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
   });
 })(window);

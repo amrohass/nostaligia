@@ -138,14 +138,10 @@
     upload: '<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">' +
       '<path d="M12 16V5M12 5l-4.2 4.2M12 5l4.2 4.2" fill="none" stroke="#C05B3E" stroke-width="1.8" stroke-linecap="round"></path>' +
       '<path d="M4 16.5v2A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5v-2" fill="none" stroke="#C05B3E" stroke-width="1.8" stroke-linecap="round"></path></svg>',
-    google: '<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">' +
-      '<path d="M21.6 12.2c0-.7-.06-1.4-.18-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4z" fill="#4285F4"></path>' +
-      '<path d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1a5.9 5.9 0 0 1-5.5-4H3.2v2.6A10 10 0 0 0 12 22z" fill="#34A853"></path>' +
-      '<path d="M6.5 14a6 6 0 0 1 0-3.9V7.5H3.2a10 10 0 0 0 0 9z" fill="#FBBC05"></path>' +
-      '<path d="M12 6a5.4 5.4 0 0 1 3.8 1.5L18.7 4.6A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.8 5.5l3.3 2.6A5.9 5.9 0 0 1 12 6z" fill="#EA4335"></path></svg>',
-    apple: '<svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">' +
-      '<path d="M16.6 12.9c0-2.5 2-3.7 2.1-3.8-1.2-1.7-3-1.9-3.6-1.9-1.5-.2-3 .9-3.8.9-.8 0-2-.9-3.3-.9-1.7 0-3.3 1-4.1 2.5-1.8 3.1-.5 7.6 1.2 10.1.9 1.2 1.9 2.6 3.2 2.5 1.3-.1 1.8-.8 3.3-.8s2 .8 3.3.8c1.4 0 2.3-1.2 3.1-2.5.98-1.4 1.4-2.8 1.4-2.9-.03-.01-2.7-1-2.8-4z" fill="#26281F"></path>' +
-      '<path d="M14.2 5.6c.7-.9 1.2-2.1 1-3.3-1 .04-2.3.7-3 1.6-.7.8-1.3 2-1.1 3.2 1.2.1 2.4-.6 3.1-1.5z" fill="#26281F"></path></svg>',
+    /* The Google and Apple marks lived here, for sign-in buttons that CLAUDE.md §2 does
+       not permit ("email + password only"). Deleted with M1 piece 4 rather than left
+       unused: they are ~1.5 KB against §9's 150 KB budget, and a vendor mark sitting in
+       the icon set is a social provider waiting for someone to re-add the button. */
 
     /** Waveform for voice memories. `heights` drives the bars; `played` how many are coloured. */
     waveform: function (width, height, played) {
