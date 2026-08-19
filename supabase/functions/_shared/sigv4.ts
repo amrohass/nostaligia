@@ -67,8 +67,14 @@ function uriEncode(s: string): string {
  * POST is deliberately absent. R2 accepts POST for multipart and for browser form uploads,
  * and a presigner that can emit one is a presigner that can hand out a URL whose semantics
  * nobody in this repository has reasoned about.
+ *
+ * HEAD was added for the publisher, which validates a release by reading back what LANDED
+ * rather than what it sent. It is not GET-with-a-flag: SigV4 puts the method inside the
+ * canonical request, so a GET-signed URL used with HEAD fails the signature check. Adding
+ * it here is the whole change — everything downstream is method-agnostic — and it hands out
+ * strictly less than the GET it replaces.
  */
-export type PresignMethod = "GET" | "PUT" | "DELETE";
+export type PresignMethod = "GET" | "HEAD" | "PUT" | "DELETE";
 
 export interface PresignRequestInput {
   accountId: string;

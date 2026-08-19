@@ -117,6 +117,12 @@ select set_eq(
     ('activate_release(p_id uuid) -> service_role'),
     ('active_release() -> service_role'),
 
+    -- The publisher's read side (0035). §2's read path is "zero database reads for public
+    -- visitors", and an RPC that returns the entire archive in one call is the most
+    -- attractive possible way to violate that by accident.
+    ('publishable_posts() -> service_role'),
+    ('redacted_post_ids() -> service_role'),
+
     -- ── Still on the PUBLIC default, each for a reason ────────
     --
     -- fuzz_location: pure and IMMUTABLE, and grid snapping destroys the precision rather

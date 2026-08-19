@@ -1,0 +1,269 @@
+/* The publish sequence — every failure mode, and what the archive looks like afterwards.
+ *
+ *     deno test supabase/functions/publish/
+ *
+ * The happy path is one test here. The other twelve are what happens when something stops
+ * halfway, because §10's M2 criterion is not "publishing works" — it is "a killed build
+ * never becomes visible" and "two concurrent approvals produce one consistent release".
+ * Those are statements about failure, and a suite that only exercises success has nothing
+ * to say about either.
+ *
+ * The sink and the database are fakes with switches, so a test can kill the publisher at a
+ * named step and then inspect what a VISITOR would see: the manifest, and only the manifest.
+ */
+
+import { publish, releaseFiles, releasePath, type Db, type Deps, type ObjectSink } from "./release.ts";
+import type { SourcePost } from "./shards.ts";
+
+function assert(cond: boolean, msg: string): void {
+  if (!cond) throw new Error(msg);
+}
+function assertEquals(actual: unknown, expected: unknown, msg: string): void {
+  if (actual !== expected) throw new Error(`${msg}\n  expected: ${expected}\n  actual:   ${actual}`);
+}
+
+const NOW = new Date("2026-08-19T12:34:56.789Z");
+
+function post(over: Partial<SourcePost> = {}): SourcePost & { hash_matches?: boolean } {
+  return {
+    id: "00000000-0000-0000-0000-0000000000b1",
+    kind: "media",
+    title_ar: "عنوان", title_en: "A title",
+    body_ar: "وصف", body_en: "A description",
+    date_earliest: "1963-01-01", date_latest: "1969-12-31",
+    date_precision: "decade", decade: 1960,
+    location_public: { lat: 31.899, lon: 35.204 },
+    location_precision: "street",
+    place_name_ar: null, place_name_en: null,
+    event_starts_at: null, event_ends_at: null, venue_ar: null, venue_en: null,
+    license: "CC-BY-SA-4.0", provenance: "family album",
+    author_label: "member", author_handle: "abu_ramallah",
+    author_display_name: null, author_avatar_path: null,
+    like_count: 0, comment_count: 0,
+    created_on: "2026-08-19",
+    media: [],
+    ...over,
+  };
+}
+
+/** A sink that records everything, and can be told to break at a given key. */
+class FakeSink implements ObjectSink {
+  readonly written = new Map<string, { body: string; cacheControl: string }>();
+  failOn: string | null = null;
+  /** Keys to lie about in exists() — simulates an upload that reported success and did not land. */
+  vanish = new Set<string>();
+
+  put(key: string, body: string, _ct: string, cacheControl: string): Promise<void> {
+    if (this.failOn && key.includes(this.failOn)) {
+      return Promise.reject(new Error(`sink refused ${key}`));
+    }
+    this.written.set(key, { body, cacheControl });
+    return Promise.resolve();
+  }
+  exists(key: string): Promise<boolean> {
+    return Promise.resolve(this.written.has(key) && !this.vanish.has(key));
+  }
+}
+
+class FakeDb implements Db {
+  posts: Array<SourcePost & { hash_matches?: boolean }> = [post()];
+  redacted: string[] = [];
+  leaseGranted = true;
+  leaseReason = "granted";
+  recordOk = true;
+  released: string[] = [];
+  activated: string[] = [];
+  previousPath: string | null = null;
+
+  publishablePosts() { return Promise.resolve(this.posts); }
+  redactedPostIds() { return Promise.resolve(this.redacted); }
+  claimLease(_h: string, _t: number, _n: string) {
+    return Promise.resolve({ acquired: this.leaseGranted, reason: this.leaseReason });
+  }
+  releaseLease(holder: string) { this.released.push(holder); return Promise.resolve(); }
+  recordRelease(path: string) {
+    return Promise.resolve(
+      this.recordOk
+        ? { recorded: true, id: "rel-1", path }
+        : { recorded: false, reason: "duplicate_path" },
+    );
+  }
+  activateRelease(id: string) {
+    this.activated.push(id);
+    return Promise.resolve({ activated: true, previous_path: this.previousPath });
+  }
+}
+
+function deps(db = new FakeDb(), sink = new FakeSink()): Deps & { db: FakeDb; sink: FakeSink } {
+  return { db, sink, now: () => NOW, newHolder: () => "holder-1" };
+}
+
+/* ── 1 · The happy path ────────────────────────────────────── */
+
+Deno.test("a publish writes the shards, then the pointer, and flips", async () => {
+  const d = deps();
+  const out = await publish(d);
+
+  assertEquals(out.published, true, out.reason);
+  assertEquals(out.release, "/v/2026-08-19T12:34:56Z/", "wrong release path");
+  assert(d.sink.written.has("v/2026-08-19T12:34:56Z/feed/page-1.json"), "no feed page");
+  assert(d.sink.written.has("v/2026-08-19T12:34:56Z/item/00000000-0000-0000-0000-0000000000b1.json"), "no item shard");
+  assert(d.sink.written.has("manifest.json"), "no manifest");
+  assertEquals(d.db.activated.length, 1, "the release was not activated");
+});
+
+Deno.test("the manifest names the release, and only that", async () => {
+  const d = deps();
+  await publish(d);
+  const manifest = JSON.parse(d.sink.written.get("manifest.json")!.body);
+  assertEquals(manifest.release, "/v/2026-08-19T12:34:56Z/", "manifest points elsewhere");
+  // §7: even the publisher's own timestamp is day precision. An exact build time on a
+  // world-readable file is a record of when the maintainer was at their desk.
+  assertEquals(manifest.generated_on, "2026-08-19", "the manifest carries a precise timestamp");
+});
+
+Deno.test("shards are immutable and the pointer is not", async () => {
+  const d = deps();
+  await publish(d);
+  assert(
+    d.sink.written.get("v/2026-08-19T12:34:56Z/feed/page-1.json")!.cacheControl.includes("immutable"),
+    "a shard under /v/ is not immutable — the whole point of the versioned path",
+  );
+  const manifestCache = d.sink.written.get("manifest.json")!.cacheControl;
+  assert(!manifestCache.includes("immutable"), "the POINTER is immutable, so a flip would never be seen");
+  assert(/max-age=(3\d|4\d|5\d|60)\b/.test(manifestCache), `§2 wants 30–60s on the pointer, got ${manifestCache}`);
+});
+
+// §8: takedown latency must never be bounded by the publish cycle, and the redaction list
+// is the mechanism. A TTL as long as the manifest's would bound it by exactly that.
+Deno.test("redactions.json is shorter-lived than the manifest", async () => {
+  const d = deps();
+  d.db.redacted = ["00000000-0000-0000-0000-0000000000ff"];
+  await publish(d);
+  const red = d.sink.written.get("redactions.json")!;
+  const man = d.sink.written.get("manifest.json")!;
+  const age = (s: string) => Number(/max-age=(\d+)/.exec(s)?.[1] ?? "0");
+  assert(age(red.cacheControl) < age(man.cacheControl), "redactions outlive the pointer");
+  assertEquals(JSON.parse(red.body).ids.length, 1, "the redacted id is missing");
+});
+
+Deno.test("...and is copied inside the release too, for a client holding a year-old cache", async () => {
+  const d = deps();
+  d.db.redacted = ["00000000-0000-0000-0000-0000000000ff"];
+  await publish(d);
+  assert(
+    d.sink.written.has("v/2026-08-19T12:34:56Z/redactions.json"),
+    "a client that never re-reads the root would render a taken-down item forever",
+  );
+});
+
+/* ── 2 · The lease ─────────────────────────────────────────── */
+
+Deno.test("a publisher that cannot take the lease writes NOTHING", async () => {
+  const d = deps();
+  d.db.leaseGranted = false;
+  d.db.leaseReason = "held";
+  const out = await publish(d);
+
+  assertEquals(out.published, false, "it published anyway");
+  assertEquals(out.reason, "held", "wrong reason");
+  assertEquals(d.sink.written.size, 0, "a refused publisher touched the bucket");
+  assertEquals(d.db.activated.length, 0, "a refused publisher flipped the pointer");
+});
+
+Deno.test("...and does not release a lease it never held", async () => {
+  const d = deps();
+  d.db.leaseGranted = false;
+  await publish(d);
+  assertEquals(d.db.released.length, 0, "it released somebody else's lease");
+});
+
+Deno.test("the lease is released even when the publish throws", async () => {
+  const d = deps();
+  d.sink.failOn = "feed/page-1.json";
+  await publish(d).catch(() => {});
+  assertEquals(d.db.released.length, 1, "a crashed publisher kept the lease for the full TTL");
+});
+
+/* ── 3 · A killed build is never visible ───────────────────── */
+
+Deno.test("a build that dies mid-upload never writes the pointer", async () => {
+  const d = deps();
+  d.sink.failOn = "item/";
+  const threw = await publish(d).then(() => false, () => true);
+
+  assert(threw, "a failed upload was swallowed");
+  assert(!d.sink.written.has("manifest.json"), "the pointer was written for a half-built release");
+  assertEquals(d.db.activated.length, 0, "a half-built release was activated");
+});
+
+// The subtler one: every upload REPORTED success and one object is not actually there.
+// This is why validation reads the bucket back instead of checking the plan it just sent.
+Deno.test("a release with a missing object is refused before the flip", async () => {
+  const d = deps();
+  const out = await publish(d);
+  assertEquals(out.published, true, "setup");
+
+  const d2 = deps();
+  d2.sink.vanish.add("v/2026-08-19T12:34:56Z/item/00000000-0000-0000-0000-0000000000b1.json");
+  const out2 = await publish(d2);
+
+  assertEquals(out2.published, false, "an incomplete release was published");
+  assertEquals(out2.reason, "incomplete_release", "wrong reason");
+  assert(!d2.sink.written.has("manifest.json"), "the pointer named an incomplete release");
+  assertEquals(d2.db.activated.length, 0, "an incomplete release was activated");
+});
+
+Deno.test("a release that cannot be recorded is not flipped onto", async () => {
+  const d = deps();
+  d.db.recordOk = false;
+  const out = await publish(d);
+  assertEquals(out.published, false, "it published without a ledger row");
+  assert(!d.sink.written.has("manifest.json"), "the pointer moved without a releases row");
+});
+
+/* ── 4 · §5, the content hash ──────────────────────────────── */
+
+Deno.test("a row whose hash no longer matches its approval is refused", async () => {
+  const d = deps();
+  d.db.posts = [
+    post({ id: "00000000-0000-0000-0000-00000000aaaa" }),
+    { ...post({ id: "00000000-0000-0000-0000-00000000bbbb" }), hash_matches: false },
+  ];
+  const out = await publish(d);
+
+  assertEquals(out.published, true, "the whole publish was abandoned over one bad row");
+  assertEquals(out.posts, 1, "the altered row was published");
+  assert(!d.sink.written.has("v/2026-08-19T12:34:56Z/item/00000000-0000-0000-0000-00000000bbbb.json"),
+    "the altered row got an item shard");
+});
+
+// Refused AND named. A row that silently vanished is indistinguishable from one that was
+// never approved, and content altered after approval is the case somebody must hear about.
+Deno.test("...and is named in the outcome rather than silently dropped", async () => {
+  const d = deps();
+  d.db.posts = [{ ...post({ id: "00000000-0000-0000-0000-00000000bbbb" }), hash_matches: false }];
+  const out = await publish(d);
+  assertEquals(out.rejectedHashes?.join(","), "00000000-0000-0000-0000-00000000bbbb", "not reported");
+});
+
+/* ── 5 · Shapes ────────────────────────────────────────────── */
+
+Deno.test("the release path matches what releases_path_shape accepts", () => {
+  const path = releasePath(NOW);
+  assert(/^\/v\/[0-9TZ:.-]+\/$/.test(path), `${path} would be refused by record_release`);
+});
+
+Deno.test("every file in a release sits under the versioned prefix", () => {
+  const files = releaseFiles([post()], [], "/v/2026-08-19T12:34:56Z/");
+  const stray = files.filter((f) => !f.path.startsWith("v/2026-08-19T12:34:56Z/"));
+  assertEquals(stray.length, 0, `these would overwrite a live path: ${stray.map((f) => f.path).join(", ")}`);
+});
+
+Deno.test("an empty archive still publishes — a first run has nothing approved yet", async () => {
+  const d = deps();
+  d.db.posts = [];
+  const out = await publish(d);
+  assertEquals(out.published, true, out.reason);
+  assert(d.sink.written.has("v/2026-08-19T12:34:56Z/feed/page-1.json"), "no empty feed page");
+});
