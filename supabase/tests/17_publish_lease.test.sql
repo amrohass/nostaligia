@@ -25,8 +25,8 @@
 begin;
 create extension if not exists pgtap;
 
--- 4 privileges · 8 lease semantics · 1 the lock itself · 6 the ledger
-select plan(19);
+-- 4 privileges · 8 lease semantics · 1 the lock itself · 6 the ledger · 2 the watermark
+select plan(21);
 
 -- ═══ 1–4 · Nobody but the publisher ══════════════════════════
 --
@@ -135,12 +135,12 @@ select is(
 -- ═══ 14–19 · The release ledger ══════════════════════════════
 
 select is(
-  public.record_release('not-a-release-path') ->> 'reason',
+  public.record_release('not-a-release-path', 0, 0) ->> 'reason',
   'invalid_path',
   'a release path that is not /v/{timestamp}/ is refused');
 
 select is(
-  (public.record_release('/v/2026-08-19T12:00:00Z/') -> 'recorded')::text,
+  (public.record_release('/v/2026-08-19T12:00:00Z/', 4, 2) -> 'recorded')::text,
   'true',
   'a well-formed one is recorded');
 
@@ -152,12 +152,12 @@ select is(
   '...and is NOT live — activation is a separate, deliberate step');
 
 select is(
-  public.record_release('/v/2026-08-19T12:00:00Z/') ->> 'reason',
+  public.record_release('/v/2026-08-19T12:00:00Z/', 4, 2) ->> 'reason',
   'duplicate_path',
   'recording the same path twice is refused, not left to abort the publisher''s transaction');
 
 -- The flip. Two releases, one active, and the index makes any other state unrepresentable.
-select public.record_release('/v/2026-08-19T13:00:00Z/');
+select public.record_release('/v/2026-08-19T13:00:00Z/', 9, 5);
 
 select public.activate_release(
   (select id from public.releases where path = '/v/2026-08-19T12:00:00Z/'));
@@ -171,6 +171,28 @@ select is(
 select is(
   (select count(*)::integer from public.releases where active), 1,
   '...and exactly one release is active, before and after');
+
+-- ═══ 20–21 · The watermark the debounce reads ════════════════
+--
+-- 0037 added two columns to `releases` and two fields to this function's answer, and the
+-- pair is the whole of §2's debounce: publish_pending compares the live counters against
+-- the ones stamped here. A release that recorded the wrong number does not fail — it makes
+-- the archive stop updating, quietly, which is why the number is asserted rather than
+-- assumed.
+
+select is(
+  (select r.content_revision || '/' || r.counter_revision
+     from public.releases r where r.path = '/v/2026-08-19T13:00:00Z/'),
+  '9/5',
+  'a release stores the revision it was told, not one it looked up for itself');
+
+-- The claim is where the revision is READ, because it is the only step that happens before
+-- the publisher reads the archive. 20_publish_cron test 21 is the counter-test for this:
+-- reading it any later marks a mid-build approval as published without publishing it.
+select is(
+  public.claim_publish_lease('00000000-0000-0000-0000-00000000aa01') ? 'content_revision',
+  true,
+  'and the claim reports the revision it was taken at, for the release to be stamped with');
 
 select * from finish();
 rollback;

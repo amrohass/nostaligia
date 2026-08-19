@@ -113,7 +113,7 @@ select set_eq(
     ('claim_publish_lease(p_holder uuid, p_ttl interval, p_note text) -> service_role'),
     ('renew_publish_lease(p_holder uuid, p_ttl interval) -> service_role'),
     ('release_publish_lease(p_holder uuid) -> service_role'),
-    ('record_release(p_path text) -> service_role'),
+    ('record_release(p_path text, p_content_revision bigint, p_counter_revision bigint) -> service_role'),
     ('activate_release(p_id uuid) -> service_role'),
     ('active_release() -> service_role'),
 
@@ -122,6 +122,17 @@ select set_eq(
     -- attractive possible way to violate that by accident.
     ('publishable_posts() -> service_role'),
     ('redacted_post_ids() -> service_role'),
+
+    -- The debounce (0037). publish_pending is the only part of piece 5 anything may call:
+    -- it answers "is a publish due" in two integers and a release path, which the publisher
+    -- can use to skip a pointless build and M6's publish-age monitor needs outright.
+    --
+    -- publish_tick and publish_dispatch are absent from this list, and that absence IS the
+    -- assertion. pg_cron runs the job as its owner, so neither needs a grant to work, and
+    -- publish_dispatch without its name is a POST to an arbitrary URL with an arbitrary
+    -- Authorization header — the last function in this schema that should be reachable by a
+    -- credential somebody might leak.
+    ('publish_pending() -> service_role'),
 
     -- Takedown (0036). `authenticated` may CALL it — the role check is is_moderator()
     -- inside the function, so a member gets a named refusal instead of a silent nothing,

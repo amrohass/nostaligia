@@ -79,13 +79,30 @@ class FakeDb implements Db {
   activated: string[] = [];
   previousPath: string | null = null;
 
-  publishablePosts() { return Promise.resolve(this.posts); }
+  /** What the lease reports at claim time. */
+  contentRevision = 7;
+  counterRevision = 3;
+  /** What record_release was actually given — the assertion target for the watermark. */
+  recorded: Array<{ path: string; content: number; counter: number }> = [];
+
+  publishablePosts() {
+    // Read AFTER the claim, so this is where a mid-build approval would land. Bumping the
+    // revision here reproduces exactly that: the archive moved on between the two calls.
+    this.contentRevision += 1;
+    return Promise.resolve(this.posts);
+  }
   redactedPostIds() { return Promise.resolve(this.redacted); }
   claimLease(_h: string, _t: number, _n: string) {
-    return Promise.resolve({ acquired: this.leaseGranted, reason: this.leaseReason });
+    return Promise.resolve({
+      acquired: this.leaseGranted,
+      reason: this.leaseReason,
+      content_revision: this.contentRevision,
+      counter_revision: this.counterRevision,
+    });
   }
   releaseLease(holder: string) { this.released.push(holder); return Promise.resolve(); }
-  recordRelease(path: string) {
+  recordRelease(path: string, content: number, counter: number) {
+    this.recorded.push({ path, content, counter });
     return Promise.resolve(
       this.recordOk
         ? { recorded: true, id: "rel-1", path }
@@ -270,4 +287,39 @@ Deno.test("an empty archive still publishes — a first run has nothing approved
   const out = await publish(d);
   assertEquals(out.published, true, out.reason);
   assert(d.sink.written.has("v/2026-08-19T12:34:56Z/feed/page-1.json"), "no empty feed page");
+});
+
+/* ── 6 · The debounce watermark (M2 piece 5) ───────────────── */
+
+// The whole reason claimLease reports a revision. FakeDb bumps contentRevision inside
+// publishablePosts(), which is the mid-build approval: the archive changed between the
+// claim and the read. The release is stamped with the number from BEFORE the read, so the
+// next tick still sees that approval as pending.
+Deno.test("a release is stamped with the revision the LEASE was claimed at", async () => {
+  const d = deps();
+  d.db.contentRevision = 7;
+  d.db.counterRevision = 3;
+
+  const out = await publish(d);
+  assertEquals(out.published, true, out.reason);
+  assertEquals(d.db.recorded.length, 1, "record_release was not called exactly once");
+  assertEquals(d.db.recorded[0].content, 7, "stamped the post-read revision — a mid-build approval is now lost");
+  assertEquals(d.db.recorded[0].counter, 3, "counter revision not carried from the claim");
+
+  // And the counter-test for the assertion above: the value it must NOT be. If publish()
+  // ever reads the revision after publishablePosts() this is what it would record, and the
+  // approval that arrived during the build would be marked published without being in it.
+  assertEquals(d.db.contentRevision, 8, "FakeDb did not simulate a mid-build change");
+});
+
+// A refused lease carries no revision, and nothing downstream should invent one — there is
+// no build to stamp because there is no build.
+Deno.test("a refused lease records nothing at all", async () => {
+  const d = deps();
+  d.db.leaseGranted = false;
+  d.db.leaseReason = "held";
+
+  const out = await publish(d);
+  assertEquals(out.published, false, "published while another writer held the lease");
+  assertEquals(d.db.recorded.length, 0, "recorded a release without holding the lease");
 });

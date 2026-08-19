@@ -37,23 +37,37 @@ export class PostgrestDb implements Db {
   }
 
   async claimLease(holder: string, ttlSeconds: number, note: string) {
-    const out = await this.call<{ acquired: boolean; reason: string }>("claim_publish_lease", {
+    const out = await this.call<{
+      acquired: boolean;
+      reason: string;
+      content_revision?: number;
+      counter_revision?: number;
+    }>("claim_publish_lease", {
       p_holder: holder,
       // PostgREST sends jsonb; an interval arrives as an ISO-8601 duration string, which
       // Postgres casts on the way into the parameter.
       p_ttl: `PT${ttlSeconds}S`,
       p_note: note,
     });
-    return { acquired: out.acquired === true, reason: out.reason };
+    // Present only on the branches that granted the lease — a refusal carries no revision
+    // because there is no build to stamp.
+    return {
+      acquired: out.acquired === true,
+      reason: out.reason,
+      content_revision: out.content_revision,
+      counter_revision: out.counter_revision,
+    };
   }
 
   async releaseLease(holder: string): Promise<void> {
     await this.call("release_publish_lease", { p_holder: holder });
   }
 
-  recordRelease(path: string) {
+  recordRelease(path: string, contentRevision: number, counterRevision: number) {
     return this.call<{ recorded: boolean; id?: string; reason?: string }>("record_release", {
       p_path: path,
+      p_content_revision: contentRevision,
+      p_counter_revision: counterRevision,
     });
   }
 

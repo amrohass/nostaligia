@@ -35,9 +35,28 @@ export type { ObjectSink };
 export interface Db {
   publishablePosts(): Promise<Array<SourcePost & { hash_matches?: boolean }>>;
   redactedPostIds(): Promise<string[]>;
-  claimLease(holder: string, ttlSeconds: number, note: string): Promise<{ acquired: boolean; reason: string }>;
+  /**
+   * The revisions come back with the lease, and that is the whole reason they are here.
+   *
+   * §2's debounce compares what is live against the revision the ACTIVE release was built
+   * from, and "built from" has to mean "as of before the archive was read". This call
+   * happens under the advisory lock, before publishablePosts(); recordRelease() happens
+   * thirty to ninety seconds later, after every object has landed. Reading the revision at
+   * that later point would count an approval that arrived mid-build as already published,
+   * and that approval would then never publish at all.
+   */
+  claimLease(holder: string, ttlSeconds: number, note: string): Promise<{
+    acquired: boolean;
+    reason: string;
+    content_revision?: number;
+    counter_revision?: number;
+  }>;
   releaseLease(holder: string): Promise<void>;
-  recordRelease(path: string): Promise<{ recorded: boolean; id?: string; reason?: string }>;
+  recordRelease(
+    path: string,
+    contentRevision: number,
+    counterRevision: number,
+  ): Promise<{ recorded: boolean; id?: string; reason?: string }>;
   activateRelease(id: string): Promise<{ activated: boolean; previous_path?: string | null }>;
 }
 
@@ -154,8 +173,21 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
       };
     }
 
-    // ── 6 · record, still inactive ──
-    const recorded = await deps.db.recordRelease(path);
+    // ── 6 · record, still inactive, stamped with the revision the LEASE was claimed at ──
+    //
+    // Not the revision now. Everything between the claim and this line either made it into
+    // the release — in which case stamping the older number costs one spurious republish —
+    // or did not, in which case stamping the newer one would lose it silently and forever.
+    // The two errors are not symmetric, so the older number is the one to carry.
+    //
+    // ?? 0 rather than a throw: a database that answered the claim without the revisions is
+    // one running an older 0034, and "republish once" is a better failure than "refuse to
+    // publish at all" for a mismatch that only a botched deploy can produce.
+    const recorded = await deps.db.recordRelease(
+      path,
+      lease.content_revision ?? 0,
+      lease.counter_revision ?? 0,
+    );
     if (!recorded.recorded || !recorded.id) {
       return { published: false, reason: recorded.reason ?? "record_failed", release: path };
     }

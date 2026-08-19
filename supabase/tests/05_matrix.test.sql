@@ -128,7 +128,17 @@ insert into stmts values
 ('publish_lease','select','select count(*) from public.publish_lease'),
 ('publish_lease','insert',$$insert into public.publish_lease(holder,expires_at) values ('00000000-0000-0000-0000-0000000000a9',now()+interval '1 minute')$$),
 ('publish_lease','update',$$update public.publish_lease set expires_at=now() where true$$),
-('publish_lease','delete',$$delete from public.publish_lease where true$$);
+('publish_lease','delete',$$delete from public.publish_lease where true$$),
+
+-- The debounce counters (0037). Deny everywhere, and the UPDATE cell is the one that
+-- matters: these two integers decide whether the archive republishes at all. A member who
+-- could hold them still would stop the site changing; one who could raise them would make
+-- it rebuild every two minutes. Neither needs a privileged call, only a default grant
+-- nobody revoked.
+('publish_revision','select','select count(*) from public.publish_revision'),
+('publish_revision','insert',$$insert into public.publish_revision(id) values (false)$$),
+('publish_revision','update',$$update public.publish_revision set content_revision=0 where true$$),
+('publish_revision','delete',$$delete from public.publish_revision where true$$);
 
 -- Each probe runs in a subtransaction that is always rolled back — plpgsql variables
 -- survive that rollback, so the outcome is preserved while the write is not.
