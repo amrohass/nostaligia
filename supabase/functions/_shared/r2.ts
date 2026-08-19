@@ -13,8 +13,24 @@
  * caller does not control would only create a way for the two to disagree.
  */
 
-import { presignR2 } from "../_shared/sigv4.ts";
-import type { ObjectSink } from "./release.ts";
+import { presignR2 } from "./sigv4.ts";
+
+/**
+ * Somewhere to put objects, and take them away again.
+ *
+ * Bucket-fixed: one instance addresses one bucket. Takedown needs both `public` and
+ * `originals` and builds two, which is deliberate — a sink that took the bucket per call
+ * would make "which bucket" a parameter at every call site, and §6's whole rule about
+ * originals/ is that the two are not interchangeable.
+ */
+export interface ObjectSink {
+  /** Writes one object. Throws on failure — a partial release must not be flipped onto. */
+  put(key: string, body: string, contentType: string, cacheControl: string): Promise<void>;
+  /** True when the object is retrievable. Used to check what LANDED, not what was sent. */
+  exists(key: string): Promise<boolean>;
+  /** Removes one object. Resolves true when it is gone, including when it never existed. */
+  remove(key: string): Promise<boolean>;
+}
 
 export interface R2Config {
   accountId: string;
@@ -62,5 +78,24 @@ export class R2Sink implements ObjectSink {
     const res = await fetch(signed.url, { method: "HEAD" });
     await res.body?.cancel();
     return res.ok;
+  }
+
+  /**
+   * §8 step 1: "delete/rename the object in R2 immediately."
+   *
+   * 404 counts as success. A takedown retried after a partial failure — which is the
+   * documented recovery path in 0036 — must not fail on the objects the first attempt
+   * already removed, or the retry can never complete.
+   */
+  async remove(key: string): Promise<boolean> {
+    const signed = await presignR2({
+      ...this.cfg,
+      key,
+      method: "DELETE",
+      expiresIn: URL_TTL_SECONDS,
+    });
+    const res = await fetch(signed.url, { method: "DELETE" });
+    await res.body?.cancel();
+    return res.ok || res.status === 404;
   }
 }

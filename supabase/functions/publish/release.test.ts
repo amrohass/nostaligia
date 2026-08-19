@@ -63,6 +63,10 @@ class FakeSink implements ObjectSink {
   exists(key: string): Promise<boolean> {
     return Promise.resolve(this.written.has(key) && !this.vanish.has(key));
   }
+  remove(key: string): Promise<boolean> {
+    this.written.delete(key);
+    return Promise.resolve(true);
+  }
 }
 
 class FakeDb implements Db {

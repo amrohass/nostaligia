@@ -123,6 +123,18 @@ select set_eq(
     ('publishable_posts() -> service_role'),
     ('redacted_post_ids() -> service_role'),
 
+    -- Takedown (0036). `authenticated` may CALL it — the role check is is_moderator()
+    -- inside the function, so a member gets a named refusal instead of a silent nothing,
+    -- and the audit row names them rather than the service key.
+    ('request_takedown(p_post_id uuid, p_note text) -> authenticated'),
+    ('request_takedown(p_post_id uuid, p_note text) -> service_role'),
+
+    -- Takedown (0036). `authenticated` may CALL it — the role check is is_moderator()
+    -- inside the function, so a member gets a named refusal instead of a silent nothing,
+    -- and the audit row names them rather than the service key.
+    ('request_takedown(p_post_id uuid, p_note text) -> authenticated'),
+    ('request_takedown(p_post_id uuid, p_note text) -> service_role'),
+
     -- ── Still on the PUBLIC default, each for a reason ────────
     --
     -- fuzz_location: pure and IMMUTABLE, and grid snapping destroys the precision rather

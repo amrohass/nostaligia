@@ -23,7 +23,7 @@ import { env, fail, json } from "../_shared/http.ts";
 import { timingSafeEqual } from "../_shared/secret.ts";
 import { publish } from "./release.ts";
 import { PostgrestDb } from "./db.ts";
-import { R2Sink } from "./r2.ts";
+import { R2Sink } from "../_shared/r2.ts";
 
 /** §2: shards and the pointer both live in the CDN-fronted bucket. */
 const PUBLIC_BUCKET = "public";

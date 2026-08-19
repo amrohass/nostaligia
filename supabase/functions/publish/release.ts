@@ -26,14 +26,10 @@
  */
 
 import { buildShards, type ShardFile, type SourcePost, stableStringify } from "./shards.ts";
+import type { ObjectSink } from "../_shared/r2.ts";
 
-/** Somewhere to put objects. Implemented over R2 in index.ts, faked in the tests. */
-export interface ObjectSink {
-  /** Writes one object. Throws on failure — a partial release must not be flipped onto. */
-  put(key: string, body: string, contentType: string, cacheControl: string): Promise<void>;
-  /** True when the object is retrievable. Used to check what LANDED, not what was sent. */
-  exists(key: string): Promise<boolean>;
-}
+// Re-exported so this module's callers and tests keep one import for the whole sequence.
+export type { ObjectSink };
 
 /** The database, as this function uses it. Every call is one PostgREST RPC. */
 export interface Db {
