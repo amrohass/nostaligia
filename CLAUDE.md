@@ -235,6 +235,11 @@ Written after a real compromised-key incident (~24,000% billing spike).
     moderator's admits ten 4 GB masters. They live in `public.upload_daily_limits()`;
     change them there and here together. This is a cost ceiling, not a fairness
     mechanism: raise it only against an actual R2 and Supabase bill.
+  - **Publish counter floor** (set in M2, approved 19 Aug 2026): likes and comments
+    republish the archive **at most once an hour**; content changes are never throttled.
+    Every release rewrites every shard, so an unthrottled counter signal exceeds this
+    ceiling on its own. It lives in `public.publish_pending()`; change it there and here
+    together.
 - CSP with no `unsafe-inline`, plus HSTS, via Cloudflare `_headers`.
 - Lifecycle rule purging rejected/orphaned objects after 30 days.
 
