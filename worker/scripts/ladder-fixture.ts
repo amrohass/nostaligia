@@ -19,8 +19,7 @@
 
 import { LocalStore } from "../src/store.ts";
 import { processJob } from "../src/pipeline.ts";
-import type { AssetRow, IngestReporter, RpcOutcome } from "../src/db.ts";
-import type { Ffmpeg, FfmpegResult } from "../src/pipeline.ts";
+import { CapturingReporter, RealFfmpeg } from "./lib/harness.ts";
 
 const args = Deno.args;
 
@@ -39,31 +38,6 @@ if (!/^\d+x\d+$/.test(sizeArg)) {
 }
 const [, heightStr] = sizeArg.split("x");
 const sourceHeight = Number(heightStr);
-
-class RealFfmpeg implements Ffmpeg {
-  async run(bin: "ffmpeg" | "ffprobe", a: string[]): Promise<FfmpegResult> {
-    const out = await new Deno.Command(bin, { args: a, stdout: "piped", stderr: "piped" })
-      .output();
-    return {
-      code: out.code,
-      stdout: new TextDecoder().decode(out.stdout),
-      stderr: new TextDecoder().decode(out.stderr),
-    };
-  }
-}
-
-class CapturingReporter implements IngestReporter {
-  assets: AssetRow[] = [];
-  failure: string | null = null;
-  complete(_k: string, _m: string, assets: AssetRow[]): Promise<RpcOutcome> {
-    this.assets = assets;
-    return Promise.resolve({ ok: true });
-  }
-  fail(_k: string, reason: string): Promise<RpcOutcome> {
-    this.failure = reason;
-    return Promise.resolve({ ok: true });
-  }
-}
 
 const ffmpeg = new RealFfmpeg();
 const root = await Deno.makeTempDir({ prefix: "rma-fixture-" });

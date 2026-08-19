@@ -214,6 +214,17 @@ jobs:
               worker/scripts/ladder-fixture.ts --kind "$k" --size 1600x1200
           done
 
+      # CLAUDE.md §11, launch gate 2: "EXIF stripping verified on a real photo carrying GPS
+      # data, end to end." Run inside the deployed image, because the thing being verified
+      # is what the container's ffmpeg does to an APP1 segment — not what the runner's does.
+      #
+      # The script also checks itself: it points the same inspection at a file it knows is
+      # dirty, and at a run with the re-encode removed. A green here means the checks were
+      # awake, not merely quiet.
+      - name: §11 gate 2 — GPS EXIF does not reach public/
+        run: |
+          docker run --rm             -v "$PWD/worker/scripts:/app/worker/scripts:ro"             --entrypoint deno rma-media-worker             run --allow-read --allow-write --allow-run --allow-env             worker/scripts/exif-gate.ts
+
       - name: Stop MinIO
         if: always()
         run: docker rm -f rma-store-minio || true

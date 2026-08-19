@@ -121,6 +121,11 @@ deno run --allow-read --allow-write --allow-run --allow-env `
   worker/scripts/ladder-fixture.ts --size 800x600 --kind image
 deno run --allow-read --allow-write --allow-run --allow-env `
   worker/scripts/ladder-fixture.ts --kind audio
+
+# CLAUDE.md §11 gate 2 — a synthesized photograph carrying real GPS EXIF, through the real
+# pipeline, with the output parsed as bytes. Also verifies its own checks are awake.
+deno run --allow-read --allow-write --allow-run --allow-env `
+  worker/scripts/exif-gate.ts
 ```
 
 The wire — presigned range reads, streamed uploads, server-side copy — needs a real S3
@@ -203,9 +208,18 @@ in-process job timeout bounds each one.
 - **A worker that accepts a job and then dies leaves the row in `processing`.** `release_ingest`
   narrows migration 0028's stuck-job gap to invocation failures; it does not close it. The
   reaper is M6, and `processing_started_at` is being recorded now so it has something to read.
-- **§11 gate 2 is not satisfied by the fixture.** `ladder-fixture.ts` proves `-map_metadata -1`
-  strips tags it planted itself. The gate needs a real photograph carrying real GPS EXIF,
-  end to end.
+- **§11 gate 2 is verified locally, not end to end.** `exif-gate.ts` puts a real APP1 GPS
+  segment through the real pipeline and parses the output as bytes: gone from `public/`,
+  byte-identical in `originals/`. What it does not cross is the network — a browser PUT to a
+  real R2 quarantine bucket, the deployed container, and the object fetched back over the
+  CDN. That last hop needs the worker deployed.
+- **The image path's EXIF safety is the re-encode, not the flag.** `exif-gate.ts` found this:
+  deleting `-map_metadata -1` from the argv changes nothing a derivative carries, because
+  ffmpeg decodes an image to pixels and a pixel buffer has no APP1. §6 says as much — "re-encode
+  every image server-side; this strips EXIF and kills polyglots in one step" — but it means the
+  thing to protect is the re-encode itself. A future `-c:v copy`, added for speed, would leak
+  coordinates while every argv assertion in the repository stayed green. The gate's phase 2b
+  models exactly that and must keep failing.
 - **Derivative uploads are buffered, not streamed, and capped at 2 GiB.** `fetch` drops a
   hand-set `Content-Length`, so a stream body goes out chunked and S3 answers 411 — found by
   `store-roundtrip.ts`, invisible to every other test. §6's worst legitimate rung is about
