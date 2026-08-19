@@ -22,8 +22,10 @@
 import { env, fail, json } from "../_shared/http.ts";
 import { timingSafeEqual } from "../_shared/secret.ts";
 import { publish } from "./release.ts";
+import { rollback } from "./rollback.ts";
 import { PostgrestDb } from "./db.ts";
 import { R2Sink } from "../_shared/r2.ts";
+import { CloudflarePurger, cloudflareFromEnv } from "../takedown/cdn.ts";
 
 /** §2: shards and the pointer both live in the CDN-fronted bucket. */
 const PUBLIC_BUCKET = "public";
@@ -45,14 +47,49 @@ export async function handleRequest(req: Request): Promise<Response> {
     return fail("unauthorized", 401, req);
   }
 
+  // The body is OPTIONAL and a malformed one is not an error. pg_cron posts
+  // {"source":"cron"} and the original contract was no body at all; both must keep meaning
+  // "publish". Only an explicit action changes what happens, so a truncated or absent body
+  // can never silently turn a scheduled publish into something else.
+  let body: Record<string, unknown> = {};
+  try {
+    body = await req.json() as Record<string, unknown>;
+  } catch {
+    body = {};
+  }
+
+  const db = new PostgrestDb();
+  const sink = new R2Sink({
+    accountId: env("R2_ACCOUNT_ID"),
+    accessKeyId: env("R2_ACCESS_KEY_ID"),
+    secretAccessKey: env("R2_SECRET_ACCESS_KEY"),
+    bucket: PUBLIC_BUCKET,
+  });
+
+  if (body.action === "rollback") {
+    // §2's rollback. Behind the same secret as publish, because it is the same capability
+    // pointed the other way: whoever can make the archive rebuild can already decide what
+    // it serves. It needs the CDN purger, which takedown already owns — max-age=45 on the
+    // pointer would otherwise bound how fast a rollback takes effect.
+    const target = typeof body.release === "string" ? body.release : "";
+    const why = typeof body.reason === "string" ? body.reason : "";
+
+    const rolled = await rollback({
+      db,
+      sink,
+      cdn: new CloudflarePurger(cloudflareFromEnv(Deno.env.get("CDN_ORIGIN") ?? "")),
+      now: () => new Date(),
+      newHolder: () => crypto.randomUUID(),
+    }, target, why);
+
+    // 200 only when the pointer actually moved. A rollback is an incident action and the
+    // operator running it is entitled to a status code that means what it says.
+    return json(rolled, rolled.rolledBack ? 200 : 409, req);
+  }
+
   const outcome = await publish({
-    db: new PostgrestDb(),
-    sink: new R2Sink({
-      accountId: env("R2_ACCOUNT_ID"),
-      accessKeyId: env("R2_ACCESS_KEY_ID"),
-      secretAccessKey: env("R2_SECRET_ACCESS_KEY"),
-      bucket: PUBLIC_BUCKET,
-    }),
+    db,
+    sink,
     now: () => new Date(),
     newHolder: () => crypto.randomUUID(),
   });

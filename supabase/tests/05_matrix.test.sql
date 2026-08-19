@@ -138,7 +138,15 @@ insert into stmts values
 ('publish_revision','select','select count(*) from public.publish_revision'),
 ('publish_revision','insert',$$insert into public.publish_revision(id) values (false)$$),
 ('publish_revision','update',$$update public.publish_revision set content_revision=0 where true$$),
-('publish_revision','delete',$$delete from public.publish_revision where true$$);
+('publish_revision','delete',$$delete from public.publish_revision where true$$),
+
+-- The operator hold (0039). Deny everywhere, and INSERT is the cell that matters: one row
+-- in this table stops the archive publishing for everybody, with no exploit and no
+-- privileged call — only a default grant nobody revoked.
+('publish_hold','select','select count(*) from public.publish_hold'),
+('publish_hold','insert',$$insert into public.publish_hold(id,reason,held_by) values (true,'x','00000000-0000-0000-0000-0000000000a9')$$),
+('publish_hold','update',$$update public.publish_hold set reason='y' where true$$),
+('publish_hold','delete',$$delete from public.publish_hold where true$$);
 
 -- Each probe runs in a subtransaction that is always rolled back — plpgsql variables
 -- survive that rollback, so the outcome is preserved while the write is not.

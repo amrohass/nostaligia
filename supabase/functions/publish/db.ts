@@ -13,9 +13,10 @@
 
 import { env, rpc } from "../_shared/http.ts";
 import type { Db } from "./release.ts";
+import type { RollbackDb } from "./rollback.ts";
 import type { SourcePost } from "./shards.ts";
 
-export class PostgrestDb implements Db {
+export class PostgrestDb implements Db, RollbackDb {
   private readonly key = env("SUPABASE_SERVICE_ROLE_KEY");
 
   private async call<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -70,6 +71,15 @@ export class PostgrestDb implements Db {
       p_counter_revision: counterRevision,
       p_holder: holder,
     });
+  }
+
+  rollbackRelease(path: string, holder: string, reason: string) {
+    return this.call<{
+      rolled_back: boolean;
+      reason?: string;
+      previous_path?: string | null;
+      held?: boolean;
+    }>("rollback_release", { p_path: path, p_holder: holder, p_reason: reason });
   }
 
   activateRelease(id: string, holder: string) {

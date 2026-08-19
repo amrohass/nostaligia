@@ -138,6 +138,11 @@ select set_eq(
     -- credential somebody might leak.
     ('publish_pending() -> service_role'),
 
+    -- Rollback (0039). service_role only, like the rest of the publish path. rollback_release
+    -- also demands a live publish lease, which no browser role can take at any privilege.
+    ('rollback_release(p_path text, p_holder uuid, p_reason text) -> service_role'),
+    ('release_publish_hold(p_actor uuid) -> service_role'),
+
     -- Takedown (0036). `authenticated` may CALL it — the role check is is_moderator()
     -- inside the function, so a member gets a named refusal instead of a silent nothing,
     -- and the audit row names them rather than the service key.
