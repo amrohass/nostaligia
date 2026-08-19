@@ -107,6 +107,16 @@ select set_eq(
     -- Auth's, and only auth's. §4: the role claim is minted here.
     ('custom_access_token_hook(event jsonb) -> supabase_auth_admin'),
 
+    -- The publish pipeline (0034). service_role and nothing else, not even media_worker:
+    -- a caller who could take the publish lease could stop the archive updating with one
+    -- RPC every four minutes, which is a denial of service that needs no exploit.
+    ('claim_publish_lease(p_holder uuid, p_ttl interval, p_note text) -> service_role'),
+    ('renew_publish_lease(p_holder uuid, p_ttl interval) -> service_role'),
+    ('release_publish_lease(p_holder uuid) -> service_role'),
+    ('record_release(p_path text) -> service_role'),
+    ('activate_release(p_id uuid) -> service_role'),
+    ('active_release() -> service_role'),
+
     -- ── Still on the PUBLIC default, each for a reason ────────
     --
     -- fuzz_location: pure and IMMUTABLE, and grid snapping destroys the precision rather

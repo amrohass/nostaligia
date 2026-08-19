@@ -153,8 +153,8 @@ select set_eq(
     group by c.relname
     having count(p.polname) = 0
   $q$,
-  array['user_roles', 'reserved_handles', 'releases', 'upload_quota'],
-  'exactly four tables are intentionally policy-free (deny-all, service role only)'
+  array['user_roles', 'reserved_handles', 'releases', 'upload_quota', 'publish_lease'],
+  'exactly five tables are intentionally policy-free (deny-all, service role only)'
 );
 
 -- ── 10 · No SECURITY DEFINER function with a mutable search_path ──

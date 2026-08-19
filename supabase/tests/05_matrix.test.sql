@@ -1,4 +1,4 @@
--- The authorization matrix: 4 roles × 15 tables × 4 operations = 240 cells.
+-- The authorization matrix: 4 roles × 16 tables × 4 operations = 256 cells.
 --
 -- Every cell is attempted for real and compared against an expectation derived from
 -- the policy files, not from a previous run. Outcomes are three-valued, because
@@ -13,7 +13,7 @@
 -- recorded as a pass by any suite asserting only "anon cannot read". It was a broken
 -- policy that no browser role could evaluate.
 --
--- One set_eq rather than 240 assertions: on failure pgTAP prints precisely which
+-- One set_eq rather than 256 assertions: on failure pgTAP prints precisely which
 -- cells differ, which is the diff you want, and a missing cell is as loud as a wrong one.
 
 begin;
@@ -120,7 +120,15 @@ insert into stmts values
 ('upload_quota','select','select count(*) from public.upload_quota'),
 ('upload_quota','insert',$$insert into public.upload_quota(user_id,day,count) values ('00000000-0000-0000-0000-0000000000a9',current_date,0)$$),
 ('upload_quota','update',$$update public.upload_quota set count=0 where true$$),
-('upload_quota','delete',$$delete from public.upload_quota where true$$);
+('upload_quota','delete',$$delete from public.upload_quota where true$$),
+-- The single writer (0034). Every cell is `deny` for all four browser roles: a member who
+-- could take the publish lease could stop the archive updating with one RPC every four
+-- minutes, which needs no exploit at all. The table was added to this file because the
+-- coverage sweep below refused to let it be forgotten.
+('publish_lease','select','select count(*) from public.publish_lease'),
+('publish_lease','insert',$$insert into public.publish_lease(holder,expires_at) values ('00000000-0000-0000-0000-0000000000a9',now()+interval '1 minute')$$),
+('publish_lease','update',$$update public.publish_lease set expires_at=now() where true$$),
+('publish_lease','delete',$$delete from public.publish_lease where true$$);
 
 -- Each probe runs in a subtransaction that is always rolled back — plpgsql variables
 -- survive that rollback, so the outcome is preserved while the write is not.
@@ -249,12 +257,12 @@ select is(
 -- what makes a leaked anon key uninteresting.
 select is(
   (select count(*) from actual where role='anon' and outcome <> 'deny'), 0::bigint,
-  'all 60 anon cells are deny — the anon key reaches nothing at all');
+  'all 64 anon cells are deny — the anon key reaches nothing at all');
 
 select set_eq(
   'select role||''|''||tbl||''|''||op||''|''||outcome from actual',
   'select role||''|''||tbl||''|''||op||''|''||outcome from expected',
-  '240 cells: every allow, empty and deny matches the policy files');
+  '256 cells: every allow, empty and deny matches the policy files');
 
 select * from finish();
 rollback;

@@ -316,6 +316,13 @@ jobs:
             exit 1
           fi
 
+      # §10's M2 exit criterion is "two concurrent approvals produce one consistent release",
+      # which needs two backends contending inside open transactions. pgTAP runs in one
+      # session and cannot express it; dblink would need a password in the repository. So
+      # the race is two psql processes against the running container.
+      - name: Two publishers, one lease
+        run: bash scripts/publish-race.sh
+
       - name: Stop the stack
         if: always()
         run: supabase stop --no-backup
