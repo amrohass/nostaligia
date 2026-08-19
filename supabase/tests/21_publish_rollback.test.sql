@@ -5,13 +5,13 @@
 --
 -- ── The test that carries the file ───────────────────────────
 --
--- Test 13. publish_pending() compares the live revision against the ACTIVE release's stamped
+-- Test 12. publish_pending() compares the live revision against the ACTIVE release's stamped
 -- one, so a rolled-back release — which by definition carries an OLDER watermark — reads as
 -- out of date. The next two-minute tick republishes exactly what was rolled away from.
 --
--- Test 12 removes the hold and test 13 watches the predicate go to 'content_changed', which
--- is the revert about to happen. Without those two, the hold could be doing nothing and
--- every other assertion in this file would still pass.
+-- Test 12 asserts the hold suppresses that; test 14 then removes the hold and watches the
+-- predicate go to 'content_changed', which is the revert about to happen. Without both, the
+-- hold could be doing nothing and every other assertion in this file would still pass.
 --
 -- ── The object half is not here ──────────────────────────────
 --
@@ -19,6 +19,24 @@
 -- rewriting it is the Edge Function's job. rollback.test.ts holds those assertions, and they
 -- are the ones a ledger-only rollback fails. SQL cannot see the bucket, so this file does not
 -- pretend to.
+--
+-- ── Which of these actually catch something ──────────────────
+--
+-- 17 of the 19 are DISCRIMINATING: for each, there is a single change to 0039 that fails
+-- that assertion and no other. 2 are CORROBORATING — they cannot fail unless a
+-- discriminating one fails with them, so they add readability and no coverage. They are
+-- marked at the site, because a corroborating assertion that looks load-bearing is how a
+-- suite comes to be trusted for something it does not check.
+--
+-- Measured, not reasoned, wherever it was cheap to measure. Two examples, both run:
+--
+--   hold write deleted from rollback_release   → 11, 12 fail, nothing else
+--   hold branch deleted from publish_pending   → 12, 17 fail, nothing else
+--
+-- Test 7 was initially filed as corroborating and is not: a rollback_release that writes
+-- the hold BEFORE validating the reason leaves a hold behind on the refusal path, and that
+-- mutation fails 7 alone. Ordering bugs are exactly what a "nothing was left behind"
+-- assertion exists for.
 --
 -- ── §11 gate 5, and what this file can and cannot enforce ────
 --
@@ -164,8 +182,12 @@ select is(
   'held_by_operator / false',
   'while held, nothing is due — the cron will not undo the rollback');
 
--- §11 gate 5 in one assertion: an alert that cannot tell these two apart cannot tell a
--- stopped archive from a quiet one, which is the whole reason the gate exists.
+-- CORROBORATING, not discriminating. It guards §11 gate 5's requirement that a held reason
+-- is never spelled the same as an idle one — but it cannot fail on its own: test 12 pins the
+-- exact string 'held_by_operator', so anything that breaks this breaks 12 first. It does NOT
+-- catch the hold write going missing (without a hold the reason is 'content_changed', which
+-- is still not 'unchanged', so this passes). Kept because the requirement it names is a
+-- launch gate and should be legible here rather than inferred from a string comparison.
 select isnt(
   pg_temp.reason(), 'unchanged',
   '...and "held" is not reported as "unchanged", so a monitor can tell them apart');
@@ -179,6 +201,9 @@ select is(
   'content_changed / true',
   'without the hold the SAME rolled-back release is due again — the revert this exists to stop');
 
+-- CORROBORATING. release_publish_hold does not touch `releases`, so this can only fail if
+-- the flip in test 9/10 was already wrong. It is here to make the previous assertion legible
+-- — "due again" means nothing unless you can see WHAT is about to be republished over.
 select is(
   pg_temp.active(), '/v/2026-08-19T12:00:00Z/',
   '...and it is still the rolled-back release, so the revert would undo real work');
