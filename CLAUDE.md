@@ -72,6 +72,14 @@ flip back. Takedown does NOT wait for this (§8).
 
 **The single-writer lock is what prevents races — not the cron.** Do not remove it.
 
+- **Amended 19 Aug 2026 — "rebuild only changed shards" is the deferred target, not current
+  behaviour.** Every release rewrites every shard: `releaseFiles()` in
+  `supabase/functions/publish/release.ts` builds all of them and `publish()` puts all of
+  them — ~325 objects at 300 items, on every release. The incremental diff is not written.
+  §6's one-hour counter floor exists to bound what that costs until it is. Reinstate the
+  diff when the archive passes 1,500 items, the publish rate passes 100 releases/day, or
+  `/v/` passes 5 GB; at that point it and release pruning are one piece of work.
+
 ---
 
 ## 3. Data model
@@ -330,7 +338,7 @@ ahead.
 ## 11. Launch gates
 
 The system may be **built** and **internally deployed** without these. It may not be
-**public** until all four pass. These are not iterable post-launch — each fails silently and
+**public** until all five pass. These are not iterable post-launch — each fails silently and
 harms someone other than the maintainer.
 
 1. **RLS denial matrix passes** — every mutation run as anon, member, moderator; all
@@ -338,6 +346,9 @@ harms someone other than the maintainer.
 2. **EXIF stripping verified** on a real photo carrying GPS data, end to end.
 3. **One restore tested** from a backup you hold yourself.
 4. **A named human on the takedown path** with a stated response time.
+5. **Publish-age monitoring separates a held pipeline from an idle one** — an operator hold
+   left set stops the archive as silently as a broken cron, so the alert must report
+   `held_by_operator` distinctly from `unchanged` and fire on the first.
 
 Plus: an independent penetration test is scheduled, executed, and its findings triaged.
 **The public launch date is set after the pen test, not before.**
