@@ -41,7 +41,7 @@ function makeWindow(overrides = {}) {
   const localStore = new Map();
   const win = {
     CONFIG: {
-      origins: { supabase: 'https://project.supabase.co' },
+      origins: { supabase: 'https://project.supabase.co', cdn: 'https://cdn.example' },
       supabase: { anonKey: 'stub-anon-key' },
       turnstile: { siteKey: '0xTEST' }
     },
@@ -224,6 +224,38 @@ console.log('# upload.js — the refusal map');
     : [];
   ok(fromDb.length > 0 && fromDb.join('|') === win.UPLOAD.LICENSES.join('|'),
      `the licence vocabulary matches migration 0032 (db: ${fromDb.join(', ') || 'NOT FOUND'})`);
+}
+
+console.log('# db.js — the bucket rule');
+
+// ── 6b · §6: no originals path may become a CDN URL ─────────────────────────
+// The rule is enforced where it counts — originals/ is not CDN-fronted, assertManifest
+// refuses a mis-bucketed manifest, and 0023 decides who may read the row. This is the
+// client-side statement of it, and it exists because the previous version was a bare
+// `cdn + storage_path` that would have handed back a URL for whatever it was passed.
+{
+  const win = makeWindow();
+  load('site/assets/js/db.js', win);
+
+  const publicAsset = { bucket: 'public', storage_path: 'post-id/thumb.webp' };
+  ok(win.DB.mediaUrl(publicAsset) === 'https://cdn.example/post-id/thumb.webp',
+     'a public asset gets its CDN URL');
+
+  ok(win.DB.mediaUrl({ bucket: 'originals', storage_path: 'uploader/abc' }) === null,
+     'an originals asset gets null, never a CDN URL (section 6)');
+
+  // The shapes a refactor actually produces: a role with no asset, a row that arrived
+  // without the column selected, a bucket added later.
+  for (const [asset, why] of [
+    [null, 'a missing asset'],
+    [undefined, 'an undefined asset'],
+    [{ storage_path: 'x' }, 'a row whose bucket was not selected'],
+    [{ bucket: 'quarantine', storage_path: 'x' }, 'a quarantine path'],
+    [{ bucket: 'public' }, 'a public row with no path'],
+    [{ bucket: 'public', storage_path: '' }, 'a public row with an empty path']
+  ]) {
+    ok(win.DB.mediaUrl(asset) === null, `...and so does ${why}`);
+  }
 }
 
 // ── 7 · every message key exists in BOTH languages ──────────────────────────

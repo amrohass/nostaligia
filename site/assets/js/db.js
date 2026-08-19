@@ -97,6 +97,33 @@
 
     rpc: function (name, args) {
       return call('/rpc/' + name, { method: 'POST', body: args || {} });
+    },
+
+    /**
+     * The CDN URL for a media_assets row — or null, if the row is not one that may have one.
+     *
+     * §6: "NEVER serve a row with bucket='originals' through the public CDN path." That rule
+     * is enforced where it has to be — `originals/` is not CDN-fronted at all, the worker's
+     * assertManifest refuses a manifest that puts the wrong role in the wrong bucket, and
+     * 0023's policies decide who may read the row in the first place. This is none of those.
+     *
+     * It exists because the rule was previously held by CONVENTION on the client: the URL
+     * builder concatenated `cdn + storage_path` for whatever it was handed, and the only
+     * reason no originals path ever went through it was that the callers happened to pass
+     * renditions. The master is sitting in the same function, three lines away, and §6
+     * itself anticipates wanting a link to it — "the master is available as an explicit
+     * download of the original, sign-in gated and rate-limited". The day somebody builds
+     * that, the obvious thing to reach for is this function, and the obvious thing is wrong:
+     * a signed, rate-limited download is a different mechanism, not this one with a
+     * different argument.
+     *
+     * So: null for anything that is not in `public`. A null renders as a missing image,
+     * which is a visible bug rather than a leaked archival path.
+     */
+    mediaUrl: function (asset) {
+      if (!asset || asset.bucket !== 'public') return null;
+      if (typeof asset.storage_path !== 'string' || !asset.storage_path) return null;
+      return global.CONFIG.origins.cdn + '/' + asset.storage_path;
     }
   };
 })(window);

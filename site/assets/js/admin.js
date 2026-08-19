@@ -316,8 +316,11 @@
      bucket='originals' through the public CDN path" — and the master is filtered out
      before this is reached, not checked inside it, so there is no path where an
      originals/ row could acquire a public URL by accident. */
+  /* DB.mediaUrl, not a local concatenation: it returns null for anything outside the
+     `public` bucket, which is §6's rule expressed as code rather than as a habit of the
+     callers. See db.js for why that distinction is worth a function. */
   function cdnUrl(asset) {
-    return CONFIG.origins.cdn + '/' + asset.storage_path;
+    return DB.mediaUrl(asset);
   }
 
   function mapRow(row) {
