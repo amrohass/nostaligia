@@ -526,8 +526,13 @@
         /* §7, enforced by posts_approved_has_rights: "nothing goes public without recorded
            provenance and a license." A post missing either CANNOT be approved by anyone,
            so the button says so rather than sending an UPDATE that comes back as a raw
-           constraint violation. The share sheet does not collect these fields until M5,
-           so today this is the state most member uploads arrive in.
+           constraint violation.
+
+           Member uploads now arrive with both — the share sheet asks for them and
+           claim_upload_slot refuses the upload without them (migration 0032). What still
+           reaches this branch is everything that did NOT come through that path: rows
+           predating 0032, and the ~300 seed items the M5 importer will carry, whose rights
+           are whatever they historically are and sometimes unresolved.
 
            Rejecting is still allowed — a post with no rights is exactly the kind a
            moderator needs to be able to turn away. */

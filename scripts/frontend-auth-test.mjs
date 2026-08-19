@@ -196,7 +196,10 @@ console.log('# upload.js — the refusal map');
   // Refusals that originate in the database and are passed through by name.
   for (const name of ['quota_exceeded', 'title_required', 'description_required',
                       'duplicate_object_key', 'invalid_object_key', 'unknown_object',
-                      'terminal_state', 'too_many_attempts', 'unauthenticated']) {
+                      'terminal_state', 'too_many_attempts', 'unauthenticated',
+                      // §7's rights capture — claim_upload_slot, migration 0032.
+                      'license_required', 'invalid_license', 'provenance_required',
+                      'consent_required']) {
     emitted.add(name);
   }
 
@@ -207,6 +210,20 @@ console.log('# upload.js — the refusal map');
   const stale = Object.keys(win.UPLOAD._refusals).filter(name => !emitted.has(name));
   ok(stale.length === 0,
      `and no message maps to a refusal that no longer exists${stale.length ? ' — stale: ' + stale.join(', ') : ''}`);
+
+  // ── The licence vocabulary, against the one that binds ──────────────────
+  // upload.js carries a copy so the sheet can render a dropdown before it has been
+  // refused. The DATABASE decides. If the two drift, a member picks an option they were
+  // offered and gets invalid_license back — a refusal on a value the form handed them,
+  // which is the least explicable failure the upload path can produce.
+  const migration = readFileSync(
+    join(root, 'supabase/migrations/20260819100000_upload_rights.sql'), 'utf8');
+  const declared = /c_licenses\s+constant\s+text\[\]\s*:=\s*array\[([^\]]*)\]/.exec(migration);
+  const fromDb = declared
+    ? [...declared[1].matchAll(/'([^']+)'/g)].map(m => m[1])
+    : [];
+  ok(fromDb.length > 0 && fromDb.join('|') === win.UPLOAD.LICENSES.join('|'),
+     `the licence vocabulary matches migration 0032 (db: ${fromDb.join(', ') || 'NOT FOUND'})`);
 }
 
 // ── 7 · every message key exists in BOTH languages ──────────────────────────
@@ -231,7 +248,13 @@ console.log('# upload.js — the refusal map');
                    'auth.err.rateLimit', 'auth.err.unconfirmed', 'auth.err.invalidEmail',
                    'auth.err.generic', 'auth.err.offline', 'auth.err.notConfigured',
                    'auth.err.signedOut', 'auth.confirmSent', 'auth.working',
-                   'up.err.robotUnavailable', 'up.err.noFile']) keys.add(k);
+                   'up.err.robotUnavailable', 'up.err.noFile',
+                   // §7's rights block in the share sheet.
+                   'share.fLicense', 'share.fLicenseNote', 'share.fProvenance',
+                   'share.fProvenancePh', 'share.consent']) keys.add(k);
+  // One label per licence, from the vocabulary itself — a licence added without a
+  // translation would otherwise render as its own identifier.
+  for (const id of winU.UPLOAD.LICENSES) keys.add('license.' + id);
 
   const missing = [...keys].filter(k => {
     const ar = winI.I18N.t(k);

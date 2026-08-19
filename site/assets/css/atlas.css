@@ -887,6 +887,11 @@ html[lang="en"] .pact { font: 400 11.5px/1.7 var(--font-en); }
 .checkbox { display: flex; align-items: center; gap: 8px; font: 400 12.5px var(--font-ar); color: var(--ink-70); }
 html[lang="en"] .checkbox { font: 400 12px var(--font-en); }
 .checkbox input { width: 16px; height: 16px; accent-color: var(--olive); }
+/* The §7 consent line is a sentence, not a word — it wraps, and a centred box next to two
+   wrapped lines sits in the middle of nowhere. flex: none because a shrinking checkbox
+   stops looking like one. */
+.checkbox--wrap { align-items: flex-start; line-height: 1.6; }
+.checkbox--wrap input { flex: none; margin-block-start: 2px; }
 
 /* .rule was the "or" divider above the social buttons. Both went with M1 piece 4 — see
    §2. Nothing else used it. */

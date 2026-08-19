@@ -752,6 +752,25 @@
       return el('option', { value: String(d), selected: d === 1960 ? true : null, text: t('decade.' + d) });
     }));
 
+    /* §7's three, asked here because §7 says "captured at upload" — and because a licence
+       collected afterwards is a licence collected from someone who has already lost
+       interest. claim_upload_slot refuses the upload without them (migration 0032); the
+       `required` attributes below are a courtesy that saves a round-trip.
+
+       The vocabulary comes from UPLOAD.LICENSES rather than being written out here: the
+       list the sheet OFFERS and the list the database ACCEPTS drifting apart would show up
+       as an invalid_license refusal on a value the member was handed. */
+    var licenseSelect = el('select.input', { required: true },
+      UPLOAD.LICENSES.map(function (id, i) {
+        return el('option', { value: id, selected: i === 0 ? true : null, text: t('license.' + id) });
+      }));
+
+    var provenanceInput = el('input.input', {
+      type: 'text', required: true, placeholder: t('share.fProvenancePh')
+    });
+
+    var consentBox = el('input', { type: 'checkbox', required: true });
+
     var busy = false;
 
     var form = el('form.dialog.dialog--sheet', {
@@ -777,6 +796,14 @@
         var draft = { kind: kind === 'voice' ? 'voice' : kind === 'event' ? 'event' : 'media' };
         draft['title_' + lang] = titleValue;
         draft['body_' + lang] = storyValue;
+
+        /* §7. Only `granted` is sent — granted_at is stamped by the database, because a
+           timestamp evidencing that someone agreed at a moment is worthless if the person
+           being evidenced supplied it, and may_withdraw is a right §7 grants rather than
+           one the contributor elects. */
+        draft.license = licenseSelect.value;
+        draft.provenance = provenanceInput.value;
+        draft.consent = { granted: consentBox.checked };
 
         busy = true;
         if (submitButton) { submitButton.disabled = true; submitButton.textContent = t('auth.working'); }
@@ -841,6 +868,21 @@
         el('span', { text: t('share.drop') }),
         el('span.dropzone__note', { text: t('share.dropNote') }),
         fileInput
+      ]),
+      el('div.field-pair', null, [
+        el('div.field', null, [
+          el('label.field__label', { text: t('share.fLicense') }),
+          licenseSelect,
+          el('p.field__hint', { text: t('share.fLicenseNote') })
+        ]),
+        el('div.field', null, [
+          el('label.field__label', { text: t('share.fProvenance') }),
+          provenanceInput
+        ])
+      ]),
+      el('label.checkbox.checkbox--wrap', null, [
+        consentBox,
+        el('span', { text: t('share.consent') })
       ]),
       captchaSlot,
       progress,

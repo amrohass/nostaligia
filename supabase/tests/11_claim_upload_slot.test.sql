@@ -12,8 +12,8 @@
 begin;
 create extension if not exists pgtap;
 
--- 3 privileges · 7 refusals · 6 happy path · 4 atomicity
-select plan(20);
+-- 3 privileges · 13 refusals · 10 happy path · 4 atomicity
+select plan(30);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-0000000000a1', 'slot-one@t.local'),
@@ -43,6 +43,14 @@ begin
 end;
 $fn$;
 
+-- consent is not granted to `authenticated` at all (0015) — it is reachable only through
+-- posts_full(), by the author or a moderator. An owner-rights observer is the only way to
+-- look at what 0032 actually stamped.
+create function pg_temp.consent_of(p_key text) returns jsonb
+language sql stable security definer set search_path = '' as $fn$
+  select p.consent from public.posts p where p.ingest_object_key = p_key;
+$fn$;
+
 -- ═══ 1–3 · Privileges ════════════════════════════════════════
 
 select ok(
@@ -61,7 +69,7 @@ select ok(
     'public.claim_upload_slot(bigint,text,public.post_kind,jsonb)', 'execute'),
   'a signed-in member can — it runs as them, by design');
 
--- ═══ 4–10 · Refusals ═════════════════════════════════════════
+-- ═══ 4–16 · Refusals ═════════════════════════════════════════
 
 set local role authenticated;
 set local request.jwt.claims to '';
@@ -110,17 +118,76 @@ select is(
   'description_required',
   'whitespace is not a description — §9 makes it required archival metadata');
 
--- Not one of the five refusals above may have touched the quota.
+-- §7's three, added in 0032. Before it, a member upload arrived with no licence and no
+-- provenance, and posts_approved_has_rights then made it unapprovable — the lifecycle ran
+-- to the last step and stopped there for every member, permanently.
+select is(
+  public.claim_upload_slot(1024,
+    '00000000-0000-0000-0000-0000000000a1/k1', 'media',
+    '{"title_en":"t","body_en":"b"}') ->> 'reason',
+  'license_required',
+  'a draft with no per-item licence is refused (§7)');
+
+-- The allowlist is the point of asking. A contributor who could type anything into the
+-- field would be granting terms nobody can act on, which is the same as granting none.
+select is(
+  public.claim_upload_slot(1024,
+    '00000000-0000-0000-0000-0000000000a1/k1', 'media',
+    '{"title_en":"t","body_en":"b","license":"free to use","provenance":"p",
+      "consent":{"granted":true}}') ->> 'reason',
+  'invalid_license',
+  '...and a licence outside the vocabulary is refused, not stored');
+
+-- Named, because a client that cannot discover the vocabulary cannot present it.
+select is(
+  public.claim_upload_slot(1024,
+    '00000000-0000-0000-0000-0000000000a1/k1', 'media',
+    '{"title_en":"t","body_en":"b","license":"free to use","provenance":"p",
+      "consent":{"granted":true}}') -> 'licenses',
+  '["CC-BY-SA-4.0","CC0-1.0","rights-reserved"]'::jsonb,
+  '...and the refusal names what would have been accepted');
+
+select is(
+  public.claim_upload_slot(1024,
+    '00000000-0000-0000-0000-0000000000a1/k1', 'media',
+    '{"title_en":"t","body_en":"b","license":"CC0-1.0","provenance":"  "}') ->> 'reason',
+  'provenance_required',
+  'whitespace is not provenance either — §7 asks where this came from');
+
+select is(
+  public.claim_upload_slot(1024,
+    '00000000-0000-0000-0000-0000000000a1/k1', 'media',
+    '{"title_en":"t","body_en":"b","license":"CC0-1.0","provenance":"family album"}'
+  ) ->> 'reason',
+  'consent_required',
+  '...and an upload with no affirmed consent is refused');
+
+-- The discriminating half. `"true"` is a string, not the boolean, and a cast would have
+-- accepted it — and `'nonsense'::boolean` would have RAISED, turning a refusal into a 500.
+-- Anything that is not the boolean true is a refusal.
+select is(
+  public.claim_upload_slot(1024,
+    '00000000-0000-0000-0000-0000000000a1/k1', 'media',
+    '{"title_en":"t","body_en":"b","license":"CC0-1.0","provenance":"family album",
+      "consent":{"granted":"true"}}') ->> 'reason',
+  'consent_required',
+  '...including a consent that merely looks like one');
+
+-- Not one of the eleven refusals above may have touched the quota. This is the whole
+-- reason they are pre-checks and not constraint violations: a member who forgets a licence
+-- must not have spent one of their twenty daily uploads finding that out.
 select is(
   pg_temp.quota_count('00000000-0000-0000-0000-0000000000a1'), 0,
   'and none of those refusals charged the quota');
 
--- ═══ 11–16 · The happy path ══════════════════════════════════
+-- ═══ 17–26 · The happy path ══════════════════════════════════
 
+-- granted_at is sent deliberately wrong. 0032 stamps its own; test 24 is that it did.
 select is(
   (public.claim_upload_slot(1048576,
      '00000000-0000-0000-0000-0000000000a1/k1', 'voice',
-     '{"title_ar":"عنوان","body_ar":"وصف","license":"CC-BY-SA-4.0","provenance":"family album"}'
+     '{"title_ar":"عنوان","body_ar":"وصف","license":"CC-BY-SA-4.0","provenance":"family album",
+       "consent":{"granted":true,"granted_at":"1999-01-01T00:00:00Z","may_withdraw":false}}'
    ) ->> 'allowed')::boolean,
   true,
   'a well-formed claim succeeds');
@@ -148,22 +215,50 @@ select is(
 select is(
   pg_temp.post_field('00000000-0000-0000-0000-0000000000a1/k1', 'provenance'),
   'family album',
-  '...and so are provenance and licence');
+  '...and so is provenance');
+
+select is(
+  pg_temp.post_field('00000000-0000-0000-0000-0000000000a1/k1', 'license'),
+  'CC-BY-SA-4.0',
+  '...and the licence, verbatim from the vocabulary');
+
+select is(
+  pg_temp.consent_of('00000000-0000-0000-0000-0000000000a1/k1') -> 'granted',
+  'true'::jsonb,
+  '...and the affirmation itself');
+
+-- The one field the client does not get to write. A timestamp on a record whose entire
+-- purpose is to evidence that someone agreed at a particular moment is worth nothing if
+-- the person being evidenced supplied it.
+select isnt(
+  pg_temp.consent_of('00000000-0000-0000-0000-0000000000a1/k1') ->> 'granted_at',
+  '1999-01-01T00:00:00Z',
+  '...with granted_at stamped by the server, not taken from the draft');
+
+-- Sent as false. §7 grants the right to withdraw; it is not the contributor's to decline,
+-- and a stored `false` would be a record of them having done so.
+select is(
+  pg_temp.consent_of('00000000-0000-0000-0000-0000000000a1/k1') -> 'may_withdraw',
+  'true'::jsonb,
+  '...and may_withdraw set regardless of what the draft asked for (§7)');
 
 select is(
   pg_temp.quota_count('00000000-0000-0000-0000-0000000000a1'), 1,
   '...and the quota was charged exactly once');
 
--- ═══ 17–20 · Atomicity ═══════════════════════════════════════
+-- ═══ 27–30 · Atomicity ═══════════════════════════════════════
 
 set local role authenticated;
 set local request.jwt.claims to
   '{"sub":"00000000-0000-0000-0000-0000000000a1","role":"authenticated"}';
 
+-- Fully formed from here down: 0032's rights checks sit BEFORE the duplicate check and
+-- before the charge, so a draft missing them would never reach either.
 select is(
   public.claim_upload_slot(1024,
     '00000000-0000-0000-0000-0000000000a1/k1', 'media',
-    '{"title_en":"t","body_en":"b"}') ->> 'reason',
+    '{"title_en":"t","body_en":"b","license":"CC0-1.0","provenance":"p",
+      "consent":{"granted":true}}') ->> 'reason',
   'duplicate_object_key',
   'one post per object, and the second claim is refused rather than aborting');
 
@@ -178,7 +273,8 @@ select is(
 select is(
   public.claim_upload_slot(2000000000,
     '00000000-0000-0000-0000-0000000000a1/k2', 'media',
-    '{"title_en":"t","body_en":"b"}') ->> 'reason',
+    '{"title_en":"t","body_en":"b","license":"CC0-1.0","provenance":"p",
+      "consent":{"granted":true}}') ->> 'reason',
   'over_daily_bytes',
   'a quota refusal is passed through with its own reason intact');
 

@@ -283,7 +283,8 @@ export async function handleRequest(req: Request): Promise<Response> {
       ? 403
       : reason === "duplicate_object_key"
       ? 409
-      : ["invalid_object_key", "title_required", "description_required", "invalid_bytes"]
+      : ["invalid_object_key", "title_required", "description_required", "invalid_bytes",
+         "license_required", "invalid_license", "provenance_required", "consent_required"]
           .includes(reason)
       ? 400
       : 429;
@@ -292,6 +293,9 @@ export async function handleRequest(req: Request): Promise<Response> {
       limit_count: slot?.limit_count,
       bytes: slot?.bytes,
       limit_bytes: slot?.limit_bytes,
+      // The vocabulary invalid_license was measured against. A client that cannot
+      // discover it cannot offer it, and a hardcoded second copy would drift.
+      licenses: slot?.licenses,
     });
   }
 

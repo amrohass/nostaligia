@@ -47,6 +47,14 @@
     'audio/wav': 'audio', 'audio/webm': 'audio', 'audio/flac': 'audio'
   };
 
+  /* The licence vocabulary the share sheet offers, in the order it offers them.
+
+     The DATABASE is the authority — migration 0032's c_licenses is what binds, and a value
+     outside it comes back as `invalid_license` carrying the real list. This copy exists
+     because a dropdown cannot be rendered from a refusal it has not received yet. If the
+     two ever disagree, the member is refused and this list is the thing that is wrong. */
+  var LICENSES = ['CC-BY-SA-4.0', 'CC0-1.0', 'rights-reserved'];
+
   /* Every refusal either endpoint can return, mapped to an i18n key.
 
      Exhaustive on purpose. An unmapped refusal reaches the member as "something went
@@ -74,6 +82,14 @@
     quota_exceeded: 'up.err.quota',
     title_required: 'up.err.title',
     description_required: 'up.err.description',
+    /* §7's rights capture, enforced in claim_upload_slot (migration 0032). The sheet marks
+       all three required, so a member should never see these — which is exactly why they
+       are mapped: the one caller who reaches them has bypassed the form, and an
+       unexplained "something went wrong" would be a lie about a rule they can satisfy. */
+    license_required: 'up.err.license',
+    invalid_license: 'up.err.licenseUnknown',
+    provenance_required: 'up.err.provenance',
+    consent_required: 'up.err.consent',
     duplicate_object_key: 'up.err.generic',
     quota_check_failed: 'up.err.generic',
     signing_failed: 'up.err.generic',
@@ -246,6 +262,7 @@
 
   global.UPLOAD = {
     submit: submit,
+    LICENSES: LICENSES,
     /* Exposed so the tests can assert the refusal map is exhaustive against the set of
        error names the two functions can actually emit, rather than against a copy. */
     _refusals: REFUSALS,

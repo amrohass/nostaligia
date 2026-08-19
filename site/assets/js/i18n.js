@@ -153,6 +153,14 @@
     'up.err.title':      { ar: 'العنوان مطلوب.', en: 'A title is required.' },
     'up.err.description':{ ar: 'الوصف مطلوب — هو ما يجعل المادة قابلة للبحث لاحقًا.',
                            en: 'A description is required — it is what makes this findable later.' },
+    'up.err.license':    { ar: 'اختر رخصة للمادة قبل الإرسال.',
+                           en: 'Choose a licence for this material before sending.' },
+    'up.err.licenseUnknown': { ar: 'الرخصة المختارة غير معروفة. اختر واحدة من القائمة.',
+                               en: 'That licence is not one we can record. Pick one from the list.' },
+    'up.err.provenance': { ar: 'من أين جاءت هذه المادة؟ الحقل مطلوب.',
+                           en: 'Where did this come from? The field is required.' },
+    'up.err.consent':    { ar: 'أكّد أنّ لديك الحقّ في مشاركة هذه المادة.',
+                           en: 'Confirm that you have the right to share this material.' },
     'up.err.alreadyDone':{ ar: 'عولجت هذه المساهمة سابقًا.', en: 'This contribution was already processed.' },
     'up.err.retriesSpent': { ar: 'استُنفدت محاولات المعالجة لهذا الملف. ارفعه من جديد.',
                              en: 'Processing attempts for this file are used up. Upload it again.' },
@@ -192,6 +200,25 @@
     // contradicted it. A limit shown lower than the one enforced turns an allowed upload
     // into one the member never attempts.
     'share.dropNote': { ar: 'JPG · PNG · MP3 · MP4 — حتى ٢٠٠ ميغابايت', en: 'JPG · PNG · MP3 · MP4 — up to 200 MB' },
+
+    // ── Rights, asked at upload (§7) ────────────────────────
+    // The labels are deliberately plain-language. "CC-BY-SA-4.0" is the value stored and
+    // exported; it is not a thing to put in front of a contributor and expect a decision.
+    'share.fLicense': { ar: 'رخصة الاستخدام', en: 'Licence' },
+    'share.fLicenseNote': { ar: 'ماذا يحقّ للآخرين أن يفعلوا بهذه المادة؟',
+                            en: 'What may others do with this material?' },
+    'license.CC-BY-SA-4.0': { ar: 'يجوز إعادة استخدامها مع ذكر المصدر وبالشروط نفسها',
+                              en: 'Reusable with credit, on the same terms' },
+    'license.CC0-1.0': { ar: 'ملك عام — يجوز استخدامها بلا شروط',
+                         en: 'Public domain — usable without conditions' },
+    'license.rights-reserved': { ar: 'للأرشيف أن ينشرها فقط — أي استخدام آخر يحتاج إذنًا',
+                                 en: 'The archive may publish it — any other use needs permission' },
+    'share.fProvenance': { ar: 'من أين جاءت؟', en: 'Where did it come from?' },
+    'share.fProvenancePh': { ar: 'مثال: ألبوم جدّي · صوّرتها بنفسي · من أرشيف العائلة',
+                             en: "e.g. my grandfather's album · I took it myself · family archive" },
+    'share.consent': { ar: 'أؤكّد أنّ لديّ الحقّ في مشاركة هذه المادة، وأنّ بإمكاني سحبها لاحقًا.',
+                       en: 'I confirm I have the right to share this material, and that I may withdraw it later.' },
+
     'share.review': { ar: 'تمرّ كل مساهمة بمراجعة الفريق قبل النشر. نتعهّد بالردّ خلال ٤٨ ساعة.',
                       en: 'Every contribution is reviewed by the team before publishing. We promise a reply within 48 hours.' },
     'share.submit': { ar: 'أرسل للمراجعة', en: 'Send for review' },

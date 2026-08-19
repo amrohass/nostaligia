@@ -59,9 +59,11 @@ values
   ('00000000-0000-0000-0000-00000000cc04', 'media', 'already approved', 'done',
    'CC-BY-SA-4.0', 'family album', '00000000-0000-0000-0000-0000000000e1',
    '00000000-0000-0000-0000-0000000000e1/approved', 'ready', 'approved', '00000000-0000-0000-0000-0000000000e2', now(), repeat('a', 64)),
-  -- Reviewable, but with no recorded rights. Exactly what a member upload looks like
-  -- today: claim_upload_slot accepts both fields and the share sheet does not collect
-  -- them until M5.
+  -- Reviewable, but with no recorded rights. No longer reachable through the upload path
+  -- — 0032 refuses a claim without licence, provenance and consent — but still reachable
+  -- by every other route into this table: rows predating 0032, and the M5 importer's seed
+  -- items, whose rights are sometimes genuinely unresolved. The constraint is what the
+  -- dashboard's disabled publish button is reading.
   ('00000000-0000-0000-0000-00000000cc05', 'media', 'no rights recorded', 'reviewable',
    null, null, '00000000-0000-0000-0000-0000000000e1',
    '00000000-0000-0000-0000-0000000000e1/norights', 'ready', 'pending', null, null, null);
@@ -142,8 +144,8 @@ select lives_ok($$
 $$, 'a moderator approves by setting status alone');
 
 -- §7's floor, and a real constraint on the dashboard: a post with no recorded licence or
--- provenance CANNOT be approved, by anyone, ever. The share sheet does not collect either
--- field until M5, so this is the state most member uploads are in today — which is why the
+-- provenance CANNOT be approved, by anyone, ever. 0032 closed the upload path against it,
+-- but the constraint is on the TABLE and every other route in is still open — so the
 -- publish button has to refuse it in the UI with a reason, rather than sending an UPDATE
 -- that comes back as a raw constraint violation.
 select throws_ok($$
