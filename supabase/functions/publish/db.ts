@@ -63,17 +63,19 @@ export class PostgrestDb implements Db {
     await this.call("release_publish_lease", { p_holder: holder });
   }
 
-  recordRelease(path: string, contentRevision: number, counterRevision: number) {
+  recordRelease(path: string, contentRevision: number, counterRevision: number, holder: string) {
     return this.call<{ recorded: boolean; id?: string; reason?: string }>("record_release", {
       p_path: path,
       p_content_revision: contentRevision,
       p_counter_revision: counterRevision,
+      p_holder: holder,
     });
   }
 
-  activateRelease(id: string) {
-    return this.call<{ activated: boolean; previous_path?: string | null }>("activate_release", {
-      p_id: id,
-    });
+  activateRelease(id: string, holder: string) {
+    return this.call<{ activated: boolean; reason?: string; previous_path?: string | null }>(
+      "activate_release",
+      { p_id: id, p_holder: holder },
+    );
   }
 }

@@ -37,8 +37,8 @@ begin;
 create extension if not exists pgtap;
 
 -- 4 privileges · 9 the signal · 5 the debounce · 3 the mid-build race
--- · 3 the tick and the dispatch · 2 the cron job · 1 the binding
-select plan(27);
+-- · 3 the tick and the dispatch · 2 the cron job · 1 the binding · 1 the refusal retries
+select plan(28);
 
 -- ── Fixtures ─────────────────────────────────────────────────
 
@@ -150,18 +150,24 @@ create function pg_temp.approve(p_id uuid) returns void language sql as $fn$
    where id = p_id;
 $fn$;
 
-create function pg_temp.publish_at(p_path text, p_c bigint, p_n bigint) returns void
-language plpgsql as $fn$
+-- 0038 requires a live lease at BOTH ledger calls, so every simulated publish here holds
+-- one. A single holder throughout, so a re-claim is 'reheld' rather than refused — the
+-- alternative is releasing and re-taking around each call, which would add lease churn this
+-- file is not about.
+create function pg_temp.publish_at(p_path text, p_c bigint, p_n bigint, p_holder uuid)
+returns void language plpgsql as $fn$
 declare v_id uuid;
 begin
-  select (public.record_release(p_path, p_c, p_n) ->> 'id')::uuid into v_id;
-  perform public.activate_release(v_id);
+  select (public.record_release(p_path, p_c, p_n, p_holder) ->> 'id')::uuid into v_id;
+  perform public.activate_release(v_id, p_holder);
 end $fn$;
 
-/** Record and activate a release stamped with the revision as of right now. */
-create function pg_temp.publish_now(p_path text) returns void language sql as $fn$
-  select pg_temp.publish_at(p_path, pg_temp.content(), pg_temp.counter());
-$fn$;
+/** Claim, then record and activate a release stamped with the revision as of right now. */
+create function pg_temp.publish_now(p_path text) returns void language plpgsql as $fn$
+begin
+  perform public.claim_publish_lease('00000000-0000-0000-0000-00000000ce01', interval '5 minutes', 'test publish');
+  perform pg_temp.publish_at(p_path, pg_temp.content(), pg_temp.counter(), '00000000-0000-0000-0000-00000000ce01');
+end $fn$;
 
 -- pg_net's queue is a real table shared with the cron job that is running in this database
 -- right now, so every assertion about it is a DELTA against this baseline rather than a
@@ -320,7 +326,8 @@ select pg_temp.approve('00000000-0000-0000-0000-0000000000c4');
 
 select pg_temp.publish_at('/v/2026-08-19T12:10:00Z/',
                           (select (lease ->> 'content_revision')::bigint from claimed),
-                          (select (lease ->> 'counter_revision')::bigint from claimed));
+                          (select (lease ->> 'counter_revision')::bigint from claimed),
+                          '00000000-0000-0000-0000-00000000ce01');
 
 -- 20 · Stamped with the CLAIM-time revision, the approval is still outstanding and gets
 -- published on the next tick. One extra release is the whole cost of being right here.
@@ -412,6 +419,27 @@ select set_eq(
   $q$,
   'every table the publisher reads has a trigger that says when it changed'
 );
+
+-- ═══ 28 · A refused write leaves the next tick able to retry ══
+--
+-- 0038 refuses record_release when the caller no longer holds the lease. The refusal has to
+-- come BEFORE the insert, and this is the assertion that says so from the outside: no
+-- release row means the ACTIVE release keeps its old watermark, so publish_pending still
+-- reports work outstanding and the next cron tick picks it up with a live lease.
+--
+-- Had the refusal come after the insert, the abandoned row would carry the claim-time
+-- revision of a build that never went live, and activating it later would stamp the
+-- watermark forward over work nobody published. Nothing in the return value distinguishes
+-- the two orderings, which is why this is asserted against the archive instead.
+
+select public.release_publish_lease('00000000-0000-0000-0000-00000000ce01');
+
+select is(
+  public.record_release('/v/2026-08-19T12:20:00Z/', pg_temp.content(), pg_temp.counter(),
+                        '00000000-0000-0000-0000-00000000ce01') ->> 'reason'
+    || ' / ' || pg_temp.reason(),
+  'no_lease / content_changed',
+  'a refused record changes nothing — the archive is still pending and the next tick retries');
 
 select * from finish();
 rollback;

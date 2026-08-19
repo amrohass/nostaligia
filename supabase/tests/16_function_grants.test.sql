@@ -113,8 +113,12 @@ select set_eq(
     ('claim_publish_lease(p_holder uuid, p_ttl interval, p_note text) -> service_role'),
     ('renew_publish_lease(p_holder uuid, p_ttl interval) -> service_role'),
     ('release_publish_lease(p_holder uuid) -> service_role'),
-    ('record_release(p_path text, p_content_revision bigint, p_counter_revision bigint) -> service_role'),
-    ('activate_release(p_id uuid) -> service_role'),
+    -- 0038: both carry the lease holder now. publish_lease_fault, which does the checking,
+    -- appears nowhere in this matrix — its only callers are these two, which are SECURITY
+    -- DEFINER and run as its owner, so a grant would widen the surface without enabling
+    -- anything.
+    ('record_release(p_path text, p_content_revision bigint, p_counter_revision bigint, p_holder uuid) -> service_role'),
+    ('activate_release(p_id uuid, p_holder uuid) -> service_role'),
     ('active_release() -> service_role'),
 
     -- The publisher's read side (0035). §2's read path is "zero database reads for public

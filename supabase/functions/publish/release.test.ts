@@ -83,7 +83,11 @@ class FakeDb implements Db {
   contentRevision = 7;
   counterRevision = 3;
   /** What record_release was actually given — the assertion target for the watermark. */
-  recorded: Array<{ path: string; content: number; counter: number }> = [];
+  recorded: Array<{ path: string; content: number; counter: number; holder: string }> = [];
+  /** 0038: the ledger refuses a publisher whose lease lapsed. Both halves are switchable. */
+  recordReason = "duplicate_path";
+  activateOk = true;
+  activateHolder: string | null = null;
 
   publishablePosts() {
     // Read AFTER the claim, so this is where a mid-build approval would land. Bumping the
@@ -101,17 +105,22 @@ class FakeDb implements Db {
     });
   }
   releaseLease(holder: string) { this.released.push(holder); return Promise.resolve(); }
-  recordRelease(path: string, content: number, counter: number) {
-    this.recorded.push({ path, content, counter });
+  recordRelease(path: string, content: number, counter: number, holder: string) {
+    this.recorded.push({ path, content, counter, holder });
     return Promise.resolve(
       this.recordOk
         ? { recorded: true, id: "rel-1", path }
-        : { recorded: false, reason: "duplicate_path" },
+        : { recorded: false, reason: this.recordReason },
     );
   }
-  activateRelease(id: string) {
+  activateRelease(id: string, holder: string) {
     this.activated.push(id);
-    return Promise.resolve({ activated: true, previous_path: this.previousPath });
+    this.activateHolder = holder;
+    return Promise.resolve(
+      this.activateOk
+        ? { activated: true, previous_path: this.previousPath }
+        : { activated: false, reason: "lease_expired" },
+    );
   }
 }
 
@@ -322,4 +331,38 @@ Deno.test("a refused lease records nothing at all", async () => {
   const out = await publish(d);
   assertEquals(out.published, false, "published while another writer held the lease");
   assertEquals(d.db.recorded.length, 0, "recorded a release without holding the lease");
+});
+
+/* ── 7 · The lease covers the WRITES, not just the start (0038) ── */
+
+// The holder reaches both ledger calls. Without it the database cannot tell a publisher
+// that still holds its lease from one whose TTL lapsed forty seconds ago.
+Deno.test("the lease holder is carried into record and activate, not just the claim", async () => {
+  const d = deps();
+  await publish(d);
+  assertEquals(d.db.recorded[0].holder, "holder-1", "record_release was not told who is publishing");
+  assertEquals(d.db.activateHolder, "holder-1", "activate_release was not told who is publishing");
+});
+
+// The window 0038 leaves open, reported rather than hidden. The manifest object is written
+// before activate_release — deliberately, so the ledger can never claim a release the
+// archive is not serving — which means a refusal here leaves the object ahead of the row.
+// An operator has to be told; a `published: true` would be a lie about which release is live.
+Deno.test("a flip refused for a lapsed lease is reported, not swallowed", async () => {
+  const d = deps();
+  d.db.activateOk = false;
+
+  const out = await publish(d);
+  assertEquals(out.published, false, "reported success while the ledger refused the flip");
+  assertEquals(out.reason, "lease_expired", "the refusal reason was lost");
+});
+
+// Constraint: a refusal must leave the next tick able to retry. Nothing was activated, so
+// the ACTIVE release keeps its old watermark and publish_pending still says pending —
+// 20_publish_cron test 28 asserts that half against a real database.
+Deno.test("...and the lease is still released, so the next tick is not locked out", async () => {
+  const d = deps();
+  d.db.activateOk = false;
+  await publish(d);
+  assertEquals(d.db.released.join(","), "holder-1", "a refused flip left the lease held");
 });

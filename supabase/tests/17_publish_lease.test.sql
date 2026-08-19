@@ -26,7 +26,8 @@ begin;
 create extension if not exists pgtap;
 
 -- 4 privileges · 8 lease semantics · 1 the lock itself · 6 the ledger · 2 the watermark
-select plan(21);
+-- · 6 the lease covers the writes (0038)
+select plan(27);
 
 -- ═══ 1–4 · Nobody but the publisher ══════════════════════════
 --
@@ -42,7 +43,7 @@ select ok(
   '...nor can a signed-in member');
 
 select ok(
-  not has_function_privilege('media_worker', 'public.activate_release(uuid)', 'execute'),
+  not has_function_privilege('media_worker', 'public.activate_release(uuid,uuid)', 'execute'),
   '...nor can the media worker flip the pointer');
 
 select ok(
@@ -135,12 +136,12 @@ select is(
 -- ═══ 14–19 · The release ledger ══════════════════════════════
 
 select is(
-  public.record_release('not-a-release-path', 0, 0) ->> 'reason',
+  public.record_release('not-a-release-path', 0, 0, '00000000-0000-0000-0000-00000000aa01') ->> 'reason',
   'invalid_path',
   'a release path that is not /v/{timestamp}/ is refused');
 
 select is(
-  (public.record_release('/v/2026-08-19T12:00:00Z/', 4, 2) -> 'recorded')::text,
+  (public.record_release('/v/2026-08-19T12:00:00Z/', 4, 2, '00000000-0000-0000-0000-00000000aa01') -> 'recorded')::text,
   'true',
   'a well-formed one is recorded');
 
@@ -152,19 +153,19 @@ select is(
   '...and is NOT live — activation is a separate, deliberate step');
 
 select is(
-  public.record_release('/v/2026-08-19T12:00:00Z/', 4, 2) ->> 'reason',
+  public.record_release('/v/2026-08-19T12:00:00Z/', 4, 2, '00000000-0000-0000-0000-00000000aa01') ->> 'reason',
   'duplicate_path',
   'recording the same path twice is refused, not left to abort the publisher''s transaction');
 
 -- The flip. Two releases, one active, and the index makes any other state unrepresentable.
-select public.record_release('/v/2026-08-19T13:00:00Z/', 9, 5);
+select public.record_release('/v/2026-08-19T13:00:00Z/', 9, 5, '00000000-0000-0000-0000-00000000aa01');
 
 select public.activate_release(
-  (select id from public.releases where path = '/v/2026-08-19T12:00:00Z/'));
+  (select id from public.releases where path = '/v/2026-08-19T12:00:00Z/'), '00000000-0000-0000-0000-00000000aa01');
 
 select is(
   public.activate_release(
-    (select id from public.releases where path = '/v/2026-08-19T13:00:00Z/')) ->> 'previous_path',
+    (select id from public.releases where path = '/v/2026-08-19T13:00:00Z/'), '00000000-0000-0000-0000-00000000aa01') ->> 'previous_path',
   '/v/2026-08-19T12:00:00Z/',
   'the flip returns what was live before it — rollback is one call, not an investigation');
 
@@ -193,6 +194,99 @@ select is(
   public.claim_publish_lease('00000000-0000-0000-0000-00000000aa01') ? 'content_revision',
   true,
   'and the claim reports the revision it was taken at, for the release to be stamped with');
+
+-- ═══ 22–27 · The lease covers the WRITES, not just the start ══
+--
+-- 0034 shipped a lease that governed who may BEGIN a publish and said nothing about who may
+-- finish one. record_release and activate_release took no holder and never read the row, so
+-- the guarded step was the cheap one and the two that touch the archive were open. 0038
+-- closes that.
+--
+-- The sequence below is the real failure, not an abstract one. It is reachable today:
+-- release.ts never renews its lease, and every release is a full rewrite of every shard, so
+-- a build that outgrows the five-minute TTL is a matter of how large the archive is.
+
+delete from public.releases;
+delete from public.publish_lease;
+
+-- 22–23 · No lease at all. The refusal has to come BEFORE the insert, because a row left
+-- behind by a refused publisher is a row somebody can activate later by id.
+
+select is(
+  public.record_release('/v/2026-08-19T14:00:00Z/', 1, 1, '00000000-0000-0000-0000-00000000aa01') ->> 'reason',
+  'no_lease',
+  'recording a release with no lease at all is refused');
+
+select is(
+  (select count(*)::integer from public.releases), 0,
+  '...and nothing was written — the check runs before the insert, so a retry starts clean');
+
+-- ── A lapses, B takes over and publishes, A finishes late ────
+
+select public.claim_publish_lease('00000000-0000-0000-0000-00000000aa01', interval '5 minutes', 'publisher A');
+
+-- A's build outran its TTL. acquired_at moves back too: a lease that expired was
+-- necessarily taken in the past, and publish_lease_forward refuses the impossible state.
+update public.publish_lease
+   set acquired_at = now() - interval '10 minutes',
+       expires_at  = now() - interval '1 second'
+ where id;
+
+-- B reclaims — which 0034 permits on purpose, so a crashed publisher cannot wedge the
+-- pipeline — and publishes NEWER content built from a NEWER revision.
+select public.claim_publish_lease('00000000-0000-0000-0000-00000000aa02', interval '5 minutes', 'publisher B');
+select public.record_release('/v/2026-08-19T15:00:00Z/', 20, 10, '00000000-0000-0000-0000-00000000aa02');
+select public.activate_release(
+  (select id from public.releases where path = '/v/2026-08-19T15:00:00Z/'), '00000000-0000-0000-0000-00000000aa02');
+
+-- 24–25 · A wakes up and tries to finish. Before 0038 this succeeded.
+
+select is(
+  public.record_release('/v/2026-08-19T14:30:00Z/', 5, 2, '00000000-0000-0000-0000-00000000aa01') ->> 'reason',
+  'not_holder',
+  'the publisher whose lease lapsed cannot record — somebody else holds it now');
+
+select is(
+  (select path from public.releases where active),
+  '/v/2026-08-19T15:00:00Z/',
+  '...and the newer release is still the one being served');
+
+-- 26 · The other half. B records legitimately, THEN its own lease lapses before the flip.
+-- Refused even though the holder matches: once it expired, another publisher may already
+-- have taken it, and "it is still mine" is a belief the row stopped supporting.
+
+select public.record_release('/v/2026-08-19T14:30:00Z/', 5, 2, '00000000-0000-0000-0000-00000000aa02');
+update public.publish_lease
+   set acquired_at = now() - interval '10 minutes',
+       expires_at  = now() - interval '1 second'
+ where id;
+
+select is(
+  public.activate_release(
+    (select id from public.releases where path = '/v/2026-08-19T14:30:00Z/'), '00000000-0000-0000-0000-00000000aa02') ->> 'reason',
+  'lease_expired',
+  'the flip is refused once the lease lapsed, even for the holder that recorded it');
+
+-- ═══ 27 · The counter-test ═══════════════════════════════════
+--
+-- The same two statements activate_release runs, with the lease check removed and nothing
+-- else changed. If this did not flip the stale release over the newer one, the guard above
+-- would be decoration and no test in this file would be able to tell.
+
+create function pg_temp.activate_release_unchecked(p_id uuid) returns void
+language plpgsql as $fn$
+begin
+  update public.releases set active = false where active;
+  update public.releases set active = true where id = p_id;
+end $fn$;
+
+select pg_temp.activate_release_unchecked(
+  (select id from public.releases where path = '/v/2026-08-19T14:30:00Z/'));
+
+select is(
+  (select path from public.releases where active),
+  '/v/2026-08-19T14:30:00Z/',
+  'without the check the SAME flip succeeds, and the stale release wins over the newer one');
 
 select * from finish();
 rollback;

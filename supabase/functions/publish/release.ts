@@ -52,12 +52,24 @@ export interface Db {
     counter_revision?: number;
   }>;
   releaseLease(holder: string): Promise<void>;
+  /**
+   * Both of these carry the holder, and 0038 refuses them without a live lease held by it.
+   *
+   * The lease used to govern who may BEGIN a publish and nothing about who may finish one —
+   * so a publisher whose TTL lapsed mid-build could still flip its now-stale release over a
+   * newer one that another publisher had already put live. Passing the holder is what makes
+   * the lease cover the writes as well as the start.
+   */
   recordRelease(
     path: string,
     contentRevision: number,
     counterRevision: number,
+    holder: string,
   ): Promise<{ recorded: boolean; id?: string; reason?: string }>;
-  activateRelease(id: string): Promise<{ activated: boolean; previous_path?: string | null }>;
+  activateRelease(
+    id: string,
+    holder: string,
+  ): Promise<{ activated: boolean; reason?: string; previous_path?: string | null }>;
 }
 
 export interface Deps {
@@ -187,6 +199,7 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
       path,
       lease.content_revision ?? 0,
       lease.counter_revision ?? 0,
+      holder,
     );
     if (!recorded.recorded || !recorded.id) {
       return { published: false, reason: recorded.reason ?? "record_failed", release: path };
@@ -216,7 +229,22 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
       REDACTIONS_CACHE,
     );
 
-    const flipped = await deps.db.activateRelease(recorded.id);
+    const flipped = await deps.db.activateRelease(recorded.id, holder);
+    if (!flipped.activated) {
+      // The lease lapsed between recording and flipping. The manifest object above already
+      // names this release, but the ledger refused to — and the manifest is what a browser
+      // reads, so the archive HAS moved. Reported as a failure rather than swallowed: this
+      // is the one window where the object and the ledger disagree, and an operator needs
+      // to know which release is actually being served.
+      return {
+        published: false,
+        reason: flipped.reason ?? "activate_failed",
+        release: path,
+        files: files.length,
+        posts: posts.length,
+        rejectedHashes,
+      };
+    }
 
     return {
       published: true,
