@@ -426,8 +426,22 @@ jobs:
       - name: ffmpeg, for the fixture
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
+      # One name for MinIO, resolvable from BOTH sides, and this is not cosmetic.
+      #
+      # R2_ENDPOINT is a single value used by three parties that are not on the same
+      # network: request-upload SIGNS a URL for the harness to use (harness is on the
+      # runner), while publish and takedown FETCH their own URLs from inside the
+      # edge-runtime container. 127.0.0.1 is correct for the first and is the container's
+      # own loopback for the other two — which is how the M2 harness first read "the
+      # derivative is STILL in the bucket after a takedown": the delete had been sent to
+      # nothing at all. The same mistake run 32354171082 made with MEDIA_WORKER_URL.
+      #
+      # So the container name goes everywhere, and the runner is taught to resolve it to
+      # the published port. Docker DNS answers it inside the network; /etc/hosts answers
+      # it outside. One string, two correct answers, and no second variable to keep in step.
       - name: MinIO, with the three buckets §2 names
         run: |
+          echo "127.0.0.1 rma-lifecycle-minio" | sudo tee -a /etc/hosts > /dev/null
           docker run -d --name rma-lifecycle-minio -p 9000:9000 \
             -e MINIO_ROOT_USER=rmatestkey -e MINIO_ROOT_PASSWORD=rmatestsecret123 \
             --entrypoint sh minio/minio \
@@ -452,7 +466,7 @@ jobs:
       - name: Edge Function environment, pointed at MinIO
         run: |
           cat > supabase/functions/.env <<'EOF'
-          R2_ENDPOINT=http://127.0.0.1:9000
+          R2_ENDPOINT=http://rma-lifecycle-minio:9000
           R2_ACCOUNT_ID=lifecycle
           R2_ACCESS_KEY_ID=rmatestkey
           R2_SECRET_ACCESS_KEY=rmatestsecret123
@@ -498,12 +512,11 @@ jobs:
       #   worker → MinIO          container name, same network. MinIO is joined to it below.
       #   worker → PostgREST      Kong's container name and INTERNAL port 8000, not the
       #                           published 54321.
-      #   harness → everything    127.0.0.1 on the published ports. It runs on the runner.
-      #
-      # And the one that looks inconsistent and is not: request-upload keeps
-      # R2_ENDPOINT=127.0.0.1:9000 because it only SIGNS a URL — the PUT is made by the
-      # harness, on the host. The worker signs its own URLs and fetches them itself, so it
-      # needs the name it can resolve. Two processes, two correct answers.
+      #   harness → Supabase      127.0.0.1 on the published ports. It runs on the runner.
+      #   everyone → MinIO        rma-lifecycle-minio, which docker DNS answers inside the
+      #                           network and /etc/hosts answers on the runner. See the MinIO
+      #                           step: request-upload only SIGNS, but publish and takedown
+      #                           FETCH, so one value has to satisfy both sides.
       #
       # NOTE, a real limitation: the worker authenticates to PostgREST with the local
       # SERVICE ROLE key rather than a minted media_worker JWT. complete_ingest is granted
@@ -560,7 +573,7 @@ jobs:
           export SUPABASE_URL=http://127.0.0.1:54321
           export SUPABASE_ANON_KEY="$ANON_KEY"
           export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
-          export R2_ENDPOINT=http://127.0.0.1:9000
+          export R2_ENDPOINT=http://rma-lifecycle-minio:9000
           export R2_ACCOUNT_ID=lifecycle
           export R2_ACCESS_KEY_ID=rmatestkey
           export R2_SECRET_ACCESS_KEY=rmatestsecret123

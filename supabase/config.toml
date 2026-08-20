@@ -50,3 +50,29 @@ verify_jwt = true
 # thing that decides.
 [functions.complete-upload]
 verify_jwt = true
+
+# publish (M2), and it is the ONE function that must not verify a JWT — found by the
+# lifecycle harness, which got
+#
+#     401 {"code":"UNAUTHORIZED_INVALID_JWT_FORMAT"}
+#
+# before a single line of publish/handler.ts ran.
+#
+# Its caller is pg_net, dispatched from bump_publish_revision, and what it carries is
+# PUBLISH_SECRET — a shared secret, not a token. The gateway parses Authorization as a JWT
+# and rejects anything that is not one, so with verify_jwt on, the publisher is unreachable
+# by its own trigger. That would have shipped: nothing else in the repository calls this
+# endpoint, and every unit test calls handleRequest() directly, below the gateway.
+#
+# Turning the gate off does not widen anything. handler.ts compares the secret in constant
+# time and refuses without it, and behind that sits a lease that already refuses a second
+# concurrent publish. The alternative — the service-role key as the bearer, so the gateway
+# is satisfied — would put a key that opens the whole database in a cron row to save a
+# config line, which is the trade §6 exists to refuse.
+[functions.publish]
+verify_jwt = false
+
+# takedown (M2). Verified, unlike publish: its caller is a moderator's browser with a real
+# session, and the guard behind the gate is the role check in the database.
+[functions.takedown]
+verify_jwt = true

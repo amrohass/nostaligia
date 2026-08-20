@@ -212,8 +212,17 @@ async function makeModerator(userId: string): Promise<boolean> {
 }
 
 /** An approval, exactly as admin.js sends it: `status` and nothing else, as the moderator.
-    The trigger supplies approved_by from auth.uid(), and 0042's dispatch hangs off it. */
-async function approve(jwt: string, postId: string): Promise<number> {
+    The trigger supplies approved_by from auth.uid(), and 0042's dispatch hangs off it.
+ *
+ * Returns the status and the body, not just a count. The first CI run of this section
+ * reported "the moderator's approval changed no row" and there was no way to tell an RLS
+ * refusal (200 with an empty array) from a constraint violation (400 with a message) from a
+ * gateway rejection (401) — three different bugs behind one sentence. Same reasoning as
+ * tryFetch above. */
+async function approve(
+  jwt: string,
+  postId: string,
+): Promise<{ rows: number; status: number; detail: string }> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${postId}`, {
     method: "PATCH",
     headers: {
@@ -224,9 +233,13 @@ async function approve(jwt: string, postId: string): Promise<number> {
     },
     body: JSON.stringify({ status: "approved" }),
   });
-  const rows = res.ok ? await res.json() : [];
-  await res.body?.cancel().catch(() => {});
-  return Array.isArray(rows) ? rows.length : 0;
+  const text = await res.text();
+  let rows = 0;
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) rows = parsed.length;
+  } catch { /* not JSON — the detail below carries it */ }
+  return { rows, status: res.status, detail: text.slice(0, 400) };
 }
 
 /** Reads an object out of the public bucket as text, or null when it is not there. */
@@ -505,8 +518,11 @@ ck(await makeModerator(mod.sub), "could not grant the moderator role — the res
 // role-aware caps among them, so the harness carries a session that agrees with the row.
 const modSession = await signIn(`lifecycle-mod-${stamp}@harness.local`);
 
-ck(await approve(modSession.jwt, postId) === 1,
-  "the moderator's approval changed no row — policy 0018 refused it, or the rights are missing");
+const approved = await approve(modSession.jwt, postId);
+ck(
+  approved.rows === 1,
+  `the moderator's approval changed no row: ${approved.status} ${approved.detail}`,
+);
 
 // 0042: approving dispatches the publisher. That POST goes nowhere in this harness — no
 // Vault secret is set, so publish_tick answers not_configured — which is deliberate. The
@@ -557,12 +573,14 @@ const tookDown = await tryFetch(`${SUPABASE_URL}/functions/v1/takedown`, {
   body: JSON.stringify({ post_id: postId, note: "lifecycle harness" }),
 });
 
-// NOT ok: the CDN purger is unconfigured here, and takedown.ts reports ok:false with
-// cdn_reason for exactly that — §8's step 2 cannot be done, and saying so is the whole
-// point of that branch. What has to be true is that step 1 happened anyway.
+// 207, and that is the CORRECT answer rather than a tolerated one. The CDN purger is
+// deliberately unconfigured here, so §8's step 2 cannot be done; handler.ts answers 207 —
+// "the post IS marked and hidden, and some part of the removal did not complete" — which is
+// exactly the honest report. 200 would mean the purge happened, and asserting it would mean
+// asserting something untrue about this environment.
 ck(
-  tookDown.status === 200 || tookDown.status === 502,
-  `takedown answered ${tookDown.status}: ${tookDown.detail}`,
+  tookDown.status === 207,
+  `takedown answered ${tookDown.status}, expected 207 with an unconfigured purger: ${tookDown.detail}`,
 );
 ck(await publicObject(thumbPath) === null, "the derivative is STILL in the bucket after a takedown (§8)");
 
