@@ -69,6 +69,25 @@ const R2_SECRET_ACCESS_KEY = env("R2_SECRET_ACCESS_KEY");
 
 const checks = new Checks();
 
+/**
+ * How many assertions actually executed.
+ *
+ * Checks only records FAILURES, so a run that exits early with nothing wrong is
+ * indistinguishable from a run that verified everything — both report zero failures. That
+ * is not hypothetical here: the first green lifecycle run took 5 seconds where a previous
+ * run took 365, and there was no way to tell "fast because it worked" from "fast because
+ * it stopped". (The 365s turned out to be the FAILURE mode — settle() polling out twice —
+ * so the fast run was probably right, and "probably" is the problem.)
+ *
+ * The floor is asserted in CI, the same argument the database job's harness probe makes:
+ * a suite that can silently shrink is a suite whose green means nothing.
+ */
+let executed = 0;
+function ck(cond: boolean, msg: string): void {
+  executed++;
+  checks.check(cond, msg);
+}
+
 const minio = new URL(MINIO_ENDPOINT);
 const store = new R2Store({
   accountId: R2_ACCOUNT_ID,
@@ -239,17 +258,17 @@ const first = await requestUpload(member.jwt, {
   draft: draft("gps fixture"),
 });
 
-checks.check(first.status === 200, `request-upload refused a valid request: ${first.status} ${JSON.stringify(first.json)}`);
+ck(first.status === 200, `request-upload refused a valid request: ${first.status} ${JSON.stringify(first.json)}`);
 
 const upload = first.json.upload as { url: string; headers: Record<string, string>; method: string } | undefined;
-checks.check(upload !== undefined, "request-upload returned no upload block");
+ck(upload !== undefined, "request-upload returned no upload block");
 
 if (upload) {
   const signedHost = new URL(upload.url).host;
   // THE assertion nothing else in the repository makes. If request-upload ignored
   // R2_ENDPOINT this is `<account>.r2.cloudflarestorage.com` and everything below fails
   // in a way that looks like a network problem. Named here so it does not.
-  checks.check(
+  ck(
     signedHost === minio.host,
     `the presigned URL points at ${signedHost}, not ${minio.host} — request-upload ignored R2_ENDPOINT`,
   );
@@ -273,16 +292,16 @@ if (upload) {
   // status 0 means the host did not answer at all, which is what a URL signed for
   // Cloudflare looks like from a runner with no R2 account. Reported as a failed check
   // rather than an exception, so check 1 above stays the one that names the cause.
-  checks.check(put.ok, `the presigned PUT did not succeed: ${put.status} ${put.detail}`);
+  ck(put.ok, `the presigned PUT did not succeed: ${put.status} ${put.detail}`);
 }
 
 /* ── 3 · complete-upload → the worker → the buckets ─────────── */
 
 const done = await completeUpload(member.jwt, objectKey);
-checks.check(done.status === 200 || done.status === 202, `complete-upload failed: ${done.status} ${JSON.stringify(done.json)}`);
+ck(done.status === 200 || done.status === 202, `complete-upload failed: ${done.status} ${JSON.stringify(done.json)}`);
 
 const settled = await settle(postId);
-checks.check(
+ck(
   settled?.ingest_state === "ready",
   `ingest did not reach 'ready': ${JSON.stringify(settled)}`,
 );
@@ -291,13 +310,13 @@ const assets = await mediaAssets(postId);
 const master = assets.find((a) => a.role === "master");
 const derivatives = assets.filter((a) => a.role !== "master");
 
-checks.check(master !== undefined, "no master row — the preservation copy was never recorded");
-checks.check(derivatives.length > 0, "no derivative rows — nothing was produced for the public bucket");
+ck(master !== undefined, "no master row — the preservation copy was never recorded");
+ck(derivatives.length > 0, "no derivative rows — nothing was produced for the public bucket");
 
 // The bucket split, §6. NOTE: this is the PROXY described at the top of this file — it
 // asserts what our code recorded, not what a CDN would serve. MinIO has no CDN.
-checks.check(master?.bucket === "originals", `the master landed in ${master?.bucket}, not originals`);
-checks.check(
+ck(master?.bucket === "originals", `the master landed in ${master?.bucket}, not originals`);
+ck(
   derivatives.every((d) => d.bucket === "public"),
   `a derivative landed outside public/: ${JSON.stringify(derivatives.map((d) => d.bucket))}`,
 );
@@ -309,7 +328,7 @@ if (master) {
   const gps = readGps(kept);
   // BOTH directions. A pipeline that stripped everything everywhere would pass a naive
   // "no EXIF anywhere" check while destroying the preservation copy §6 exists to keep.
-  checks.check(
+  ck(
     gps !== null,
     "the archival master lost its GPS — originals/ is supposed to be untouched",
   );
@@ -317,11 +336,11 @@ if (master) {
 
 for (const d of derivatives) {
   const bytes = await store.head("public", String(d.storage_path), 65536);
-  checks.check(
+  ck(
     readGps(bytes) === null,
     `a public derivative still carries GPS: ${d.storage_path}`,
   );
-  checks.check(
+  ck(
     indexOfBytes(bytes, gpsWireBytes(RAMALLAH.latitude)) === -1,
     `a public derivative carries the latitude rational verbatim: ${d.storage_path}`,
   );
@@ -338,7 +357,7 @@ const spoof = await requestUpload(member.jwt, {
   bytes: svg.byteLength,
   draft: draft("spoofed png"),
 });
-checks.check(spoof.status === 200, `request-upload refused the declared PNG early: ${spoof.status}`);
+ck(spoof.status === 200, `request-upload refused the declared PNG early: ${spoof.status}`);
 
 const spoofUpload = spoof.json.upload as { url: string; headers: Record<string, string>; method: string } | undefined;
 const spoofKey = String(spoof.json.object_key ?? "");
@@ -350,14 +369,14 @@ if (spoofUpload) {
     headers: spoofUpload.headers,
     body: svg as unknown as BodyInit,
   });
-  checks.check(spoofPut.ok, `the spoofed-PNG PUT did not succeed: ${spoofPut.status} ${spoofPut.detail}`);
+  ck(spoofPut.ok, `the spoofed-PNG PUT did not succeed: ${spoofPut.status} ${spoofPut.detail}`);
   await completeUpload(member.jwt, spoofKey);
   const row = await settle(spoofPost);
-  checks.check(
+  ck(
     row?.ingest_state === "failed",
     `an SVG declared image/png was not refused: ${JSON.stringify(row)}`,
   );
-  checks.check(
+  ck(
     (await mediaAssets(spoofPost)).length === 0,
     "the spoofed SVG produced media_assets rows — bytes reached the public bucket",
   );
@@ -384,18 +403,24 @@ for (let i = 0; i < 22; i++) {
   }
 }
 
-checks.check(exhausted !== null, "the daily upload count never refused — the quota is not a ceiling");
+ck(exhausted !== null, "the daily upload count never refused — the quota is not a ceiling");
 if (exhausted) {
-  checks.check(
+  ck(
     exhausted.json.error === "quota_exceeded",
     `refused, but not as a quota: ${JSON.stringify(exhausted.json)}`,
   );
   // THE assertion. Not "it was refused" — "it was refused before anything was signed".
-  checks.check(
+  ck(
     exhausted.json.upload === undefined,
     "a URL was minted for a request over quota — the refusal is after the signing, not before it",
   );
 }
+
+// Printed BEFORE report(), which exits. CI gates on this number: a run that stops early
+// has zero failures and looks identical to a run that verified everything, which is the
+// hole a count closes. 20 sites, two of them inside the per-derivative loop, so the real
+// figure is 18 plus twice the derivative count.
+console.log(`\nLIFECYCLE checks=${executed} failures=${checks.failures.length}`);
 
 checks.report(
   "lifecycle: all checks passed.\n" +

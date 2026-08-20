@@ -212,6 +212,35 @@ jobs:
             run --allow-read --allow-write --allow-run --allow-env \
             worker/scripts/ladder-fixture.ts --size 3840x2160 --kind video
 
+      # Two points, so the per-job deadline can be DERIVED rather than guessed.
+      #
+      # One measurement cannot separate fixed cost (container start, lavfi generation,
+      # probing) from marginal cost (wall seconds per source second), and §6's ceiling is a
+      # 20-minute master — 400x the correctness fixture. Scaling a single 3-second figure by
+      # 400 would be an assumption wearing a number, so this runs the ladder at two lengths
+      # and reports both; slope and intercept come out of the pair.
+      #
+      # Emitted as ::notice:: on purpose: job logs need a token to read, annotations do not,
+      # so these numbers are recoverable from the API by whoever does the arithmetic.
+      #
+      # WHAT IT STILL DOES NOT SETTLE: this runner has 4 vCPU and Cloud Run is --cpu=2, so
+      # the extrapolation understates production. That factor is applied in the derivation,
+      # not here.
+      - name: Ladder throughput at two source lengths
+        run: |
+          set -euo pipefail
+          for d in 3 30; do
+            out=$(docker run --rm \
+              -v "$PWD/worker/scripts:/app/worker/scripts:ro" \
+              --entrypoint deno rma-media-worker \
+              run --allow-read --allow-write --allow-run --allow-env \
+              worker/scripts/ladder-fixture.ts --size 3840x2160 --kind video --duration "$d")
+            echo "$out"
+            line=$(echo "$out" | grep '^LADDER ' || true)
+            [ -n "$line" ] || { echo "::error::no LADDER line at duration=$d"; exit 1; }
+            echo "::notice title=ladder-throughput::$line"
+          done
+
       - name: ...and the image and audio pipelines
         run: |
           for k in image audio; do
@@ -533,6 +562,18 @@ jobs:
           rc=0
           bash scripts/lifecycle.sh > lifecycle.out 2>&1 || rc=$?
           cat lifecycle.out
+
+          # The count gate, and the reason it exists: a run that stops early records zero
+          # failures and is indistinguishable from a run that verified everything. Exactly
+          # the argument the database job makes about an empty pgTAP suite. 18 fixed
+          # assertions plus two per derivative, so 20 is a floor no partial run reaches.
+          ran=$(grep -oE 'LIFECYCLE checks=[0-9]+' lifecycle.out | grep -oE '[0-9]+' || true)
+          echo "::notice title=lifecycle::assertions executed: ${ran:-none}"
+          if [ "$rc" -eq 0 ] && { [ -z "$ran" ] || [ "$ran" -lt 20 ]; }; then
+            echo "::error::lifecycle passed having run only ${ran:-0} assertions — it stopped early"
+            rc=1
+          fi
+
           if [ "$rc" -ne 0 ]; then
             grep -E '^[[:space:]]*(✗|lifecycle:)' lifecycle.out | while IFS= read -r line; do
               echo "::error title=lifecycle::${line}"

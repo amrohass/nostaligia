@@ -32,6 +32,21 @@ function arg(name: string, fallback: string): string {
 const sizeArg = arg("--size", "320x240");
 const kind = arg("--kind", "video");
 
+// Source length in seconds. Default 3 — what the correctness runs use, long enough to
+// exercise every rung and short enough to be free.
+//
+// It is a FLAG because the per-job deadline has to be derived from throughput at more than
+// one length. A single measurement cannot separate fixed cost (container start, source
+// generation, probing) from marginal cost (seconds of wall per second of source), and
+// §6's ceiling is a 20-minute master — 400x this default. Multiplying one 3-second figure
+// by 400 is an assumption wearing a number. Two points give a slope and an intercept.
+const durationArg = arg("--duration", "3");
+const duration = Number(durationArg);
+if (!Number.isFinite(duration) || duration <= 0) {
+  console.error(`--duration must be a positive number of seconds, got ${durationArg}`);
+  Deno.exit(2);
+}
+
 if (!/^\d+x\d+$/.test(sizeArg)) {
   console.error(`--size must look like 1920x1080, got ${sizeArg}`);
   Deno.exit(2);
@@ -71,11 +86,11 @@ if (kind === "video") {
     "-f",
     "lavfi",
     "-i",
-    `testsrc=size=${sizeArg}:rate=25:duration=3`,
+    `testsrc=size=${sizeArg}:rate=25:duration=${duration}`,
     "-f",
     "lavfi",
     "-i",
-    "sine=frequency=440:duration=3",
+    `sine=frequency=440:duration=${duration}`,
     "-c:v",
     "libx264",
     "-pix_fmt",
@@ -110,7 +125,7 @@ if (kind === "video") {
     "-f",
     "lavfi",
     "-i",
-    "sine=frequency=440:duration=3",
+    `sine=frequency=440:duration=${duration}`,
     "-c:a",
     "aac",
     "-metadata",
@@ -212,7 +227,11 @@ if (kind === "audio") {
 
 // ── Report ───────────────────────────────────────────────────
 
-console.log(`\n${kind} ${sizeArg} — ${elapsed}s`);
+// The shape is parsed by the throughput step in CI, which needs the source length and the
+// wall time on one line to fit a slope. `elapsed` brackets processJob ONLY — container
+// start, source generation and the rename are all outside it — which is what makes two of
+// these separable into fixed and marginal cost.
+console.log(`\nLADDER ${kind} ${sizeArg} source=${duration}s wall=${elapsed}s`);
 for (const a of assets) {
   console.log(
     `  ${a.role.padEnd(9)} ${(a.rendition ?? "").padEnd(6)} ${a.bucket.padEnd(9)} ` +
