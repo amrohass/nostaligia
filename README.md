@@ -20,11 +20,46 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 |---|---|---|
 | **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **complete** — 8/8 items, exit criteria met, CSP/HSTS verified live |
 | M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | **built, 9/9 pieces** — every exit criterion met against a local stack; two of them wait on a deployment to be met for real (see below) |
-| M2 | Sharding · versioned releases · single-writer lock · takedown | **in progress** — the lock, shard builder, publisher, takedown, debounced cron and rollback are in; scope for the rest is open |
+| M2 | Sharding · versioned releases · single-writer lock · takedown | **built** — all six pieces, with the publish trigger moved from the clock to the moderation action (CLAUDE.md §2, 20 Aug) |
 | M3 | Front end on shards · History API · prerendered item pages · XSS/bidi sweep | not started |
 | M4 | PostGIS geo · decade slider · PMTiles basemap | not started |
 | M5 | Fuzzing · consent/licence · seed importer · export · tested restore | not started |
 | M6 | Font subsetting · RTL pass · monitoring · Lighthouse | not started |
+
+### M2 progress
+
+| # | Piece | State |
+|---|---|---|
+| 1 | The single writer — advisory lock **and** a lease row, because each is invisible while the other works | **done**, 27 pgTAP assertions + a two-process race script |
+| 2 | The shard builder — feed pages, item, geo, decade; every public shape from an allowlist | **done**, 22 assertions incl. a sentinel scan with its own controls |
+| 3 | The publisher — order as the safety property: write, validate what LANDED, record, then flip | **done**, 26 assertions |
+| 4 | Takedown — bytes first, `redactions.json` at a 20-second TTL, shards afterwards as a formality | **done**, 13 unit + 16 pgTAP |
+| 5 | The signal — `content_revision` / `counter_revision`, and what "changed" has to mean | **done**, 28 assertions |
+| 6 | Rollback, and the operator hold that outlives the next trigger (§11 gate 5) | **done**, 19 assertions |
+| 7 | **The trigger: the moderation action, not a clock.** The cron is unscheduled, not deleted | **done**, 13 assertions |
+
+**The publish trigger (CLAUDE.md §2, amended 20 Aug 2026).** A change to publishable
+content dispatches the publisher directly, from inside `bump_publish_revision()`. The cron
+job is unscheduled and `pg_cron` stays installed, so restoring the clock is one
+`cron.schedule` line — written out at the bottom of
+[20260820140000_publish_on_approval.sql](supabase/migrations/20260820140000_publish_on_approval.sql).
+
+Two consequences are recorded rather than hidden. Baked like and comment counts now go
+live with the next *content* change instead of within §6's hour floor — the floor was
+always a ceiling, never a freshness promise, and restoring the cron restores hourly
+counters. And because a publish claims the lease *then* reads the archive, a change
+committing in between is not in that release and its own dispatch is refused `held`; with
+no next tick to collect it, `release_publish_lease` takes the claim-time revision and asks
+once more if it moved. That follow-up is load-bearing, not an optimisation.
+
+**M2's exit criteria.** "Two concurrent approvals produce one consistent release" is
+checks 10–13 of [publish-race.sh](scripts/publish-race.sh), racing two *moderation actions*
+at the RPC layer rather than two cron ticks — the agreed substitution, and the lock is
+still what discriminates. "A killed build is never visible" is structural and unit-tested:
+objects are written under `/v/{ts}/` that nothing points at until the pointer moves last.
+"Takedown removes bytes in under a minute" is asserted on bytes in the lifecycle job, which
+now drives a real publish and a real takedown against MinIO — the same MinIO caveat as M1:
+not R2, and no CDN.
 
 ### M1 progress
 
@@ -250,7 +285,7 @@ shrinks is a green tick over nothing.
 | `functions` | the Edge Functions' gate-1 refusals; the presigner verified against a real S3 implementation |
 | `worker` | worker units; the image builds and type-checks; `R2Store` against MinIO; a real 3840×2160 ladder **inside the deployed image**; throughput at two source lengths; §11 gate 2 (GPS EXIF) |
 | `database` | every migration on a fresh database, then again (determinism), the harness probe, the pgTAP suite gated on counts, and two publishers contending for one lease |
-| `lifecycle` | the write path end to end against a real S3 server and the worker container — the only thing that executes `endpoint: r2Endpoint()` at either call site |
+| `lifecycle` | the write path end to end against a real S3 server and the worker container, then a real publish and a real takedown against the same store — the only thing that executes `endpoint: r2Endpoint()` at any of its four call sites |
 
 `npx supabase test db` runs the database suite locally. CI gates on `pg_prove`'s TAP
 parsing, never a psql exit code: **psql exits 0 even when a pgTAP assertion fails.**
@@ -280,6 +315,7 @@ parsing, never a psql exit code: **psql exits 0 even when a pgTAP assertion fail
 | `20_publish_cron` | the debounce, and what "changed" has to mean |
 | `21_publish_rollback` | rollback, and the hold that outlives the next tick |
 | `22_rpc_ownership` | no definer function left executable by `PUBLIC` |
+| `23_publish_on_approval` | the moderation action dispatches a publish, once per transaction, and a change landing mid-build is followed up rather than stranded |
 
 [supabase/harness_probe.sql](supabase/harness_probe.sql) is run by CI *before* the suite
 and is not part of it — it contains a deliberate failure. It proves the harness can
@@ -368,7 +404,7 @@ scripts/
 
 supabase/
   config.toml              CLI config + access-token hook (local stack only)
-  migrations/              41 files, applied in filename order. M0 is …0811…; M1 adds the
+  migrations/              42 files, applied in filename order. M0 is …0811…; M1 adds the
                            upload and ingest path, M2 the publish path
     …090100_extensions     PostGIS into `extensions`
     …090200_helpers        touch_updated_at, visibility + handle validation
@@ -401,7 +437,7 @@ supabase/
     publish/               the shard builder, the publisher, the pointer flip, rollback
     takedown/              §8 — bytes first, shards afterwards
     _shared/               magic bytes, SigV4, the R2 client, secret handling, http
-  tests/                   23 files, run by `npx supabase test db`; CI derives the counts
+  tests/                   24 files, run by `npx supabase test db`; CI derives the counts
   harness_probe.sql        NOT in tests/ — contains a deliberate failure, by design
   stage0_incremental.ps1   proves 0014–0015 apply forward-only onto a populated database
 
