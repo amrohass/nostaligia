@@ -192,16 +192,18 @@ Deno.test("/healthz reports liveness and no state at all", async () => {
  * request-upload's matching call sits behind auth, Turnstile and a quota RPC its gate-1
  * tests deliberately never reach.
  *
- * So this is an UNCOVERED GAP, not a gap covered elsewhere. Nothing in CI exercises those
- * two lines today: the workflow's database job starts the stack with `-x edge-runtime`, so
- * an Edge Function has never been served in CI at all, and the worker job drives the
- * container directly rather than through request-upload.
+ * COVERED, and measured rather than asserted. scripts/lifecycle.sh closes it, and the CI
+ * job that runs it serves edge functions specifically so that it can.
  *
- * scripts/lifecycle.sh is intended to close it, and would close it completely rather than
- * partially — that harness cannot pass at all unless both call sites honour the variable,
- * because a URL signed for Cloudflare is not one MinIO will accept. It is not written yet
- * and running it in CI additionally requires the stack to serve edge functions. Until both
- * are true, these two lines are checked by reading them and by nothing else.
+ * Proven by mutation on branch verify/lifecycle-discriminates, run 32360434524: with
+ * `endpoint: r2Endpoint()` commented out at BOTH call sites and nothing else changed, the
+ * lifecycle job went red and named the cause itself —
+ *
+ *     ✗ the presigned URL points at lifecycle.r2.cloudflarestorage.com,
+ *       not 127.0.0.1:9000 — request-upload ignored R2_ENDPOINT
+ *
+ * while every unit test in this repository stayed green. That is the whole claim: these
+ * two lines have no unit-test seam, and the harness is what stands in for one.
  */
 
 const SIGN_FIXTURE = {

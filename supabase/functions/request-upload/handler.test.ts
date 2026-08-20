@@ -194,15 +194,18 @@ Deno.test("an unlisted origin gets no CORS headers at all", async () => {
 // no seam for that line here: the presign call sits behind auth, Turnstile and a quota RPC,
 // and this file is gate 1, which by design sends nothing that gets that far.
 //
-// So this is an UNCOVERED GAP, not a gap covered elsewhere. Nothing in CI exercises that
-// line today, and the reason is structural rather than an oversight: the workflow starts the
-// stack with `-x edge-runtime`, so no Edge Function has ever been served in CI.
+// COVERED, and measured rather than asserted. scripts/lifecycle.sh closes it, and the CI
+// job that runs it serves edge functions specifically so that it can.
 //
-// scripts/lifecycle.sh is intended to close it, and would close it completely rather than
-// partially — that harness cannot pass at all unless both call sites honour the variable,
-// because a URL signed for Cloudflare is not one MinIO will accept. It is not written yet,
-// and running it in CI additionally requires the stack to serve edge functions. Until both
-// are true, that line is checked by reading it and by nothing else.
+// Proven by mutation on branch verify/lifecycle-discriminates, run 32360434524: with
+// `endpoint: r2Endpoint()` commented out at BOTH call sites and nothing else changed, the
+// lifecycle job went red and named the cause itself —
+//
+//     ✗ the presigned URL points at lifecycle.r2.cloudflarestorage.com,
+//       not 127.0.0.1:9000 — request-upload ignored R2_ENDPOINT
+//
+// while every unit test in this repository stayed green. That is the whole claim: this line
+// has no unit-test seam, and the harness is what stands in for one.
 
 const SIGN_FIXTURE = {
   accountId: "acc0unt",

@@ -12,8 +12,12 @@
  * by nothing, and every one of them fails silently.
  *
  * Concretely, this is the only thing in the repository that executes
- * `endpoint: r2Endpoint()` at either call site. Comment out both and every one of the 190
- * unit tests still passes; this run cannot even start.
+ * `endpoint: r2Endpoint()` at either call site. Comment out both and every unit test still
+ * passes — measured, on branch verify/lifecycle-discriminates, run 32360434524 — while
+ * check 1 below fails and names the cause:
+ *
+ *     ✗ the presigned URL points at lifecycle.r2.cloudflarestorage.com,
+ *       not 127.0.0.1:9000 — request-upload ignored R2_ENDPOINT
  *
  * ── WHAT A GREEN RUN HERE DOES NOT PROVE ─────────────────────
  *

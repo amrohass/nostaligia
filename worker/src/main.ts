@@ -268,6 +268,14 @@ export async function handleRequest(req: Request): Promise<Response> {
 
   const job = verdict.job;
 
+  // Logged at ACCEPT, not just at completion, so the two lines bracket the work inside
+  // Cloud Run's own timestamps. Without this the only way to time a job is a clock on the
+  // caller's side, which measures the network and the caller as well — and the thing being
+  // measured (does post-202 work survive, and for how long) is precisely the interval
+  // between the 202 and the outcome. Same field name and shape as the outcome line, so
+  // both are greppable by object_key.
+  console.log(JSON.stringify({ object_key: job.object_key, accepted: true }));
+
   // Deliberately not awaited. The response goes out now; see the header.
   (async () => {
     const workDir = await Deno.makeTempDir({ prefix: "rma-ingest-" });

@@ -7,8 +7,8 @@
 begin;
 create extension if not exists pgtap;
 
--- 3 privileges · 6 refusals · 4 transition
-select plan(13);
+-- 3 privileges · 6 refusals · 4 transition · 3 the reported ceiling
+select plan(16);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-0000000000b1', 'begin-one@t.local'),
@@ -26,6 +26,16 @@ values
   ('00000000-0000-0000-0000-00000000dd03', 'media', 'done', 'already ingested',
    '00000000-0000-0000-0000-0000000000b1',
    '00000000-0000-0000-0000-0000000000b1/done', 'ready');
+
+-- Out of retries, for the refusal branch below. Left in awaiting_bytes deliberately: 0031
+-- refuses on the COUNT, not on the state, and a fixture that was also terminal would be
+-- refused for the wrong reason and prove nothing.
+insert into public.posts (id, kind, title_en, body_en, created_by,
+                          ingest_object_key, ingest_state, ingest_attempts)
+values
+  ('00000000-0000-0000-0000-00000000dd04', 'media', 'spent', 'out of retries',
+   '00000000-0000-0000-0000-0000000000b1',
+   '00000000-0000-0000-0000-0000000000b1/spent', 'awaiting_bytes', 3);
 
 create function pg_temp.state_of(p_key text) returns text
 language sql stable security definer set search_path = '' as $fn$
@@ -114,6 +124,40 @@ reset role;
 select is(
   pg_temp.state_of('00000000-0000-0000-0000-0000000000b1/mine'), 'processing',
   '...with the row sitting in processing exactly once');
+
+-- ═══ 14–16 · The ceiling is reported, not just the count ═════
+--
+-- Migration 0040. "Attempt 2" is not actionable without "of 3", and before 0040
+-- max_attempts appeared on exactly one branch — the refusal — so a client learned the
+-- limit only at the moment the information stopped being useful. complete-upload's 202
+-- carries both, which is what stops "processing" being an open-ended promise.
+--
+-- The refusal branch is re-pinned here even though it was already correct: the constant
+-- lives in one place, and a test that only covers the branches that changed lets it move
+-- on the branch nobody is watching.
+
+set local role authenticated;
+set local request.jwt.claims to
+  '{"sub":"00000000-0000-0000-0000-0000000000b1","role":"authenticated"}';
+
+select is(
+  public.begin_ingest('00000000-0000-0000-0000-0000000000b1/mine') ->> 'max_attempts', '3',
+  'an already_processing answer carries the ceiling, not just the count');
+
+select is(
+  public.begin_ingest('00000000-0000-0000-0000-0000000000b1/spent') ->> 'max_attempts', '3',
+  '...and so does the refusal, with the same number');
+
+reset role;
+
+-- The counter-test for the pair above: reporting the ceiling must not spend an attempt.
+-- A client that polls to find out how much rope it has left, and burns rope by asking,
+-- is worse off than one that cannot ask at all.
+select is(
+  (select ingest_attempts::text from public.posts
+    where ingest_object_key = '00000000-0000-0000-0000-0000000000b1/mine'),
+  '1',
+  '...and asking did not consume one — the row is still on attempt 1');
 
 select * from finish();
 rollback;

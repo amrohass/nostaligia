@@ -190,7 +190,22 @@ export async function handleRequest(req: Request, deps: Deps = LIVE): Promise<Re
   }
 
   // Handed over. From here the row is genuinely a worker's responsibility, and a worker
-  // that accepts a job and then dies is the stuck-job gap 0028 named — still open, still
-  // M6's, and now the only way to reach it.
-  return json({ ok: true, post_id: begun.post_id, status: "processing" }, 202, req);
+  // that accepts a job and then dies is the stuck-job gap 0028 named — still open, and the
+  // only way to reach it.
+  //
+  // attempt and max_attempts (migration 0040) are what stop "processing" from being an
+  // open-ended promise. A client that knows it is on attempt 3 of 3 knows a failure now is
+  // terminal; one on attempt 1 knows a retry is coming. Both used to see the same word.
+  //
+  // NOT reported yet: when to stop waiting. That is expect_by, and it is derived from the
+  // reaper's lease, which is derived from JOB_DEADLINE_MS — a number still carrying an
+  // unmeasured factor. It is a client-facing contract, so it ships once, at the real
+  // figure, rather than being published now and corrected later.
+  return json({
+    ok: true,
+    post_id: begun.post_id,
+    status: "processing",
+    attempt: begun.attempts,
+    max_attempts: begun.max_attempts,
+  }, 202, req);
 }
