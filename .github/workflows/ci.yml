@@ -145,6 +145,11 @@ jobs:
             -e MINIO_ROOT_USER=rmatestkey -e MINIO_ROOT_PASSWORD=rmatestsecret123 \
             --entrypoint sh minio/minio \
             -c "mkdir -p /data/quarantine && minio server /data"
+          # Deliberately unguarded, unlike the lifecycle job's waits: `sleep` is this loop's
+          # last command, so a MinIO that never starts does NOT fail here — it fails on the
+          # deno run below, as a connection error. That is an accepted trade, not an
+          # oversight: the status is supplied by the command that matters, and the cost is a
+          # worse first line in the log rather than a step that cannot fail.
           for i in $(seq 1 40); do
             curl -sf http://127.0.0.1:9000/minio/health/live && break || sleep 2
           done
@@ -184,6 +189,9 @@ jobs:
             -e MINIO_ROOT_USER=rmatestkey -e MINIO_ROOT_PASSWORD=rmatestsecret123 \
             --entrypoint sh minio/minio \
             -c "mkdir -p /data/quarantine /data/originals /data/public && minio server /data"
+          # Unguarded on purpose, same trade as the SigV4 job's wait: a dead MinIO surfaces
+          # as a connection error from the store-roundtrip below rather than as a failure
+          # here. The step still cannot pass with MinIO down; only the diagnosis is worse.
           for i in $(seq 1 40); do
             curl -sf http://127.0.0.1:9002/minio/health/live && break || sleep 2
           done
