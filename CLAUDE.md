@@ -230,6 +230,28 @@ Written after a real compromised-key incident (~24,000% billing spike).
     The worker is a plain container with no host-specific SDK, so **which host runs it is
     a deployment choice, not an architectural one.** It must scale to zero: at ~300 items
     an always-on instance is the largest avoidable line on a grant-funded budget.
+  - **Per-job wall-clock deadline** (set in M1, approved 20 Aug 2026): a single ingest job
+    may occupy a worker for at most **240 minutes**, after which it starts no further
+    ffmpeg invocation and is failed as the uploader's problem. It lives in
+    `JOB_DEADLINE_MS` in `worker/src/pipeline.ts`; change it there and here together.
+    This is a cost ceiling in the same family as the daily quotas — a wedged decoder on a
+    scale-to-zero container bills for as long as it runs.
+    It is NOT the per-invocation watchdog (`JOB_TIMEOUT_MS` in `worker/src/main.ts`, 25
+    min). Both exist and neither substitutes for the other: the watchdog kills ONE hung
+    ffmpeg, this refuses to start more work once the job as a whole has run too long. A
+    video that makes six invocations, none of them hung and all of them slow, trips this
+    and never trips the watchdog.
+    Derived from a two-point measurement of the real ladder at 3840x2160 in CI
+    (45 min extrapolated for §6's 20-minute master), then multiplied for a 2-vCPU
+    container, for real footage against lavfi's testsrc, for the 4 GB transfer, and for
+    safety. **The testsrc-to-real-footage factor is an ESTIMATE, not a measurement, and it
+    is the dominant term.** It is marked as such at the constant and stays marked until a
+    one-off probe against the deployed worker replaces it.
+    Two things derive from this number and are deliberately **not written** until that
+    probe lands: `public.reap_stale_ingests()`'s staleness threshold `c_ingest_lease`, and
+    the `expect_by` field in `complete-upload`'s 202. The second is a client-facing
+    contract, so it ships once at the real figure rather than being published and
+    corrected.
 - **Audio:** Opus/AAC mono 48–64 kbps.
 - **XSS:** `textContent` only, or DOMPurify. Every `innerHTML` / `insertAdjacentHTML` /
   `outerHTML` on user content is a defect.
