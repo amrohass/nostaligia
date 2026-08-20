@@ -188,7 +188,7 @@ reset role;
 -- bytes are still sitting in quarantine intact.
 select is(
   pg_temp.state_of('00000000-0000-0000-0000-0000000000d1/looping'), 'awaiting_bytes',
-  '...leaving the row for a moderator or the M6 reaper rather than failing it');
+  '...leaving the row for a moderator or the release-only reaper rather than failing it');
 
 select is(
   pg_temp.attempts_of('00000000-0000-0000-0000-0000000000d1/looping'), 3,

@@ -17,8 +17,8 @@
 begin;
 create extension if not exists pgtap;
 
--- 7 structure · 6 privileges · 7 behaviour
-select plan(20);
+-- 7 structure · 8 privileges · 7 behaviour
+select plan(22);
 
 -- ═══ Structure ═══════════════════════════════════════════════
 
@@ -70,6 +70,22 @@ select ok(
 select ok(
   has_column_privilege('authenticated', 'public.posts', 'ingest_state', 'SELECT'),
   'but a member CAN watch their own upload progress');
+
+-- The other half of the same contract, and the half nothing asserted until now.
+-- ingest_state alone distinguishes 'processing' from 'awaiting_bytes'; what separates a
+-- refusal a contributor can act on from an anonymous dead end is ingest_error. Both are
+-- granted in 0025 and only one of them was pinned, so a later migration narrowing the
+-- grant would have left the failed state readable and unexplained — which is the state
+-- the column exists to prevent.
+select ok(
+  has_column_privilege('authenticated', 'public.posts', 'ingest_error', 'SELECT'),
+  '...and read WHY it was refused, not merely that it was');
+
+-- Writable would make it worthless in the other direction: an uploader who can set their
+-- own ingest_error can write an explanation a moderator then reads as the worker's.
+select ok(
+  not has_column_privilege('authenticated', 'public.posts', 'ingest_error', 'UPDATE'),
+  '...without being able to author that reason themselves');
 
 -- The storage layout is not public information (§7). The uploader already has their own
 -- key from request-upload; nobody needs to read anyone else's out of the table.
