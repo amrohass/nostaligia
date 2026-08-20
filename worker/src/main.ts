@@ -154,6 +154,40 @@ class RealFfmpeg implements Ffmpeg {
   }
 }
 
+/**
+ * Where R2Store points. Undefined — the normal case — means Cloudflare R2.
+ *
+ * The same rule as MEDIA_WORKER_STORE below, for the same reason: it is selected by an
+ * explicit opt-in, never by a missing credential — a store that silently falls back when
+ * R2 is misconfigured would report success while writing the archive nowhere. There is no
+ * inference from an absent variable, no "if not production", and no default other than
+ * Cloudflare. Unset R2_ENDPOINT signs for R2 and nothing else can cause that not to happen.
+ *
+ * It exists so scripts/lifecycle.sh can drive the real ingest path against MinIO. Not a
+ * security surface — see supabase/functions/_shared/sigv4.ts:101-112: the endpoint is not
+ * a secret, it is covered by the signature through the host header, and pointing it
+ * somewhere else cannot widen what a URL authorises, only produce one R2 would reject.
+ *
+ * A malformed value THROWS rather than falling back to R2. Quietly ignoring a broken
+ * override would mean a harness run that believed it was talking to MinIO while signing
+ * for Cloudflare — the same silent-success failure the paragraph above refuses, inverted.
+ *
+ * Parsed here rather than in _shared/sigv4.ts on purpose. That module is deliberately
+ * free of I/O and of anything ambient; reading an environment variable inside the signer
+ * would put deployment configuration in the one file whose header explains why it has no
+ * dependencies. request-upload carries its own copy of these six lines for the same
+ * reason, and the duplication is cheaper than a third module both would import.
+ */
+export function r2Endpoint(): { host: string; protocol: "http:" | "https:" } | undefined {
+  const raw = Deno.env.get("R2_ENDPOINT");
+  if (!raw) return undefined;
+  const u = new URL(raw);
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    throw new Error("R2_ENDPOINT must be an http: or https: URL");
+  }
+  return { host: u.host, protocol: u.protocol };
+}
+
 function buildStore(): ObjectStore {
   // The local backend exists for worker/scripts/ladder-fixture.ts, which runs the real
   // pipeline against a directory so a laptop needs no MinIO. It is selected by an explicit
@@ -166,6 +200,7 @@ function buildStore(): ObjectStore {
     accountId: env("R2_ACCOUNT_ID"),
     accessKeyId: env("R2_ACCESS_KEY_ID"),
     secretAccessKey: env("R2_SECRET_ACCESS_KEY"),
+    endpoint: r2Endpoint(),
   });
 }
 

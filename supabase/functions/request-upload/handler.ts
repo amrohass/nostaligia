@@ -82,6 +82,44 @@ export const ABSOLUTE_MAX_BYTES = Math.max(
 const QUARANTINE_BUCKET = "quarantine";
 const URL_TTL_SECONDS = 300;
 
+/**
+ * Where the presigned PUT points. Undefined — the normal case — means Cloudflare R2.
+ *
+ * The rule is the one worker/src/main.ts states at buildStore(), and it is the same rule
+ * here: it is selected by an explicit opt-in, never by a missing credential — a store that
+ * silently falls back when R2 is misconfigured would report success while writing the
+ * archive nowhere. There is no inference from an absent variable, no "if not production",
+ * and no default other than Cloudflare. Unset R2_ENDPOINT signs for R2, and nothing else
+ * can cause that not to happen.
+ *
+ * It exists so scripts/lifecycle.sh can drive the real upload path against MinIO — the
+ * browser has to PUT to something, and a URL signed for Cloudflare is not usable by a
+ * harness with no R2 account. Not a security surface: see ../_shared/sigv4.ts:101-112 —
+ * the endpoint is not a secret, it is covered by the signature through the host header,
+ * and pointing it somewhere else cannot widen what the URL authorises, only produce a URL
+ * R2 would reject.
+ *
+ * A malformed value THROWS. The caller below turns that into `signing_failed` without
+ * echoing a reason, which is the same treatment a malformed R2 credential already gets.
+ * Falling back to R2 on a broken override would mean a harness that believed it was
+ * talking to MinIO while handing out Cloudflare URLs — the silent success this whole
+ * comment exists to refuse, inverted.
+ *
+ * Six lines duplicated from the worker rather than shared. _shared/sigv4.ts is
+ * deliberately free of I/O and of anything ambient — its header explains why it has no
+ * dependencies — and putting an environment read inside the signer would move deployment
+ * configuration into the one file that must not have any.
+ */
+export function r2Endpoint(): { host: string; protocol: "http:" | "https:" } | undefined {
+  const raw = Deno.env.get("R2_ENDPOINT");
+  if (!raw) return undefined;
+  const u = new URL(raw);
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    throw new Error("R2_ENDPOINT must be an http: or https: URL");
+  }
+  return { host: u.host, protocol: u.protocol };
+}
+
 // Declared types only. The processing function re-derives the real type from magic
 // bytes and rejects anything that disagrees with this — an allowlist here keeps the
 // obvious junk out of the bucket, it does not establish what the file is.
@@ -312,6 +350,7 @@ export async function handleRequest(req: Request): Promise<Response> {
       contentType: mime,
       contentLength: bytes,
       expiresIn: URL_TTL_SECONDS,
+      endpoint: r2Endpoint(),
     });
   } catch {
     // Never echo the reason: the only way this throws is a missing or malformed R2

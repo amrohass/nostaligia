@@ -17,7 +17,8 @@
 // is the point of the file — if a gate-1 refusal ever regresses to running after gate 2
 // or gate 3, these stop returning what they claim and start returning 401.
 
-import { ABSOLUTE_MAX_BYTES, handleRequest } from "./handler.ts";
+import { ABSOLUTE_MAX_BYTES, handleRequest, r2Endpoint } from "./handler.ts";
+import { presignR2Put } from "../_shared/sigv4.ts";
 
 const GiB = 1024 * 1024 * 1024;
 
@@ -172,5 +173,94 @@ Deno.test("an unlisted origin gets no CORS headers at all", async () => {
     res.headers.get("Access-Control-Allow-Origin"),
     null,
     "but grants nothing — an unset allowlist must not fall back to permissive",
+  );
+});
+
+// ── The R2 endpoint seam ─────────────────────────────────────
+//
+// R2_ENDPOINT lets scripts/lifecycle.sh point the presigned PUT at MinIO, so the harness
+// can drive the real upload path without an R2 account. Two tests, because proving the
+// override works proves only half of it — the half with production consequences is that
+// WITHOUT the variable this signs for Cloudflare and can do nothing else.
+//
+// Both feed r2Endpoint() into the same presigner the handler calls, rather than inspecting
+// what the helper returns: the question is what gets signed, not what a function returns.
+// The same pair exists in worker/src/main.test.ts for the worker's copy of this seam.
+//
+// ── WHAT THIS PAIR DOES NOT CATCH ──
+//
+// The seam, not the wiring. Comment out `endpoint: r2Endpoint()` at the presign call and
+// every test in this repository still passes — measured by mutation, not assumed. There is
+// no seam for that line here: the presign call sits behind auth, Turnstile and a quota RPC,
+// and this file is gate 1, which by design sends nothing that gets that far.
+//
+// scripts/lifecycle.sh is what covers it, and covers it completely rather than partially —
+// that harness cannot pass at all unless both call sites honour the variable, because a URL
+// signed for Cloudflare is not one MinIO will accept. Until it runs, that line is checked
+// by reading it and by nothing else.
+
+const SIGN_FIXTURE = {
+  accountId: "acc0unt",
+  accessKeyId: "AKIAEXAMPLEKEY",
+  secretAccessKey: "not-a-real-secret-only-a-test-fixture",
+  bucket: "quarantine",
+  key: "u/0",
+  contentType: "image/jpeg",
+  contentLength: 1024,
+  expiresIn: 300,
+  // Pinned, so the two URLs below differ only for the reason under test.
+  now: new Date("2026-08-20T09:00:00.000Z"),
+};
+
+// THE default. If anything ever starts inferring an endpoint — from a hostname, from a
+// missing credential, from a NODE_ENV — this is the assertion that notices.
+Deno.test("with R2_ENDPOINT unset, the upload URL is signed for Cloudflare R2", async () => {
+  Deno.env.delete("R2_ENDPOINT");
+  assertEquals(r2Endpoint(), undefined, "an endpoint was produced with nothing set");
+
+  const { url } = await presignR2Put({ ...SIGN_FIXTURE, endpoint: r2Endpoint() });
+  const u = new URL(url);
+  assertEquals(u.host, "acc0unt.r2.cloudflarestorage.com", "the default is not R2");
+  assertEquals(u.protocol, "https:", "the default is not TLS");
+});
+
+// And the override moves the host and nothing else. Same credentials, same
+// canonicalisation, same every parameter that is not the host — which is what makes this a
+// test seam rather than a second signing path carrying its own bugs.
+Deno.test("...and with it set, only the host moves", async () => {
+  Deno.env.delete("R2_ENDPOINT");
+  const real = new URL((await presignR2Put({ ...SIGN_FIXTURE, endpoint: r2Endpoint() })).url);
+
+  Deno.env.set("R2_ENDPOINT", "http://127.0.0.1:9000");
+  const local = new URL((await presignR2Put({ ...SIGN_FIXTURE, endpoint: r2Endpoint() })).url);
+  Deno.env.delete("R2_ENDPOINT");
+
+  assertEquals(local.host, "127.0.0.1:9000", "the override did not reach the signer");
+  assertEquals(local.protocol, "http:", "the scheme did not follow the override");
+  assertEquals(local.pathname, real.pathname, "the object being addressed changed");
+
+  for (
+    const p of [
+      "X-Amz-Algorithm",
+      "X-Amz-Credential",
+      "X-Amz-Date",
+      "X-Amz-Expires",
+      "X-Amz-SignedHeaders",
+    ]
+  ) {
+    assertEquals(
+      local.searchParams.get(p),
+      real.searchParams.get(p),
+      `${p} changed with the endpoint — the override is doing more than moving the host`,
+    );
+  }
+
+  // The signature MUST differ, and that is precisely why ../_shared/sigv4.ts:101-112 can
+  // call this not a security surface: host is inside the signed headers, so a URL signed
+  // for MinIO does not work against R2. Two identical signatures here would mean host had
+  // been dropped from the signature — the one change that WOULD make this dangerous.
+  assert(
+    local.searchParams.get("X-Amz-Signature") !== real.searchParams.get("X-Amz-Signature"),
+    "the host is not covered by the signature — a URL signed for one endpoint would replay against the other",
   );
 });
