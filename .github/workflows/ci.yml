@@ -237,9 +237,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, not `latest`, for the same two reasons gitleaks is pinned above.
+      #
+      # Resolving "latest" costs an unauthenticated GitHub API call per job, and run
+      # 32352416409 died on exactly that — "Failed to resolve latest Supabase CLI release:
+      # rate limit exceeded" — once the lifecycle job made it two calls a run instead of
+      # one. Nothing of ours had executed yet.
+      #
+      # And the reproducibility argument that applies to a secret scanner applies here too:
+      # `latest` means the migration suite runs against whatever shipped this morning, so a
+      # CLI regression arrives as a red build on an unrelated commit. Moved deliberately.
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.115.0
 
       # 0.1 — a fresh database, every migration in order. Fails the build on the
       # first migration that does not apply.
@@ -350,9 +360,10 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+      # Pinned. See the database job for why.
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.115.0
 
       # The GPS fixture is generated, not committed — the same argument ladder-fixture.ts
       # makes. ubuntu-latest carries no ffmpeg.
