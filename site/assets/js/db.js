@@ -123,6 +123,65 @@
       });
     },
 
+    /**
+     * POST /table.
+     *
+     * `Prefer: return=minimal`, and unlike PATCH that is safe rather than a compromise.
+     * PostgREST answers an RLS-refused INSERT with 403, not with 200 and an empty array, so
+     * a caller can tell success from refusal without asking for the row back — which is the
+     * only reason PATCH needs a representation at all (see below).
+     *
+     * Minimal also sidesteps the `*` trap: a representation with no select= is a SELECT of
+     * every column, and 0015 grants SELECT column by column on every table a browser can
+     * write to. Not asking for the row is the version of that rule with nothing to remember.
+     *
+     * `select` is still accepted for the caller that genuinely needs the inserted row, and
+     * naming columns is then mandatory for the same reason it is on patch().
+     */
+    insert: function (table, body, opts) {
+      opts = opts || {};
+      var select = opts.select || null;
+      if (select && String(select).indexOf('select=') === -1) {
+        return Promise.reject(DbError('admin.err.generic', 0, 'insert(): select must name its columns'));
+      }
+      /* `resolution=merge-duplicates` turns an INSERT into an upsert on the primary key.
+         Opt-in and never the default: for `likes` a duplicate is a member double-tapping a
+         heart and the 409 is the correct answer, while for `content_blocks` a key that
+         exists in Arabic and not yet in English is the ordinary state of an editor adding a
+         block, and two code paths for "insert or update" would get it wrong in opposite
+         directions. RLS still decides — an upsert is not a way around a policy. */
+      var prefer = [select ? 'return=representation' : 'return=minimal'];
+      if (opts.merge) prefer.push('resolution=merge-duplicates');
+      return call('/' + table + (select ? '?' + select : ''), {
+        method: 'POST',
+        body: body,
+        headers: { Prefer: prefer.join(',') }
+      });
+    },
+
+    /**
+     * DELETE /table?<filter>.
+     *
+     * A filter is REQUIRED and an empty one is refused here rather than sent. PostgREST
+     * treats a DELETE with no filter as "every row", and while RLS would cut that down to
+     * the caller's own rows, "delete all of my likes" is not something any call site means
+     * and is one dropped query-string concatenation away from happening.
+     *
+     * Cannot distinguish "deleted" from "refused": an RLS-refused DELETE removes zero rows
+     * and answers 204, exactly like a delete of something that was already gone. Every call
+     * site here is idempotent (unlike, unsave), so that ambiguity costs nothing — a caller
+     * that needed to know would have to read the row back afterwards.
+     */
+    del: function (table, filter) {
+      if (!filter) {
+        return Promise.reject(DbError('admin.err.generic', 0, 'del(): a filter is required'));
+      }
+      return call('/' + table + '?' + filter, {
+        method: 'DELETE',
+        headers: { Prefer: 'return=minimal' }
+      });
+    },
+
     rpc: function (name, args) {
       return call('/rpc/' + name, { method: 'POST', body: args || {} });
     },

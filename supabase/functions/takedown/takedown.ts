@@ -26,6 +26,7 @@
  * given something worse than an error.
  */
 
+import { itemPageKey } from "../publish/prerender.ts";
 import type { ObjectSink } from "../_shared/r2.ts";
 
 export interface TakedownObject {
@@ -95,6 +96,30 @@ export async function takeDown(
   // ── 2 · the bytes ──
   const removed: string[] = [];
   const failed: string[] = [];
+
+  /* The prerendered item page goes FIRST, and it is not a media asset.
+   *
+   * §9's item/{id}/index.html carries the title, the story, the byline and the picture, as
+   * HTML, at a root URL with a five-minute TTL. request_takedown returns media_assets rows
+   * and knows nothing about it — so before this line, a takedown deleted every derivative
+   * and the master and left the whole item legible at the exact URL people had been sharing.
+   * That is the failure this feature exists to prevent, arrived at through the feature that
+   * exists to spread it.
+   *
+   * First rather than last because it is the one object with a HUMAN audience: the media is
+   * reachable only by someone who already has a direct URL, and the page is reachable by
+   * anyone who has the link that was shared.
+   *
+   * Counted in `removed`/`failed` like everything else, so `ok` stays "every part actually
+   * happened" rather than "every part I remembered to check". */
+  const pageKey = itemPageKey(marked.post_id ?? postId);
+  try {
+    const pageGone = await deps.sinks.public.remove(pageKey);
+    (pageGone ? removed : failed).push(`public/${pageKey}`);
+  } catch {
+    failed.push(`public/${pageKey}`);
+  }
+
   for (const obj of objects) {
     const sink = deps.sinks[obj.bucket];
     if (!sink) {
@@ -116,7 +141,15 @@ export async function takeDown(
   // Only the public bucket is CDN-fronted, so only those paths are purged. Purging an
   // originals path would be a request for a URL that has never existed, which is harmless
   // and also a lie about the system's shape.
+  // The page is CDN-fronted like every other public object, and at max-age=300 rather than
+  // a year — but a purge is still the difference between "gone in a moment" and "gone in
+  // five minutes at every edge that has it", and a takedown is measured in the first.
   const publicPaths = objects.filter((o) => o.bucket === "public").map((o) => o.path);
+  publicPaths.push(pageKey);
+  // publicPaths is never empty now — the item page is always in it — so the
+  // nothing_cdn_fronted branch is unreachable for a post that has a page. Kept rather than
+  // deleted: it is the honest answer for a post with no public objects at all, and removing
+  // it would mean a future caller with an empty list purges nothing and is told it purged.
   const purge = publicPaths.length > 0
     ? await deps.cdn.purge(publicPaths)
     : { purged: true, reason: "nothing_cdn_fronted" };

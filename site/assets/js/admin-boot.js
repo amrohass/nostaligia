@@ -43,7 +43,7 @@
     screen([
       el('h1.admin-gate__title', { text: t('admin.refusedTitle') }),
       el('p.admin-gate__note', { text: t('admin.refusedBody', { role: roleName || 'member' }) }),
-      el('a.abtn.abtn--quiet', { href: 'index.html', text: t('admin.toArchive') })
+      el('a.abtn.abtn--quiet', { href: '/', text: t('admin.toArchive') })
     ]);
   }
 
@@ -83,7 +83,7 @@
     if (loaded) return;
     loaded = true;
     var script = global.document.createElement('script');
-    script.src = 'assets/js/admin.js';
+    script.src = '/assets/js/admin.js';
     script.onerror = function () {
       screen([el('p.form-error', { text: t('admin.err.loadFailed') })]);
     };

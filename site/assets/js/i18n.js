@@ -33,7 +33,6 @@
     'hero.blurb': { ar: 'أرشيف مجتمعيّ يجمع ما تحفظه العائلات — في المدينة وفي الشتات — منذ الخمسينيات حتى اليوم.',
                     en: 'A community archive of what families keep — in the city and across the diaspora — from the 1950s to today.' },
     'hero.memories':  { ar: '{n} ذكرى',        en: '{n} memories' },
-    'hero.narrators': { ar: '{n} راويًا وراوية', en: '{n} narrators' },
     'hero.decades':   { ar: 'سبعة عقود',        en: 'seven decades' },
     'feed.more':      { ar: 'يُحمَّل المزيد أثناء التمرير', en: 'more loads as you scroll' },
 
@@ -41,10 +40,6 @@
     'footer.blurb':   { ar: 'أرشيف مجتمعيّ مستقل لذاكرة رام الله وأهلها — تُدار مواده بعناية تحريرية وتُتاح للجميع.',
                         en: "An independent community archive of Ramallah's memory — carefully curated, open to all." },
     'footer.project': { ar: 'المشروع',           en: 'The project' },
-    'footer.about':   { ar: 'من نحن',            en: 'About us' },
-    'footer.contact': { ar: 'تواصل معنا',        en: 'Contact' },
-    'footer.help':    { ar: 'المساعدة والدعم',   en: 'Help & support' },
-    'footer.terms':   { ar: 'شروط المساهمة',     en: 'Contribution guidelines' },
     'footer.legal':   { ar: '© ٢٠٢٦ ذاكرة رام الله — المواد المتاحة تخضع لرخصة المشاع الإبداعي حيثما أمكن',
                         en: '© 2026 Ramallah Memory Atlas — open materials under Creative Commons where possible' },
     'footer.tag':     { ar: 'Ramallah Memory Atlas · a community heritage archive',
@@ -58,15 +53,12 @@
     'viewer.back':      { ar: '✕ العودة إلى الأرشيف',  en: '✕ Back to the archive' },
     'viewer.next':      { ar: 'مرّر للأسفل للذكرى التالية ⌄', en: 'Scroll down for the next memory ⌄' },
     'viewer.save':      { ar: 'حفظ',      en: 'Save' },
-    'viewer.download':  { ar: 'تنزيل',    en: 'Download' },
     'viewer.like':      { ar: 'إعجاب',    en: 'Like' },
     'comments.title':   { ar: 'التعليقات', en: 'Comments' },
     'comments.empty':   { ar: 'لا تعليقات بعد — كن أوّل من يضيف ما يعرفه عن هذه الذكرى.',
                           en: 'No comments yet — be the first to add what you know about this memory.' },
     'comments.locked':  { ar: 'سجّل الدخول لتضيف تعليقًا أو ذكرى',
                           en: 'Sign in to add a comment or a memory' },
-    'comments.lockedShort': { ar: 'سجّل الدخول لتعلّق أو تحفظ هذه الذكرى',
-                              en: 'Sign in to comment on or save this memory' },
 
     // ── Sign-in gate ────────────────────────────────────────
     'gate.title':  { ar: 'سجّل الدخول لتتفاعل مع هذه الذكرى',
@@ -89,15 +81,9 @@
     'login.newHere': { ar: 'جديد هنا؟',    en: 'New here?' },
     'login.createOne': { ar: 'أنشئ حسابًا', en: 'Create an account' },
     'login.forgot':  { ar: 'نسيت كلمة المرور؟', en: 'Forgot password?' },
-    'login.remember':{ ar: 'تذكّرني على هذا الجهاز', en: 'Remember me on this device' },
 
-    'field.name':      { ar: 'الاسم الكامل', en: 'Full name' },
-    'field.namePh':    { ar: 'كما تحب أن يظهر مع مساهماتك', en: "As you'd like it to appear with your contributions" },
     'field.email':     { ar: 'البريد الإلكتروني', en: 'Email' },
     'field.password':  { ar: 'كلمة المرور', en: 'Password' },
-    'field.city':      { ar: 'مدينتك الحالية', en: 'Current city' },
-    'field.optional':  { ar: '— اختياري', en: '— optional' },
-    'field.cityPh':    { ar: 'رام الله، عمّان، ديترويت…', en: 'Ramallah, Amman, Detroit…' },
     'auth.pact':       { ar: 'بإنشاء الحساب توافق على ميثاق المجتمع: احترام أصحاب الذكريات، ودقة النسبة والتاريخ قدر المستطاع.',
                          en: 'By creating an account you agree to the community pact: respect the owners of memories, and attribute and date as accurately as you can.' },
     // Google and Apple are gone, not hidden. CLAUDE.md §2: email + password only. The
@@ -228,16 +214,12 @@
     'map.inView':  { ar: '{n} ذكرى ضمن العرض', en: '{n} memories in view' },
     'map.decade':  { ar: 'العقد', en: 'Decade' },
     'map.all':     { ar: 'الكل',  en: 'All' },
-    'map.back':    { ar: '✕ العودة إلى الخريطة', en: '✕ Back to the map' },
 
     // ── Events ──────────────────────────────────────────────
     'events.title':   { ar: 'فعاليات حول الذاكرة', en: 'Events around the memory' },
     'events.blurb':   { ar: 'معارض وجولات وورشات ينظّمها الأرشيف وأهل المدينة — في رام الله وعبر الإنترنت.',
                         en: 'Exhibitions, tours and workshops run by the archive and by the city — in Ramallah and online.' },
     'events.count':   { ar: '{n} فعاليات قادمة', en: '{n} upcoming events' },
-    'publisher.municipality': { ar: 'بلدية رام الله', en: 'Ramallah Municipality' },
-    'publisher.community':    { ar: 'مساهمة مجتمعية', en: 'Community submission' },
-    'publisher.team':         { ar: 'فريق الأرشيف',   en: 'Archive team' },
 
     // ── Profile ─────────────────────────────────────────────
     'profile.mine':          { ar: 'ملفّي الشخصي', en: 'My profile' },
@@ -248,7 +230,6 @@
     'profile.noContributions': { ar: 'لا مساهمات منشورة بعد.', en: 'No published contributions yet.' },
     'profile.noComments':    { ar: 'لا تعليقات بعد.', en: 'No comments yet.' },
     'profile.onMemory':      { ar: 'على «{t}»', en: 'On “{t}”' },
-    'profile.onRemoved':     { ar: 'على ذكرى لم تعد منشورة', en: 'On a memory no longer published' },
     'profile.notFound':      { ar: 'لا يوجد عضو بهذا المعرّف.', en: 'No member with that id.' },
     'profile.ownerOnly':     { ar: 'يظهر لك وحدك', en: 'Visible to you only' },
     'profile.public':        { ar: 'عام', en: 'Public' },
@@ -290,7 +271,6 @@
     'kind.voice': { ar: 'صوت',         en: 'Voice' },
     'kind.video': { ar: 'فيديو',       en: 'Video' },
     'kind.event': { ar: 'فعالية',      en: 'Event' },
-    'kind.oral':  { ar: 'رواية شفوية', en: 'Oral history' },
 
     'decade.1950': { ar: 'الخمسينيات', en: '1950s' },
     'decade.1960': { ar: 'الستينيات',  en: '1960s' },
@@ -308,10 +288,8 @@
     'admin.places':   { ar: 'الأماكن والخريطة', en: 'Places & map' },
     'admin.members':  { ar: 'الأعضاء',         en: 'Members' },
     'admin.reports':  { ar: 'البلاغات',        en: 'Reports' },
-    'admin.settings': { ar: 'الإعدادات',       en: 'Settings' },
     'admin.backToSite': { ar: '← عودة إلى الموقع', en: '← Back to the site' },
     'admin.me':       { ar: 'هناء ع.',          en: 'Hana A.' },
-    'admin.myRole':   { ar: 'محرّرة أرشيف',     en: 'Archive editor' },
 
     // ── Admin: overview ─────────────────────────────────────
     'ov.greeting':   { ar: 'صباح الخير، هناء', en: 'Good morning, Hana' },
@@ -322,14 +300,6 @@
     'ov.pendingNote':{ ar: 'متوسط زمن الردّ ١٩ ساعة', en: 'Median reply time 19 hours' },
     'ov.published':  { ar: 'نُشرت هذا الأسبوع', en: 'Published this week' },
     'ov.publishedNote': { ar: '+١٤٪ عن الأسبوع الماضي', en: '+14% on last week' },
-    'ov.newMembers': { ar: 'أعضاء جدد', en: 'New members' },
-    'ov.newMembersNote': { ar: '٣١٪ منهم من الشتات', en: '31% of them from the diaspora' },
-    'ov.audioHours': { ar: 'ساعات الصوت المحفوظة', en: 'Hours of audio kept' },
-    'ov.audioNote':  { ar: 'من ٢٠٤ رواة', en: 'from 204 narrators' },
-    'ov.intake':     { ar: 'المساهمات الواردة شهريًا', en: 'Contributions received monthly' },
-    'ov.intakeRange':{ ar: 'آخر ١٢ شهرًا', en: 'Last 12 months' },
-    'ov.totalPublished': { ar: '٣٬٤١٢ مساهمة منشورة إجمالًا', en: '3,412 contributions published in total' },
-    'ov.mapped':     { ar: '٩١٪ منها موقّعة على الخريطة', en: '91% of them placed on the map' },
     'ov.gaps':       { ar: 'فجوات في التغطية', en: 'Gaps in coverage' },
     'ov.gapsNote':   { ar: 'الخمسينيات وحيّ الطيرة الأقل تمثيلًا — مرشّحان لجولة جمع ميدانية.',
                        en: 'The 1950s and al-Tireh are the least represented — both candidates for a field-collection round.' },
@@ -408,170 +378,238 @@
     'ar.title':   { ar: 'الأرشيف المنشور', en: 'Published archive' },
     'ar.sub':     { ar: '٣٬٤١٢ ذكرى منشورة · آخر نشر قبل ١٢ دقيقة',
                     en: '3,412 memories published · last publish 12 minutes ago' },
-    'ar.add':     { ar: '+ إضافة ذكرى', en: '+ Add a memory' },
-    'ar.filterMore': { ar: '+ فلترة بالعقد أو المكان', en: '+ Filter by decade or place' },
-    'ar.export':  { ar: 'تصدير CSV', en: 'Export CSV' },
     'ar.colTitle':{ ar: 'العنوان', en: 'Title' },
-    'ar.colBy':   { ar: 'المساهم', en: 'Contributor' },
-    'ar.colPlace':{ ar: 'المكان', en: 'Place' },
     'ar.colDecade': { ar: 'العقد', en: 'Decade' },
     'ar.colDate': { ar: 'تاريخ النشر', en: 'Published' },
-    'ar.colViews':{ ar: 'مشاهدات', en: 'Views' },
-    'ar.showing': { ar: 'تعرض {n} من ٣٬٤١٢', en: 'Showing {n} of 3,412' },
-    'ar.next':    { ar: 'التالي', en: 'Next' },
-    'ar.exported':{ ar: 'جُهّز ملف CSV للتنزيل.', en: 'CSV file prepared for download.' },
 
     // ── Admin: events ───────────────────────────────────────
     'ae.title':    { ar: 'الفعاليات', en: 'Events' },
     'ae.sub':      { ar: '{n} بانتظار الموافقة · ٦ منشورة قادمة',
                      en: '{n} awaiting approval · 6 published and upcoming' },
-    'ae.add':      { ar: '+ فعالية من الفريق', en: '+ Event from the team' },
-    'ae.pending':  { ar: 'بانتظار الموافقة', en: 'Awaiting approval' },
-    'ae.live':     { ar: 'منشورة', en: 'Published' },
-    'ae.desc':     { ar: 'وصف الفعالية', en: 'Event description' },
-    'ae.date':     { ar: 'التاريخ', en: 'Date' },
-    'ae.time':     { ar: 'الوقت', en: 'Time' },
-    'ae.venue':    { ar: 'المكان', en: 'Venue' },
-    'ae.seats':    { ar: 'المقاعد', en: 'Seats' },
-    'ae.category': { ar: 'التصنيف', en: 'Category' },
     'ae.note':     { ar: 'عند الموافقة تظهر الفعالية في صفحة الفعاليات وتُرسل للمشتركين في النشرة.',
                      en: 'On approval the event appears on the events page and goes out to newsletter subscribers.' },
-    'ae.submitted':{ ar: 'قُدّمت {a}', en: 'Submitted {a}' },
-    'ae.requestEdit': { ar: 'طلب تعديل', en: 'Request changes' },
-    'ae.approve':  { ar: 'نشر الفعالية', en: 'Publish event' },
-    'ae.approved': { ar: 'نُشرت «{t}» وأُرسلت في النشرة.', en: '"{t}" is published and went out in the newsletter.' },
     'ae.empty':    { ar: 'لا فعاليات بانتظار الموافقة.', en: 'No events awaiting approval.' },
 
     // ── Admin: places ───────────────────────────────────────
     'pl.title':   { ar: 'الأماكن والخريطة', en: 'Places & map' },
     'pl.sub':     { ar: '{n} مكانًا موثّقًا · ٩١٪ من الذكريات موقّعة',
                     en: '{n} documented places · 91% of memories placed' },
-    'pl.add':     { ar: '+ مكان جديد', en: '+ New place' },
-    'pl.searchPh':{ ar: 'ابحث عن مكان…', en: 'Search for a place…' },
-    'pl.count':   { ar: '{n} ذكرى', en: '{n} memories' },
-    'pl.merge':   { ar: 'مكانان متشابهان: «شارع ركب» و«ركب ستريت» — يُقترح دمجهما.',
-                    en: 'Two similar places: "شارع ركب" and "Rukab Street" — a merge is suggested.' },
-    'pl.mergeBtn':{ ar: 'دمج', en: 'Merge' },
-    'pl.merged':  { ar: 'دُمج المكانان في «شارع ركب».', en: 'Both places merged into "Rukab Street".' },
-    'pl.legend':  { ar: 'اسحب الدبوس لتصحيح الإحداثيات · أصفر = مكان بلا إحداثيات مؤكدة',
-                    en: 'Drag a pin to correct its coordinates · yellow = no confirmed coordinates' },
-    'pl.oldest':  { ar: '{n} ذكرى · أقدمها {y} · أحدثها الأسبوع الماضي',
-                    en: '{n} memories · earliest {y} · latest last week' },
-    'pl.editCoords': { ar: 'تحرير الاسم والإحداثيات', en: 'Edit name and coordinates' },
-    'pl.viewMemories': { ar: 'عرض الذكريات', en: 'View memories' },
-    'pl.moved':   { ar: 'حُدّثت إحداثيات «{t}».', en: 'Coordinates updated for "{t}".' },
 
     // ── Admin: members ──────────────────────────────────────
     'mb.title':   { ar: 'الأعضاء', en: 'Members' },
     'mb.sub':     { ar: '٤٬٨١٠ أعضاء · ١٤٢ انضموا هذا الشهر',
                     en: '4,810 members · 142 joined this month' },
-    'mb.invite':  { ar: '+ دعوة عضو للفريق', en: '+ Invite a team member' },
-    'mb.all':     { ar: 'الكل', en: 'All' },
-    'mb.contributors': { ar: 'مساهمون', en: 'Contributors' },
-    'mb.team':    { ar: 'فريق الأرشيف', en: 'Archive team' },
-    'mb.partners':{ ar: 'شركاء', en: 'Partners' },
-    'mb.suspended': { ar: 'موقوفون', en: 'Suspended' },
-    'mb.searchPh':{ ar: 'ابحث بالاسم أو البريد…', en: 'Search by name or email…' },
-    'mb.colMember': { ar: 'العضو', en: 'Member' },
-    'mb.colRole': { ar: 'الدور', en: 'Role' },
-    'mb.colContribs': { ar: 'مساهمات', en: 'Contributions' },
-    'mb.colCity': { ar: 'المدينة', en: 'City' },
-    'mb.colJoined': { ar: 'انضم', en: 'Joined' },
     'mb.colStatus': { ar: 'الحالة', en: 'Status' },
-    'mb.role':    { ar: 'الدور', en: 'Role' },
-    'mb.rolePartner': { ar: 'شريك', en: 'Partner' },
-    'mb.roleNarrator': { ar: 'راوية', en: 'Narrator' },
-    'mb.roleAdminShort': { ar: 'مديرة', en: 'Admin' },
-    'mb.roleContributorF': { ar: 'مساهِمة', en: 'Contributor' },
-    'mb.roleContributorM': { ar: 'مساهِم', en: 'Contributor' },
-    'mb.roleContributor': { ar: 'مساهِم — يرفع ويعلّق', en: 'Contributor — uploads and comments' },
-    'mb.roleEditor': { ar: 'محرّر — يراجع وينشر', en: 'Editor — reviews and publishes' },
-    'mb.roleAdmin': { ar: 'مدير — كل الصلاحيات', en: 'Admin — every permission' },
-    'mb.factPublished': { ar: '{a} مساهمات منشورة · {b} بانتظار المراجعة',
-                          en: '{a} contributions published · {b} awaiting review' },
-    'mb.factLast': { ar: 'آخر نشاط: {a}', en: 'Last active: {a}' },
-    'mb.factClean': { ar: 'لا بلاغات على مساهماته', en: 'No reports on their contributions' },
-    'mb.save':    { ar: 'حفظ التغييرات', en: 'Save changes' },
-    'mb.suspend': { ar: 'إيقاف الحساب مؤقتًا', en: 'Suspend the account' },
-    'mb.restore': { ar: 'إعادة تفعيل الحساب', en: 'Restore the account' },
-    'mb.saved':   { ar: 'حُفظ دور «{t}».', en: 'Role saved for "{t}".' },
-    'mb.suspended.done': { ar: 'أُوقف حساب «{t}» مؤقتًا.', en: '"{t}" is suspended.' },
-    'mb.restored': { ar: 'أُعيد تفعيل حساب «{t}».', en: '"{t}" is active again.' },
-    'status.active': { ar: 'نشط', en: 'Active' },
-    'status.activeF': { ar: 'نشطة', en: 'Active' },
-    'status.suspended': { ar: 'موقوف مؤقتًا', en: 'Suspended' },
 
     // ── Admin: reports ──────────────────────────────────────
     'rp.title':   { ar: 'البلاغات', en: 'Reports' },
     // Phrased as "label: count" so it stays grammatical at any number.
     'rp.sub':     { ar: 'بلاغات مفتوحة: {n} · ٣١ مغلقًا هذا العام',
                     en: 'Open reports: {n} · 31 closed this year' },
-    'rp.count':   { ar: 'بلاغات: {n}', en: 'Reports: {n}' },
     'rp.open':    { ar: 'مفتوحة', en: 'Open' },
     'rp.closed':  { ar: 'مغلقة', en: 'Closed' },
-    'rp.avgClose':{ ar: 'متوسط زمن إغلاق البلاغ: ١١ ساعة.', en: 'Median time to close a report: 11 hours.' },
     'rp.reason':  { ar: 'سبب البلاغ: {r}', en: 'Reason: {r}' },
-    'rp.reportedBy': { ar: 'أبلغ عنه: {n} · {a}', en: 'Reported by {n} · {a}' },
-    'rp.content': { ar: 'المحتوى المُبلَّغ عنه', en: 'The reported content' },
-    'rp.onMemory':{ ar: 'على ذكرى: «{t}» · مساهمة {n} · منشورة',
-                    en: 'On the memory "{t}" · contributed by {n} · published' },
-    'rp.message': { ar: 'رسالة إلى صاحب المحتوى (اختيارية)', en: 'Message to the author (optional)' },
-    'rp.messagePh': { ar: 'اشرح القرار بلغة ودّية — يصل نصّها كما هو.',
-                      en: 'Explain the decision kindly — it is sent exactly as written.' },
-    'rp.suggest1':{ ar: 'حفظ الذاكرة، تصحيح التعليق', en: 'Keep the memory, correct the comment' },
-    'rp.suggest2':{ ar: 'طلب مصدر من الطرفين', en: 'Ask both sides for a source' },
-    'rp.suggest3':{ ar: 'نقاش عام مفتوح', en: 'Open a public discussion' },
     'rp.logged':  { ar: 'القرار يُسجَّل في سجلّ الإدارة ويظهر للفريق فقط',
                     en: 'The decision is written to the admin log, visible to the team only' },
-    'rp.delete':  { ar: 'حذف التعليق', en: 'Delete the comment' },
-    'rp.hide':    { ar: 'إخفاء ريثما يُراجع', en: 'Hide pending review' },
     'rp.keep':    { ar: 'إبقاء المحتوى وإغلاق البلاغ', en: 'Keep the content and close the report' },
     'rp.closedOne': { ar: 'أُغلق البلاغ.', en: 'Report closed.' },
     'rp.empty':   { ar: 'لا بلاغات مفتوحة.', en: 'No open reports.' },
-    'reason.false': { ar: 'معلومة مغلوطة', en: 'Inaccurate information' },
-    'reason.privacy': { ar: 'خصوصية', en: 'Privacy' },
-
-    // ── Admin: settings ─────────────────────────────────────
-    'st.title':   { ar: 'الإعدادات', en: 'Settings' },
-    'st.sub':     { ar: 'إعدادات الأرشيف والمراجعة والفريق', en: 'Archive, review and team settings' },
-    'st.secArchive':  { ar: 'الأرشيف', en: 'Archive' },
-    'st.secReview':   { ar: 'المراجعة والنشر', en: 'Review & publishing' },
-    'st.secLangs':    { ar: 'اللغات', en: 'Languages' },
-    'st.secTaxonomy': { ar: 'التصنيفات', en: 'Categories' },
-    'st.secTeam':     { ar: 'الفريق والدعوات', en: 'Team & invitations' },
-    'st.secBackup':   { ar: 'النسخ والتصدير', en: 'Backup & export' },
-    'st.sla':     { ar: 'مهلة الردّ على المساهمات', en: 'Reply deadline for contributions' },
-    'st.slaHint': { ar: 'الوعد المعروض للمساهمين على الموقع', en: 'The promise shown to contributors on the site' },
-    'st.warn':    { ar: 'تنبيه اقتراب الموعد', en: 'Deadline warning' },
-    'st.warnOn':  { ar: 'ينبّه الفريق قبل ٦ ساعات من انتهاء المهلة', en: 'Warns the team 6 hours before the deadline' },
-    'st.warnOff': { ar: 'لا تنبيه قبل انتهاء المهلة', en: 'No warning before the deadline' },
-    'st.auto':    { ar: 'نشر تلقائي للأعضاء الموثّقين', en: 'Auto-publish for verified members' },
-    'st.autoHint':{ ar: 'يُنصح بإبقائه موقوفًا في السنة الأولى', en: 'Best left off through the first year' },
-    'st.autoOn':  { ar: 'مفعّل — يُنشر للموثّقين دون مراجعة', en: 'On — verified members publish without review' },
-    'st.autoOff': { ar: 'موقوف — كل مساهمة تمرّ بمراجعة بشرية', en: 'Off — every contribution gets a human review' },
-    'st.reviewers': { ar: 'عدد المراجعين لكل مساهمة', en: 'Reviewers per contribution' },
-    'st.reviewers1': { ar: 'مراجع واحد', en: 'One reviewer' },
-    'st.reviewers2': { ar: 'مراجعان', en: 'Two reviewers' },
-    'st.sendBackText': { ar: 'نصّ الردّ عند الإعادة للمساهم', en: 'Reply text when sending back' },
-    'st.sendBackHint': { ar: 'يُرسل مع ملاحظة المحرّر', en: 'Sent alongside the editor note' },
-    'st.sendBackDefault': { ar: 'شكرًا لمشاركتك هذه الذاكرة. نحتاج تفصيلًا صغيرًا قبل نشرها…',
-                            en: 'Thank you for sharing this memory. We need one small detail before publishing…' },
-    'st.comments': { ar: 'مراجعة التعليقات', en: 'Comment moderation' },
-    'st.commentsOn': { ar: 'تُنشر التعليقات فورًا وتُراجع عند الإبلاغ',
-                       en: 'Comments post immediately and are reviewed when reported' },
-    'st.commentsOff': { ar: 'كل تعليق يُراجع قبل ظهوره', en: 'Every comment is reviewed before it appears' },
-    'st.save':    { ar: 'حفظ الإعدادات', en: 'Save settings' },
-    'st.lastEdit':{ ar: 'آخر تعديل: هناء ع. · ٤ آذار ٢٠٢٦', en: 'Last edited by Hana A. · 4 March 2026' },
-    'st.saved':   { ar: 'حُفظت الإعدادات.', en: 'Settings saved.' },
-    'st.sectionSoon': { ar: 'هذا القسم من الإعدادات لم يُبنَ بعد.', en: 'This settings section is not built yet.' },
 
     // ── Time ────────────────────────────────────────────────
     'time.hours':    { ar: '{n} ساعة',      en: '{n} hours' },
-    'time.hoursOpt': { ar: '{n} ساعة',      en: '{n}h' },
     'time.ago':      { ar: 'قبل {n} ساعة',  en: '{n} hours ago' },
-    'time.minutes':  { ar: '{n} دقيقة',     en: '{n} minutes' },
-    'time.days':     { ar: '{n} يوم',       en: '{n} days' },
-    'time.weeks':    { ar: '{n} أسبوع',     en: '{n} weeks' }
+
+    // ── The read path (M3) ──────────────────────────────────
+    // Every failure archive.js can report. They are separate strings on purpose: "you are
+    // offline" and "this item is not in the archive" are different facts, and a reader who
+    // is told the wrong one either reloads forever or gives up on a page that would work.
+    'archive.err.title':       { ar: 'تعذّر فتح الأرشيف', en: 'The archive could not be opened' },
+    'archive.err.offline':     { ar: 'لا يوجد اتصال بالشبكة. أعد المحاولة عند عودة الاتصال.',
+                                 en: 'No connection. Try again when you are back online.' },
+    'archive.err.missing':     { ar: 'هذه الذكرى ليست في الأرشيف — قد تكون سُحبت.',
+                                 en: 'This memory is not in the archive — it may have been withdrawn.' },
+    'archive.err.unpublished': { ar: 'لم يُنشر الأرشيف بعد.', en: 'The archive has not been published yet.' },
+    'archive.err.notReady':    { ar: 'لم يُنشر الأرشيف بعد.', en: 'The archive has not been published yet.' },
+    'archive.err.generic':     { ar: 'تعذّر تحميل الأرشيف.', en: 'The archive could not be loaded.' },
+
+    'feed.empty':     { ar: 'لا ذكريات منشورة بعد.', en: 'Nothing published yet.' },
+    // Shown on a card whose derivative is not there — an item published before its thumb
+    // landed, or one whose bytes a takedown removed from a release still in someone's cache.
+    'feed.noPreview': { ar: 'لا معاينة', en: 'no preview' },
+
+    // ── Comments (M3) ───────────────────────────────────────
+    'comments.someone':    { ar: 'عضو', en: 'A member' },
+    'comments.you':        { ar: 'أنت', en: 'You' },
+    // §1: everything user-submitted is reviewed before it is public. A member's own pending
+    // comment is shown to them, flagged — a comment that vanished on submit reads as lost.
+    'comments.awaiting':   { ar: 'بانتظار المراجعة', en: 'awaiting review' },
+    'comments.placeholder':{ ar: 'اكتب ما تذكره…', en: 'Write what you remember…' },
+    'comments.send':       { ar: 'إرسال', en: 'Send' },
+    'comments.sent':       { ar: 'وصل تعليقك. سيظهر بعد المراجعة.',
+                             en: 'Your comment arrived. It appears after review.' },
+    'comments.reviewNote': { ar: 'كل تعليق يُراجع قبل نشره', en: 'Every comment is reviewed before it appears' },
+    'comments.err.empty':  { ar: 'اكتب شيئًا قبل الإرسال.', en: 'Write something first.' },
+    'comments.err.tooLong':{ ar: 'التعليق أطول من ٤٠٠٠ حرف.', en: 'That is longer than 4000 characters.' },
+
+    // ── Reports (M3) ────────────────────────────────────────
+    'viewer.report':      { ar: 'إبلاغ', en: 'Report' },
+    'report.title':       { ar: 'الإبلاغ عن هذه الذكرى', en: 'Report this memory' },
+    'report.blurb':       { ar: 'اشرح ما الخطأ. يصل بلاغك إلى فريق المراجعة وحده.',
+                            en: 'Tell us what is wrong. Your report reaches the review team only.' },
+    'report.reason':      { ar: 'سبب البلاغ', en: 'Reason' },
+    'report.placeholder': { ar: 'تاريخ خاطئ، مكان خاطئ، مسألة خصوصية…',
+                            en: 'Wrong date, wrong place, a privacy concern…' },
+    'report.submit':      { ar: 'إرسال البلاغ', en: 'Send the report' },
+    'report.sent':        { ar: 'وصل بلاغك. شكرًا.', en: 'Your report arrived. Thank you.' },
+    'report.err.empty':   { ar: 'اكتب سبب البلاغ.', en: 'Say what is wrong.' },
+    'report.err.tooLong': { ar: 'البلاغ أطول من ٢٠٠٠ حرف.', en: 'That is longer than 2000 characters.' },
+
+    // ── The three roles (§4) ────────────────────────────────
+    // CLAUDE.md §4 has exactly three. The front end used to carry five —
+    // contributor/editor/partner/narrator/admin — invented for the prototype and listed in
+    // the README as a known departure. A vocabulary the database cannot express is a
+    // vocabulary that will eventually be used to decide something.
+    'role.member':    { ar: 'عضو',    en: 'Member' },
+    'role.moderator': { ar: 'محرِّر',  en: 'Moderator' },
+    'role.admin':     { ar: 'مدير',   en: 'Admin' },
+
+    // ── Handles (§3, §7) ────────────────────────────────────
+    // The signup field used to ask for a full name. §3: "handle is user-chosen, NOT a legal
+    // name", and §7 makes this archive one where asking for a real name is a safety
+    // question rather than a form-design one.
+    'field.handle':     { ar: 'الاسم المستعار', en: 'Handle' },
+    'field.handlePh':   { ar: 'مثال: ramallah_1967', en: 'e.g. ramallah_1967' },
+    'field.handleNote': { ar: 'اسم تختاره أنت ويظهر للجميع — ليس اسمك الحقيقي',
+                          en: 'A public name you choose — not your legal name' },
+    'signup.err.handleRequired': { ar: 'اختر اسمًا مستعارًا.', en: 'Choose a handle.' },
+    'signup.err.handleTaken':    { ar: 'هذا الاسم المستعار محجوز. غيّره من صفحتك.',
+                                   en: 'That handle is taken. Change it from your profile.' },
+
+    // ── A member's own submissions (M3) ─────────────────────
+    // The surface a refused upload never had. §6 holds `expect_by` until a timing probe
+    // against the deployed worker replaces the estimated factor in JOB_DEADLINE_MS, so
+    // nothing here says WHEN — only which state a submission is in, which is true today.
+    'mine.title': { ar: 'مساهماتك قيد المعالجة', en: 'Your submissions in progress' },
+    'mine.blurb': { ar: 'ما لم يُنشر بعد. تظهر المساهمة في الأرشيف بعد اكتمال المعالجة والمراجعة.',
+                    en: 'Not published yet. A contribution appears once processing and review are done.' },
+    'mine.state.processing': { ar: 'قيد المعالجة', en: 'Processing' },
+    'mine.state.incomplete': { ar: 'لم يكتمل الرفع', en: 'Upload incomplete' },
+    'mine.state.failed':     { ar: 'تعذّرت المعالجة', en: 'Processing failed' },
+    'mine.state.inReview':   { ar: 'قيد المراجعة', en: 'In review' },
+    'mine.state.rejected':   { ar: 'لم تُقبل', en: 'Not accepted' },
+    'mine.state.withdrawn':  { ar: 'مسحوبة', en: 'Withdrawn' },
+    // The worker's own failure names, as a contributor can act on them. An unmapped one
+    // falls through to the key itself, which is visibly wrong rather than silently missing.
+    'mine.err.unsupported_type':  { ar: 'نوع الملف غير مدعوم.', en: 'That file type is not supported.' },
+    'mine.err.declared_mismatch': { ar: 'محتوى الملف لا يطابق نوعه المعلن.',
+                                    en: 'The file’s contents do not match its declared type.' },
+    'mine.err.svg_rejected':      { ar: 'ملفات SVG غير مقبولة.', en: 'SVG files are not accepted.' },
+    'mine.err.decode_failed':     { ar: 'تعذّر فتح الملف. جرّب تصديره من جديد.',
+                                    en: 'The file could not be opened. Try exporting it again.' },
+    'mine.err.job_deadline':      { ar: 'المعالجة استغرقت وقتًا أطول من المسموح.',
+                                    en: 'Processing ran longer than allowed.' },
+
+    // ── Share sheet (M3) ────────────────────────────────────
+    'share.fDecadeUnknown': { ar: 'العقد غير معروف', en: 'Decade unknown' },
+    'share.fPlaceLater':    { ar: 'المكان يضيفه فريق المراجعة — أذكره في الحكاية إن عرفته.',
+                              en: 'The place is set by the review team — mention it in the story if you know it.' },
+    'up.err.decade':        { ar: 'العقد المُرسل غير صالح.', en: 'That decade is not valid.' },
+
+    // ── Located memories (M3; the map arrives in M4) ────────
+    'map.title':     { ar: 'ذكريات على الخريطة', en: 'Memories on the map' },
+    'map.blurbList': { ar: 'الذكريات التي تحمل موقعًا، مرتّبة بالعقد. خريطة المدينة تصل قريبًا.',
+                       en: 'Memories that carry a location, by decade. The city basemap is coming.' },
+    'map.empty':     { ar: 'لا ذكريات محدَّدة الموقع في هذا العقد.',
+                       en: 'No located memories in this decade.' },
+    // §7's four precisions, said as what they mean for a reader rather than as enum values.
+    'map.precision.exact':  { ar: 'موقع دقيق', en: 'Exact location' },
+    'map.precision.street':  { ar: 'الشارع تقريبًا', en: 'Approximate street' },
+    'map.precision.area':    { ar: 'المنطقة تقريبًا', en: 'Approximate area' },
+    'map.precision.hidden':  { ar: 'الموقع مخفيّ', en: 'Location hidden' },
+
+    'events.empty': { ar: 'لا فعاليات منشورة بعد.', en: 'No events published yet.' },
+    'decade.2020':  { ar: 'العشرينيات', en: '2020s' },
+
+    // ── Admin: overview (M3) ────────────────────────────────
+    'ov.decadesCovered': { ar: 'العقود المغطّاة', en: 'Decades covered' },
+    'ov.decadesNote':    { ar: 'من الأرشيف المنشور', en: 'across the published archive' },
+    'ov.openReports':    { ar: 'بلاغات مفتوحة', en: 'Open reports' },
+    'ov.reportsNote':    { ar: 'بانتظار قرار', en: 'awaiting a decision' },
+    'ov.gapsRange':      { ar: 'حسب الأرشيف المنشور', en: 'across the published archive' },
+    'ov.noActivity':     { ar: 'لا قرارات مسجّلة بعد.', en: 'No decisions recorded yet.' },
+    // moderation_actions writes these names; anything unmapped renders as its own name,
+    // which is a legible fallback rather than a blank row.
+    'action.post.status.approved':      { ar: 'نُشرت ذكرى', en: 'A memory was published' },
+    'action.post.status.approved.self': { ar: 'نُشرت ذكرى (المحرّر نفسه)', en: 'A memory was published (by its own author)' },
+    'action.post.status.rejected':      { ar: 'رُفضت ذكرى', en: 'A memory was rejected' },
+    'action.post.status.withdrawn':     { ar: 'سُحبت ذكرى', en: 'A memory was withdrawn' },
+    'action.post.takedown':             { ar: 'أُزيلت ذكرى', en: 'A memory was taken down' },
+    'action.post.restore':              { ar: 'أُعيدت ذكرى', en: 'A memory was restored' },
+
+    // ── Admin: archive register and takedown (M3) ───────────
+    'ar.colKind':    { ar: 'النوع', en: 'Kind' },
+    'ar.colLicense': { ar: 'الرخصة', en: 'Licence' },
+    'ar.noLicense':  { ar: '—', en: '—' },
+    'ar.empty':      { ar: 'لا شيء منشور بعد.', en: 'Nothing published yet.' },
+    'ar.takedown':   { ar: 'إزالة', en: 'Take down' },
+    'ar.takedownTitle': { ar: 'إزالة هذه الذكرى', en: 'Take this memory down' },
+    // §8 and 0036: the master goes too. Said plainly, because "we still hold it privately"
+    // is not what a contributor asking for removal has agreed to.
+    'ar.takedownBlurb': { ar: 'تُحذف الملفات فورًا — المشتقّات والنسخة الأصلية معًا — ويُسجَّل القرار. لا رجعة.',
+                          en: 'The files are deleted immediately — derivatives and the archival master alike — and the decision is logged. This cannot be undone.' },
+    'ar.takedownNote':   { ar: 'سبب الإزالة', en: 'Reason for removal' },
+    'ar.takedownNotePh': { ar: 'يُسجَّل في سجلّ الإدارة', en: 'Recorded in the moderation log' },
+    'ar.takedownNoteRequired': { ar: 'اكتب سبب الإزالة.', en: 'Give a reason.' },
+    'ar.takedownConfirm': { ar: 'إزالة نهائية', en: 'Remove permanently' },
+    'ar.takenDown':       { ar: 'أُزيلت «{t}» ولم تعد الملفات موجودة.',
+                            en: '"{t}" is removed and the files are gone.' },
+    // 207: marked and hidden, and part of the removal did not complete. A separate message
+    // because telling a moderator "done" while a cached copy is still served is worse than
+    // an error — the next thing they do is tell a contributor their photograph is gone.
+    'ar.takenDownPartial': { ar: 'أُزيلت من الأرشيف، لكن جزءًا من الحذف لم يكتمل ({r}). راجع السجلّ.',
+                             en: 'Removed from the archive, but part of the deletion did not complete ({r}). Check the log.' },
+
+    // ── Admin: events, places, members (M3) ─────────────────
+    'ae.inQueue': { ar: 'في قائمة المراجعة: {n}', en: '{n} in the review queue' },
+    'ae.view':    { ar: 'عرض', en: 'View' },
+    'pl.m4Note':  { ar: 'للعرض فقط. تحرير المواقع وخريطة المدينة يصلان مع المرحلة الرابعة.',
+                    en: 'Read-only. Editing places and the city basemap arrive in M4.' },
+    'pl.unconfirmed':    { ar: 'إحداثيات غير مؤكّدة', en: 'coordinates unconfirmed' },
+    'pl.unconfirmedWhy': { ar: 'لم يؤكّد أحد موقع هذا المكان بعد', en: 'Nobody has confirmed where this place is' },
+    'pl.empty':   { ar: 'لا أماكن في الفهرس بعد.', en: 'No places in the gazetteer yet.' },
+    'mb.readOnly': { ar: 'للعرض فقط. تغيير الأدوار يجري خارج المتصفّح — لا صلاحية لأي صفحة عليه (§٤).',
+                     en: 'Read-only. Roles are changed outside the browser — no page holds that capability (§4).' },
+    'mb.colHandle': { ar: 'الاسم المستعار', en: 'Handle' },
+    'mb.colName':   { ar: 'الاسم المعروض', en: 'Display name' },
+    'mb.colBadge':  { ar: 'الشارة', en: 'Badge' },
+    'mb.empty':     { ar: 'لا حسابات بعد.', en: 'No accounts yet.' },
+
+    // ── Admin: reports (M3) ─────────────────────────────────
+    'rp.on.post':    { ar: 'على ذكرى', en: 'On a memory' },
+    'rp.on.comment': { ar: 'على تعليق', en: 'On a comment' },
+    'rp.on.profile': { ar: 'على حساب', en: 'On an account' },
+    'rp.target':     { ar: 'المحتوى المُبلَّغ عنه', en: 'Reported content' },
+    'rp.filed':      { ar: 'تاريخ البلاغ', en: 'Filed' },
+    'rp.viewContent':{ ar: 'فتح المحتوى', en: 'Open the content' },
+    'rp.closeNote':  { ar: 'إغلاق البلاغ لا يزيل المحتوى — استخدم «إزالة» من سجلّ الأرشيف.',
+                       en: 'Closing a report does not remove content — use Take down in the archive register.' },
+
+    // ── Admin: site copy (M3) ───────────────────────────────
+    'admin.copy':    { ar: 'نصوص الموقع', en: 'Site copy' },
+    'cp.title':      { ar: 'نصوص الموقع', en: 'Site copy' },
+    'cp.sub':        { ar: 'كل نصّ تحريري على الموقع — بالعربية والإنجليزية معًا',
+                       en: 'Every editorial string on the site — Arabic and English together' },
+    'cp.blurb':      { ar: '«حفظ» يحفظ مسوّدة لا يراها الزوّار. «نشر» هو ما يغيّر ما يقرؤه الناس.',
+                       en: '"Save" keeps a draft nobody sees. "Publish" is what changes what people read.' },
+    'cp.save':       { ar: 'حفظ المسوّدة', en: 'Save draft' },
+    'cp.publish':    { ar: 'نشر', en: 'Publish' },
+    'cp.saved':      { ar: 'حُفظت المسوّدة.', en: 'Draft saved.' },
+    'cp.published':  { ar: 'نُشر النصّ.', en: 'Published.' },
+    'cp.live':       { ar: 'منشور', en: 'live' },
+    'cp.draftPending': { ar: 'مسوّدة غير منشورة', en: 'unpublished draft' },
+    'cp.unsaved':    { ar: 'تعديلات غير محفوظة', en: 'unsaved changes' },
+    'cp.empty':      { ar: 'لا نصوص — أو ليست لديك صلاحية تحريرها (§٤).',
+                       en: 'No copy — or you may not edit it (§4).' }
   };
 
   var lang = read();

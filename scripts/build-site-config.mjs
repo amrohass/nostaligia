@@ -102,6 +102,55 @@ for (const origin of uploadOrigins) {
 }
 const uploadOriginsValue = uploadOrigins.join(',');
 
+// -- The read path ----------------------------------------------------------
+// Section 2: "Browser -> CDN -> manifest.json -> active release". `base` names the origin
+// that whole path hangs off, as a token rather than a hostname, so pointing the archive at
+// a different host stays the same one-file change as everything else here.
+//
+// "self" resolves to the empty string, which makes every archive fetch same-origin and
+// relative. That is a real deployment -- site/_headers already writes cache rules for /v/*
+// and /manifest.json -- not a development fallback. There is deliberately no inference from
+// a missing value and no localhost special case, for the reason r2Endpoint() gives: a read
+// path that silently falls back is one that reports success while reading a different
+// archive.
+const readBase = cfg.read_path?.base;
+if (typeof readBase !== 'string' || !readBase) {
+  throw new Error('config/site.json: read_path.base is required — the front end has nowhere to read the archive from');
+}
+const archiveBase = readBase === 'self' ? '' : resolve(readBase);
+
+// The directive that has to admit it. A read path the CSP blocks renders a blank archive,
+// and the only symptom is a console the visitor does not have open.
+if (archiveBase) {
+  const connect = (cfg.csp['connect-src'] ?? []).map(resolve);
+  if (!connect.includes(archiveBase)) {
+    throw new Error(
+      `config/site.json: read_path.base resolves to ${archiveBase}, which connect-src does not allow`);
+  }
+}
+
+// -- The publisher's view of the site ---------------------------------------
+// Not a CORS origin -- a canonical URL. Same rules for the same reasons as the loop above,
+// minus the localhost exemption: a prerendered page whose og:url is http://localhost is a
+// page nobody can share, which is the entire point of prerendering it.
+const siteOrigin = (cfg.function_env?.site_origin ?? '').trim();
+if (!siteOrigin) {
+  throw new Error('config/site.json: function_env.site_origin is empty — prerendered item pages would carry no canonical URL');
+}
+if (siteOrigin.includes('PLACEHOLDER')) {
+  throw new Error(`function_env: "${siteOrigin}" — no crawler resolves a placeholder; use the staging origin until production exists`);
+}
+{
+  let u;
+  try { u = new URL(siteOrigin); } catch { throw new Error(`function_env: "${siteOrigin}" is not a URL`); }
+  if (u.origin !== siteOrigin) {
+    throw new Error(`function_env: "${siteOrigin}" is not a bare origin (got "${u.origin}")`);
+  }
+  if (u.protocol !== 'https:') {
+    throw new Error(`function_env: "${siteOrigin}" is not https — og:url and the canonical link must be`);
+  }
+}
+
 // ── _headers ────────────────────────────────────────────────────────────────
 // Cloudflare Pages format: a path pattern, then indented `Name: value` lines. `/*` matches
 // every route, which is what a security header set should do -- an exception carved out
@@ -170,6 +219,11 @@ ${Object.entries(cfg.domains).map(([k, v]) => `      ${k}: 'https://${v}'`).join
       anonKey: ${JSON.stringify(anonKey)}
     }),
 
+    // Where the read path begins (section 2). An empty string means same origin -- see
+    // read_path in config/site.json. archive.js joins paths onto this, and nothing else in
+    // the front end knows where the archive lives.
+    archiveBase: ${JSON.stringify(archiveBase)},
+
     // The exact policy served by _headers. Exposed so a page can assert at runtime that the
     // policy it is running under is the one this repository generated, rather than assuming.
     csp: ${JSON.stringify(policy)}
@@ -181,8 +235,29 @@ ${Object.entries(cfg.domains).map(([k, v]) => `      ${k}: 'https://${v}'`).join
 // wrangler.toml. `_headers` is only applied at the ROOT of that directory — written to
 // the repository root instead, it is a correct, tested, committed file that no longer
 // reaches a single visitor.
+// -- site/_redirects --------------------------------------------------------
+// CLAUDE.md section 2 moves routing to the History API, which means /item/<id>, /map and
+// /u/<handle> are real paths a browser REQUESTS -- not fragments the server never sees.
+// Without this, every one of them is a 404 from Cloudflare Pages on first load and on every
+// refresh, and the site works only for someone who arrives at the root and never reloads.
+//
+// 200, not 302: the address bar has to keep the path, because the path IS the route.
+//
+// Static files still win -- Pages matches the filesystem before it reads this file -- so
+// /assets/*, /_headers, and anything the deployment routes to R2 are unaffected.
+const redirects = [
+  `# ${GENERATED}`,
+  '#',
+  '# History API routing (CLAUDE.md section 2). Every unmatched path serves the SPA shell',
+  '# with a 200, so the browser keeps the URL it asked for.',
+  '',
+  '/*  /index.html  200',
+  ''
+].join('\n');
+
 const outputs = [
   ['site/_headers', headers],
+  ['site/_redirects', redirects],
   ['site/assets/js/config.js', js]
 ];
 
@@ -209,3 +284,9 @@ if (check) console.log('\nboth generated files match config/site.json');
 // mitigation — the value is in front of you at the moment you change the origins.
 console.log(`\nEdge Function CORS — set this whenever the list above changes:\n` +
   `  npx supabase secrets set UPLOAD_ALLOWED_ORIGINS="${uploadOriginsValue}"`);
+
+// Same seam, same mitigation. The publisher reads SITE_ORIGIN to write og:url and the
+// canonical link into every prerendered item page; get it wrong and every shared link names
+// a host that is not this one, which is invisible from inside the repository.
+console.log(`\nThe publisher's canonical origin — set this whenever site_origin changes:\n` +
+  `  npx supabase secrets set SITE_ORIGIN="${siteOrigin}"`);

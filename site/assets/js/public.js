@@ -1,124 +1,204 @@
-/* The public Atlas — archive, immersive viewer, map, events, and the gate that
-   stands between a signed-out visitor and any control that writes.
+/* The public Atlas — archive, immersive viewer, located items, events, profiles, the info
+   page, and the gate that stands between a signed-out visitor and any control that writes.
 
-   Routes are hashes so the whole thing serves from a static host:
-     #/archive (default) · #/map · #/events */
+   ── Where the content comes from ─────────────────────────────
+
+   ARCHIVE, and nothing else. §2: "Static sharded JSON releases on CDN. Zero database reads
+   for public visitors." A signed-out reader can browse the whole archive without a single
+   request to PostgREST — no token, no anon key in flight, no query log to correlate (§7).
+
+   What still talks to the database, and only for someone already signed in: ENGAGE (their
+   own likes, saves and pending comments) and profile_view() on their own profile. Both are
+   engagement, which §1 gates behind sign-in anyway.
+
+   store.js is gone. It kept memories, comments, users and page copy in localStorage and let
+   any view write to them — README listed that as "client-authoritative unmoderated writes",
+   and §5 is unambiguous that unapproved content must be unreadable at the POLICY level
+   rather than filtered by a browser that has already been handed it.
+
+   ── Routes are paths ────────────────────────────────────────
+
+   §2: History API, not hash routing. Every one of these is a real URL a server sees, which
+   is the whole reason the prerendered item pages in the publisher can exist at all:
+
+     /                 the archive
+     /item/{id}        one memory, in the immersive viewer
+     /map              located memories, by decade
+     /events           events
+     /u/{handle}       somebody's profile
+     /me               your own
+     /page, /page/{s}  the info page, deep-linked to a section
+
+   site/_redirects serves index.html with a 200 for anything unmatched, so a refresh on
+   /item/{id} keeps the path rather than 404ing.
+
+   Old #/… links are translated once at boot. A diaspora archive spreads by people sending
+   each other links, and the ones already sent do not stop existing when the routing does. */
 
 (function (global) {
   'use strict';
 
   var el = UI.el, qs = UI.qs, mount = UI.mount, toneStyle = UI.toneStyle, ICONS = UI.ICONS;
+  var bdi = UI.bdi;
   var t = function (k, v) { return I18N.t(k, v); };
   var pick = I18N.pick, gloss = I18N.gloss, num = I18N.num;
 
-  var RAMALLAH = [31.9022, 35.2034];
-
-  /* Content comes from the store — the same records the dashboard edits. DATA
-     still supplies places, decades and tone palettes, which are reference data
-     rather than editable content.
-
-     `memories` is a plain array because the viewer indexes into it; it is
-     refreshed from the store at the top of every render. */
-  var memories = [];
-
-  function refreshContent() {
-    memories = Store.list('memories', function (m) { return m.status !== 'hidden'; });
-  }
-
-  function events() {
-    return Store.list('events');
-  }
-
-  /** An editorial copy block, in the active language. */
-  function copyText(id) {
-    return pick(Store.copy(id));
-  }
-
-  /* The session is AUTH's now, not this file's.
-
-     Until M1 piece 4 this module kept its own `rma.signedIn` flag in sessionStorage and a
-     hardcoded member record. Both are gone: `state.signedIn` mirrors AUTH so the views can
-     read it synchronously while rendering, and AUTH.onChange keeps that mirror honest.
-
-     `state.userId` still points at a Store record, because profiles, comments and
-     attribution all read from the prototype store and that store is M3's to replace. The
-     bridge is deliberately one line and deliberately ugly, so it is obvious what has to go
-     when the store becomes real: a signed-in member is shown against the demo profile. */
-  var DEMO_USER_ID = 'm1';
+  /* ── State ───────────────────────────────────────────────── */
 
   var state = {
+    ready: false,
+    error: null,          // an i18n key, when the archive could not be read
+
+    feed: [],             // accumulated feed entries, newest first
+    /* A deep link may land on an item that is nine feed pages down. Rather than loading
+       nine pages to find it, it is fetched alone and shown FIRST in the viewer — and kept
+       here rather than pushed into state.feed, because the feed is also what the archive
+       grid renders and an item jumping to the front of the masonry because somebody
+       arrived from WhatsApp is a bug with a very confusing cause. */
+    lead: null,
+    page: 0,              // highest feed page loaded
+    pages: 1,
+    total: 0,
+    loadingPage: false,
+
+    items: {},            // id -> item shard, once fetched
+    liked: {},            // id -> true, from the member's own rows
+    saved: {},
+    /* Applied on top of the BAKED counts. §2's 20 Aug amendment: baked counters go live
+       with the next content change, so the published number can be days old — this is the
+       delta from what the member has done in this session, added rather than pretended. */
+    likeDelta: {},
+
     signedIn: false,
-    userId: null,
-    account: null,     // { id, email, role } from AUTH — the real identity
-    likes: {},
+    account: null,        // { id, email, role } from AUTH
+
     decade: 'all',
-    viewer: null,      // { index }
-    mapCard: null,     // memory id
-    editOpen: false,   // profile edit panel
+    viewer: null,         // { index }
+    editOpen: false,
     releaseTrap: null,
+
     /* §9: "The sign-in gate always preserves intent — the pending action and its item
-       survive the auth round-trip and the user returns exactly where they were." This is
-       where that intent is parked while the member signs in. */
-    pending: null      // { run: function, label: string }
+       survive the auth round-trip and the user returns exactly where they were." */
+    pending: null
   };
 
   function adoptAccount(account) {
-    state.account = account;
+    state.account = account ? { id: account.id, email: account.email, role: account.role, handle: null } : null;
     state.signedIn = account !== null;
-    state.userId = account ? DEMO_USER_ID : null;
+    if (!account) { state.liked = {}; state.saved = {}; state.likeDelta = {}; }
   }
 
-  function currentUser() {
-    return state.userId ? Store.get('users', state.userId) : null;
-  }
+  /** An editorial copy block, in the active language. §9: never a literal in a view. */
+  function copyText(id) { return pick(ARCHIVE.block(id)); }
 
   /* ── Routing ─────────────────────────────────────────────── */
 
-  function hashPath() {
-    return global.location.hash.replace(/^#\/?/, '');
+  function path() {
+    var p = global.location.pathname || '/';
+    return p.length > 1 && p.charAt(p.length - 1) === '/' ? p.slice(0, -1) : p;
+  }
+
+  function segments() {
+    return path().split('/').filter(Boolean).map(decodeURIComponent);
   }
 
   function route() {
-    var hash = hashPath();
-    if (hash.slice(0, 2) === 'm/') return 'archive';
-    if (hash === 'me' || hash.slice(0, 2) === 'u/') return 'profile';
-    if (hash === 'page' || hash.slice(0, 5) === 'page/') return 'page';
-    return ['archive', 'map', 'events'].indexOf(hash) > -1 ? hash : 'archive';
+    var seg = segments();
+    if (!seg.length) return 'archive';
+    if (seg[0] === 'item') return 'archive';   // the viewer opens OVER the archive
+    if (seg[0] === 'u' || seg[0] === 'me') return 'profile';
+    if (seg[0] === 'page') return 'page';
+    return ['map', 'events'].indexOf(seg[0]) > -1 ? seg[0] : 'archive';
   }
 
-  /** #/me is the signed-in member; #/u/<id> is somebody else. */
-  function routedProfileId() {
-    var hash = hashPath();
-    if (hash === 'me') return state.userId;
-    if (hash.slice(0, 2) === 'u/') return hash.slice(2);
-    return null;
+  function routedItemId() {
+    var seg = segments();
+    return seg[0] === 'item' && seg[1] ? seg[1] : null;
   }
 
-  /** #/page/<slug> scrolls to a section; bare #/page starts at the top. */
+  /** /me is the signed-in member; /u/<handle> is anybody. */
+  function routedHandle() {
+    var seg = segments();
+    if (seg[0] === 'me') return null;
+    return seg[0] === 'u' && seg[1] ? seg[1] : null;
+  }
+
+  function isOwnProfileRoute() { return segments()[0] === 'me'; }
+
   function routedPageSlug() {
-    var hash = hashPath();
-    return hash.slice(0, 5) === 'page/' ? hash.slice(5) : null;
+    var seg = segments();
+    return seg[0] === 'page' && seg[1] ? seg[1] : null;
   }
 
-  /** #/m/<id> deep-links a single memory, so every one of them has a URL. */
-  function routedMemoryIndex() {
+  /**
+   * Go somewhere, and re-render.
+   *
+   * pushState rather than assigning location: the point of History API routing is that a
+   * navigation costs no request. `replace` is for the viewer's scroll position, which
+   * must not stack a history entry per slide — otherwise Back walks the reader up through
+   * every memory they scrolled past instead of leaving the viewer.
+   */
+  function navigate(to, replace) {
+    if (to === path()) return;
+    global.history[replace ? 'replaceState' : 'pushState'](null, '', to);
+    render();
+  }
+
+  /* One listener for every internal link, rather than an onclick on each.
+
+     Delegation is not a micro-optimisation here: cards, the footer, comment bylines and the
+     prerendered HTML the publisher emits all produce anchors, and the prerendered ones are
+     in the document BEFORE this file runs. A per-link handler would miss exactly those —
+     which are the links a visitor who arrived from WhatsApp sees first.
+
+     Modified clicks are left alone. Ctrl/Cmd-click, middle-click and shift-click mean "open
+     this elsewhere", and a router that swallows them breaks the one interaction people use
+     to keep their place in a feed. */
+  function onDocumentClick(event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+    var node = event.target;
+    while (node && node !== global.document.body && node.tagName !== 'A') node = node.parentNode;
+    if (!node || node.tagName !== 'A') return;
+
+    var href = node.getAttribute('href');
+    if (!href || href.charAt(0) !== '/' || node.hasAttribute('target') ||
+        node.hasAttribute('download')) return;
+
+    event.preventDefault();
+    navigate(href);
+  }
+
+  /* Links shared before §2's routing changed. Translated once, with replaceState so the
+     old form does not sit in history waiting to be walked back into. */
+  function migrateHashRoute() {
     var hash = global.location.hash.replace(/^#\/?/, '');
-    if (hash.slice(0, 2) !== 'm/') return -1;
-    var id = hash.slice(2);
-    for (var i = 0; i < memories.length; i++) if (memories[i].id === id) return i;
-    return -1;
+    if (!hash) return false;
+    var to = null;
+    if (hash.slice(0, 2) === 'm/') to = '/item/' + encodeURIComponent(hash.slice(2));
+    else if (hash === 'me') to = '/me';
+    else if (hash.slice(0, 2) === 'u/') to = '/u/' + encodeURIComponent(hash.slice(2));
+    else if (hash === 'page') to = '/page';
+    else if (hash.slice(0, 5) === 'page/') to = '/page/' + encodeURIComponent(hash.slice(5));
+    else if (['archive', 'map', 'events'].indexOf(hash) > -1) to = hash === 'archive' ? '/' : '/' + hash;
+    if (!to) return false;
+    global.history.replaceState(null, '', to);
+    return true;
   }
 
   /* ── Masthead ────────────────────────────────────────────── */
 
+  var NAV = [['archive', '/'], ['map', '/map'], ['events', '/events']];
+
   function renderMasthead() {
     var current = route();
 
-    var nav = el('nav.masthead__nav', { 'aria-label': t('nav.archive') }, ['archive', 'map', 'events'].map(function (name) {
+    var nav = el('nav.masthead__nav', { 'aria-label': t('nav.archive') }, NAV.map(function (entry) {
       return el('a.navlink', {
-        href: '#/' + name,
-        'aria-current': name === current ? 'page' : null,
-        text: t('nav.' + name)
+        href: entry[1],
+        'aria-current': entry[0] === current ? 'page' : null,
+        text: t('nav.' + entry[0])
       });
     }));
 
@@ -132,19 +212,16 @@
     ];
 
     if (state.signedIn) {
-      var me = currentUser();
       actions.push(el('button.btn.btn--primary.btn--share', { type: 'button', onclick: openShareSheet }, [
         el('span.plus', { text: '+' }),
         t('action.share')
       ]));
-      // The avatar is the way into your own profile; sign-out moved beside it.
       actions.push(el('a.avatar-btn', {
-        href: '#/me',
+        href: '/me',
         title: t('profile.mine'),
         'aria-label': t('profile.mine'),
-        'aria-current': current === 'profile' && routedProfileId() === state.userId ? 'page' : null,
-        style: me && me.tone ? '--p1:' + me.tone : null,
-        text: me ? pick(me.initial) : (I18N.lang === 'ar' ? 'ع' : 'M')
+        'aria-current': isOwnProfileRoute() ? 'page' : null,
+        text: initialFor(state.account)
       }));
       actions.push(el('button.btn.btn--quiet.masthead__signout', {
         type: 'button', onclick: signOut, text: t('action.signOut')
@@ -160,7 +237,7 @@
 
     mount(qs('#masthead'), [
       el('div.masthead__lead', null, [
-        el('a.wordmark', { href: '#/archive' }, [
+        el('a.wordmark', { href: '/' }, [
           el('span.wordmark__primary', { text: t('brand.name') }),
           el('span.wordmark__secondary', { dir: I18N.lang === 'ar' ? 'ltr' : 'rtl', text: t('brand.counterpart') })
         ]),
@@ -170,9 +247,27 @@
     ]);
   }
 
+  /* §7: "avatar is mandatory but defaults to a generated avatar". The generated one is the
+     first character of the handle on a tone derived from it — no request, no upload, and
+     nothing about the person in it. A real avatar_path lands in M5 with the profile editor. */
+  function initialFor(who) {
+    var name = who && (who.handle || who.display_name);
+    if (!name) return I18N.lang === 'ar' ? 'ع' : 'M';
+    return String(name).trim().charAt(0).toUpperCase();
+  }
+
+  function avatarTone(handle) {
+    var sum = 0;
+    String(handle || '').split('').forEach(function (c) { sum += c.charCodeAt(0); });
+    var tones = DATA.TONE_NAMES;
+    return tones[sum % tones.length];
+  }
+
   /* ── Footer ──────────────────────────────────────────────── */
 
   function renderFooter() {
+    var sections = ARCHIVE.pages();
+
     mount(qs('#site-footer'), [
       el('div.site-footer__top', null, [
         el('div.site-footer__about', null, [
@@ -180,18 +275,15 @@
           el('div.site-footer__mark-sub', { dir: I18N.lang === 'ar' ? 'ltr' : 'rtl', text: t('brand.counterpart') }),
           el('p.site-footer__blurb', { text: copyText('footer.blurb') })
         ]),
-        // Each link deep-links to its own section of the info page.
         el('nav.site-footer__links', { 'aria-label': t('footer.project') }, [
           el('div.site-footer__heading', { text: t('footer.project') })
-        ].concat(Store.list('pages').map(function (section) {
-          return el('a', { href: '#/page/' + section.slug, text: pick(section.title) });
-        }).concat([
-          el('a', { href: '#/page/support', text: t('footer.terms') })
-        ]))),
+        ].concat(sections.map(function (section) {
+          return el('a', { href: '/page/' + encodeURIComponent(section.slug), text: pick(section.title) });
+        }))),
         el('div.donate', null, [
           el('div.donate__title', { text: copyText('donate.title') }),
           el('p.donate__blurb', { text: copyText('donate.blurb') }),
-          el('a.btn', { href: '#/page/donate', text: t('donate.cta') })
+          el('a.btn', { href: '/page/donate', text: t('donate.cta') })
         ])
       ]),
       el('div.site-footer__legal', null, [
@@ -201,7 +293,7 @@
     ]);
   }
 
-  /* ── Archive ─────────────────────────────────────────────── */
+  /* ── The feed ────────────────────────────────────────────── */
 
   function columnCount() {
     var width = global.innerWidth;
@@ -210,45 +302,127 @@
     return 4;
   }
 
-  function badgeFor(memory) {
-    var map = { photo: 'badge--photo', voice: 'badge--voice', video: 'badge--video' };
-    return el('span.badge ' + map[memory.kind], { text: t('kind.' + memory.kind) });
+  /**
+   * One more page of the feed.
+   *
+   * Additive: state.feed accumulates, so the masonry does not reflow what is already read
+   * and the viewer's index stays valid across a load. Guarded by `loadingPage` because the
+   * scroll handler and a deep link can both ask at once.
+   */
+  function loadNextPage() {
+    if (state.loadingPage || state.page >= state.pages) return Promise.resolve();
+    state.loadingPage = true;
+    var want = state.page + 1;
+    return ARCHIVE.feedPage(want).then(function (body) {
+      state.page = body.page;
+      state.pages = body.pages;
+      state.total = body.total;
+      var known = {};
+      state.feed.forEach(function (row) { known[row.id] = true; });
+      body.items.forEach(function (row) { if (!known[row.id]) state.feed.push(row); });
+      state.loadingPage = false;
+      return refreshEngagement(body.items.map(function (r) { return r.id; }));
+    }, function (err) {
+      state.loadingPage = false;
+      // Only the FIRST page failing is a broken archive. A later page failing leaves what
+      // is already on screen intact, which is what a reader mid-scroll needs.
+      if (want === 1) state.error = err && err.key ? err.key : 'archive.err.generic';
+      throw err;
+    });
   }
 
-  function memoryCard(memory, index) {
+  /** The member's own like/save rows for a set of ids. No-op when signed out. */
+  function refreshEngagement(ids) {
+    if (!state.signedIn || !ids || !ids.length) return Promise.resolve();
+    return Promise.all([ENGAGE.likedMap(ids), ENGAGE.savedMap(ids)]).then(function (both) {
+      Object.keys(both[0]).forEach(function (id) { state.liked[id] = true; });
+      Object.keys(both[1]).forEach(function (id) { state.saved[id] = true; });
+    });
+  }
+
+  function badgeFor(entry) {
+    var kind = displayKind(entry);
+    var map = { photo: 'badge--photo', voice: 'badge--voice', video: 'badge--video', event: 'badge--voice' };
+    return el('span.badge ' + map[kind], { text: t('kind.' + kind) });
+  }
+
+  /* The shard carries the schema's `kind` (media|voice|event). What a reader cares about is
+     what they are about to look at, which for `media` depends on the thumb's mime — the same
+     distinction the moderation queue makes for the same reason. */
+  function displayKind(entry) {
+    if (entry.kind === 'event') return 'event';
+    if (entry.kind === 'voice') return 'voice';
+    if (entry.video) return 'video';
+    return 'photo';
+  }
+
+  function titlePair(row) {
+    return { ar: row.title_ar || row.title_en || '', en: row.title_en || row.title_ar || '' };
+  }
+
+  function decadeLabel(decade) {
+    if (!decade) return '';
+    var key = 'decade.' + decade;
+    var label = t(key);
+    return label === key ? String(decade) : label;
+  }
+
+  /**
+   * A card.
+   *
+   * The whole card is one anchor to /item/{id} — a real URL, so it can be copied, opened in
+   * a new tab, and crawled. That is §2's History API requirement doing work rather than
+   * being satisfied on paper: under hash routing this href was `#/m/<id>`, which no crawler
+   * and no preview fetcher has ever been able to resolve.
+   */
+  function memoryCard(entry) {
+    var title = titlePair(entry);
     var parts = [];
 
-    if (memory.kind === 'voice') {
+    var thumb = entry.thumb ? ARCHIVE.mediaUrl(entry.thumb) : null;
+
+    if (displayKind(entry) === 'voice' && !thumb) {
       parts.push(el('div.memory__voice-head', null, [
-        el('div.memory__voice-avatar', { style: toneStyle(memory.tone) }),
-        el('div.memory__voice-title', { text: pick(memory.title) })
+        el('div.memory__voice-avatar', { style: toneStyle(avatarTone(entry.id)) }),
+        el('div.memory__voice-title', null, bdi(pick(title)))
       ]));
       parts.push(el('div.waveform', null, [
         el('span.waveform__play', { 'aria-hidden': 'true', text: '▶' }),
-        el('span', { html: ICONS.waveform(130, 24, 7) }),
-        el('span.waveform__time', { text: memory.duration })
+        ICONS.waveform(130, 24, 7)
+      ]));
+    } else if (thumb) {
+      parts.push(el('div.memory__plate', null, [
+        el('img.memory__img', {
+          src: thumb,
+          alt: pick(title),
+          loading: 'lazy',
+          decoding: 'async'
+        }),
+        displayKind(entry) === 'video' ? el('span.memory__duration', { text: '▶' }) : null
       ]));
     } else {
+      /* No derivative to show. The hatched plate rather than a broken image: an item can be
+         approved with its thumb missing (a takedown that removed the bytes and has not
+         reached this cached release yet), and a broken <img> would read as a site fault. */
       parts.push(el('div.memory__plate.plate', {
-        style: toneStyle(memory.tone, 'height:' + memory.weight + 'px')
-      }, [
-        el('span.mono', { text: memory.plate }),
-        memory.kind === 'video' ? el('span.memory__duration', { text: '▶ ' + memory.duration }) : null
-      ]));
+        style: toneStyle(avatarTone(entry.id), 'height:220px')
+      }, el('span.mono', { text: t('feed.noPreview') })));
     }
 
     var body = [];
-    if (memory.kind !== 'voice') body.push(el('h3.memory__title', { text: pick(memory.title) }));
-    body.push(el('div.memory__gloss.gloss-line', { text: gloss(memory.title) }));
+    if (displayKind(entry) !== 'voice' || thumb) {
+      body.push(el('h3.memory__title', null, bdi(pick(title))));
+    }
+    if (gloss(title)) body.push(el('div.memory__gloss.gloss-line', null, bdi(gloss(title))));
     body.push(el('div.memory__meta', null, [
-      badgeFor(memory),
-      el('span.era', { text: t('decade.' + memory.decade) })
+      badgeFor(entry),
+      entry.decade ? el('span.era', { text: decadeLabel(entry.decade) }) : null
     ]));
     parts.push(el('div.memory__body', null, body));
 
     return el('a.memory', {
-      href: '#/m/' + memory.id,
-      'aria-label': pick(memory.title)
+      href: '/item/' + encodeURIComponent(entry.id),
+      'aria-label': pick(title)
     }, parts);
   }
 
@@ -256,147 +430,311 @@
     var count = columnCount();
     var columns = [];
     for (var c = 0; c < count; c++) columns.push([]);
-    memories.forEach(function (memory, i) {
-      columns[i % count].push(memoryCard(memory, i));
-    });
+    state.feed.forEach(function (entry, i) { columns[i % count].push(memoryCard(entry)); });
+
+    var more = state.page < state.pages;
 
     return el('div', { dataset: { cols: String(count) } }, [
       el('section.hero', null, [
         el('h1.hero__line', { text: copyText('hero.line') }),
         el('p.hero__blurb', { text: copyText('hero.blurb') }),
         el('ul.hero__stats', null, [
-          el('li', { text: t('hero.memories', { n: num(3462) }) }),
-          el('li', { text: t('hero.narrators', { n: num(890) }) }),
+          el('li', { text: t('hero.memories', { n: num(state.total) }) }),
           el('li', { text: t('hero.decades') })
         ])
       ]),
-      el('div.grid', null, columns.map(function (cards) {
-        return el('div.grid__col', null, cards);
-      })),
-      el('div.feed-end', null, [
-        el('span.dot'), el('span.dot'), el('span.dot'),
-        el('span', { text: t('feed.more') })
-      ])
+      state.feed.length
+        ? el('div.grid', null, columns.map(function (cards) {
+            return el('div.grid__col', null, cards);
+          }))
+        : el('p.profile__empty', { text: state.error ? t(state.error) : t('feed.empty') }),
+      more
+        ? el('div.feed-end', null, [
+            el('span.dot'), el('span.dot'), el('span.dot'),
+            el('span', { text: t('feed.more') })
+          ])
+        : null
     ]);
   }
 
   /* ── Immersive viewer ────────────────────────────────────── */
 
-  function viewerSlide(memory) {
-    var plate = el('div.viewer__plate.plate--deep', { style: toneStyle(memory.tone) }, [
-      el('span.mono', { text: memory.plate || (pick(memory.title)) })
-    ]);
-    if (memory.kind === 'video') plate.appendChild(el('span.viewer__play', { text: '▶' }));
-    if (memory.kind === 'voice') plate.appendChild(el('span.viewer__play.viewer__play--voice', { text: '▶' }));
+  /**
+   * The media element for one item shard.
+   *
+   * §6's ladder rule is enforced here on the viewport half: "default to 1080p on desktop,
+   * 720p on mobile … Never auto-serve the top rung to a phone." ARCHIVE.rendition() picks
+   * and, importantly, steps DOWN when the wanted rung is missing rather than up. The
+   * connection half — stepping down on a slow link — is M6's, alongside the performance
+   * pass that can actually measure it.
+   *
+   * The master is never here. §6: originals are not CDN-fronted and are reached only
+   * through the explicit, sign-in-gated, rate-limited download — and shards.ts drops the
+   * `originals` rows before they are written, so there is nothing in this data to reach.
+   */
+  function mediaNode(item) {
+    var wide = global.innerWidth >= 900;
+    var poster = ARCHIVE.role(item.media, 'poster') || ARCHIVE.role(item.media, 'thumb');
+    var posterUrl = poster ? ARCHIVE.mediaUrl(poster.path) : null;
+    var rendition = ARCHIVE.rendition(item.media, wide);
+    var title = pick(titlePair(item));
 
-    var place = DATA.place(memory.place);
+    if (rendition && rendition.mime && rendition.mime.indexOf('video/') === 0) {
+      return el('video.viewer__media', {
+        src: ARCHIVE.mediaUrl(rendition.path),
+        poster: posterUrl,
+        controls: true,
+        preload: 'none',
+        playsinline: true,
+        'aria-label': title
+      });
+    }
+    if (rendition && rendition.mime && rendition.mime.indexOf('audio/') === 0) {
+      return el('div.viewer__audio', null, [
+        posterUrl ? el('img.viewer__audio-art', { src: posterUrl, alt: title }) : ICONS.waveform(240, 40, 7),
+        el('audio.viewer__media', {
+          src: ARCHIVE.mediaUrl(rendition.path),
+          controls: true, preload: 'none', 'aria-label': title
+        })
+      ]);
+    }
+    if (rendition) {
+      return el('img.viewer__media', {
+        src: ARCHIVE.mediaUrl(rendition.path),
+        alt: title, decoding: 'async'
+      });
+    }
+    if (posterUrl) return el('img.viewer__media', { src: posterUrl, alt: title, decoding: 'async' });
+    return el('div.viewer__plate.plate--deep', { style: toneStyle(avatarTone(item.id)) },
+      el('span.mono', { text: t('feed.noPreview') }));
+  }
 
-    return el('div.viewer__slide', null, [
-      plate,
+  function viewerSlide(entry) {
+    var title = titlePair(entry);
+    var slide = el('div.viewer__slide', { dataset: { id: entry.id } }, [
+      el('div.viewer__media-wrap', null,
+        entry.thumb
+          ? el('img.viewer__media', { src: ARCHIVE.mediaUrl(entry.thumb), alt: pick(title), decoding: 'async' })
+          : el('div.viewer__plate.plate--deep', { style: toneStyle(avatarTone(entry.id)) },
+              el('span.mono', { text: t('feed.noPreview') }))),
       el('div.viewer__caption', null, [
-        el('h2.viewer__title', { text: pick(memory.title) }),
-        el('div.viewer__gloss.gloss-line', { text: gloss(memory.title) }),
+        el('h2.viewer__title', null, bdi(pick(title))),
+        gloss(title) ? el('div.viewer__gloss.gloss-line', null, bdi(gloss(title))) : null,
         el('div.viewer__meta', null, [
-          el('span.badge', { text: t('kind.' + memory.kind) }),
-          el('span.era', { text: t('decade.' + memory.decade) }),
-          el('span.viewer__place', { text: place ? pick(place.name) : '' })
+          el('span.badge', { text: t('kind.' + displayKind(entry)) }),
+          entry.decade ? el('span.era', { text: decadeLabel(entry.decade) }) : null,
+          el('span.viewer__place')
         ])
       ])
     ]);
+    return slide;
   }
 
-  function railAction(glyph, label, description, onActivate) {
+  /** Replaces a slide's thumbnail with the real media once the item shard is in. */
+  function upgradeSlide(item) {
+    var slide = qs('.viewer__slide[data-id="' + cssEscape(item.id) + '"]');
+    if (!slide) return;
+    mount(qs('.viewer__media-wrap', slide), mediaNode(item));
+    var place = qs('.viewer__place', slide);
+    if (place) {
+      place.textContent = pick({ ar: item.place_ar || '', en: item.place_en || '' });
+    }
+  }
+
+  /* CSS.escape is not in every browser this has to run on, and the only values passed here
+     are post uuids — but a selector built from data is a selector built from data, and the
+     day one of these is a slug rather than a uuid this is what stops it being an injection
+     into querySelector. */
+  function cssEscape(value) {
+    return String(value).replace(/["\\]/g, '\\$&');
+  }
+
+  function railAction(glyph, label, description, onActivate, pressed) {
     var locked = !state.signedIn;
     return el('button.rail-action', {
       type: 'button',
       onclick: onActivate,
+      'aria-pressed': pressed == null ? null : (pressed ? 'true' : 'false'),
       'aria-label': locked ? description + ' — ' + t('action.signIn') : description
     }, [
       el('span.rail-action__glyph', null, [
         glyph,
-        locked ? el('span.padlock', { html: ICONS.lock('#26281F') }) : null
+        locked ? el('span.padlock', null, ICONS.lock('#26281F')) : null
       ]),
       el('span.rail-action__label', { text: label })
     ]);
   }
 
-  function viewerRail(memory) {
-    var likes = state.likes[memory.id] != null ? state.likes[memory.id] : memory.likes;
+  /** The published like count plus this session's own delta. See state.likeDelta. */
+  function likeCount(entry) {
+    var baked = (entry && (entry.likes != null ? entry.likes : 0)) || 0;
+    return baked + (state.likeDelta[entry.id] || 0);
+  }
+
+  function viewerRail(entry) {
+    var liked = Boolean(state.liked[entry.id]);
+    var saved = Boolean(state.saved[entry.id]);
     return [
-      railAction(el('span', { text: '♡' }), num(likes), t('viewer.like'), guard(toggleLike)),
-      railAction(el('span', { text: '✩' }), t('viewer.save'), t('viewer.save'), guard(function () { UI.toast(t('viewer.save')); })),
-      railAction(el('span', { text: '↓' }), t('viewer.download'), t('viewer.download'), guard(function () { UI.toast(t('viewer.download')); }))
+      railAction(el('span', { text: liked ? '♥' : '♡' }), num(likeCount(entry)), t('viewer.like'),
+        guard(function () { toggleLike(entry); }), liked),
+      railAction(el('span', { text: saved ? '★' : '✩' }), t('viewer.save'), t('viewer.save'),
+        guard(function () { toggleSave(entry); }), saved),
+      railAction(el('span', { text: '⚑' }), t('viewer.report'), t('viewer.report'),
+        guard(function () { openReport('post', entry.id); }))
     ];
   }
 
-  /* Re-derives everything outside the scroller: position, engagement rail and
-     comments. Called on scroll and whenever sign-in state changes, since the
-     padlocks belong to the rail. */
-  function renderViewerChrome(index) {
-    var memory = memories[index];
-    var overlay = qs('#viewer');
-    if (!overlay) return;
-
-    qs('.viewer__position', overlay).textContent =
-      num(index + 1) + ' / ' + num(memories.length);
-
-    mount(qs('.viewer__rail', overlay), viewerRail(memory));
-    mount(qs('.viewer__comments', overlay), commentsPanel(memory));
+  /* What the viewer scrolls through: the deep-linked item, if it is not already in the
+     feed, followed by the feed itself. One function so the scroller, the chrome and the
+     index arithmetic cannot disagree about the list they are indexing into. */
+  function viewerList() {
+    if (!state.lead) return state.feed;
+    return [state.lead].concat(state.feed.filter(function (r) { return r.id !== state.lead.id; }));
   }
 
-  /* Comments are their own collection now, so they can be listed on a profile and
-     moderated from the dashboard. Each one resolves its author to a real user. */
-  function commentRow(comment, tag) {
-    var author = Store.author(comment) || {};
-    return el(tag || 'li.comment', null, [
-      profileLink(author, el('span.comment__avatar', {
-        style: author.tone ? '--p1:' + author.tone : null,
-        text: pick(author.initial || { ar: '؟', en: '?' })
-      })),
+  function renderViewerChrome(index) {
+    var list = viewerList();
+    var entry = list[index];
+    var overlay = qs('#viewer');
+    if (!overlay || !entry) return;
+
+    qs('.viewer__position', overlay).textContent =
+      num(index + 1) + ' / ' + num(list.length);
+
+    mount(qs('.viewer__rail', overlay), viewerRail(entry));
+    mount(qs('.viewer__comments', overlay), commentsPanel(entry));
+  }
+
+  /* ── Comments ────────────────────────────────────────────── */
+
+  function commentRow(comment) {
+    var who = comment.author || {};
+    var name = who.display_name || who.handle || '';
+    var avatar = el('span.comment__avatar', {
+      style: toneStyle(avatarTone(who.handle || comment.id)),
+      text: initialFor(who)
+    });
+
+    return el('li.comment', null, [
+      who.handle
+        ? el('a.profile-link', { href: '/u/' + encodeURIComponent(who.handle), tabindex: '-1' }, avatar)
+        : avatar,
       el('div', null, [
         el('div.comment__head', null, [
-          profileLink(author, el('span.comment__name', { text: pick(author.name || { ar: 'عضو', en: 'Member' }) })),
-          el('span.comment__when', { text: pick(comment.when) })
+          who.handle
+            ? el('a.profile-link', { href: '/u/' + encodeURIComponent(who.handle) },
+                el('span.comment__name', null, bdi(name)))
+            : el('span.comment__name', null, bdi(name || t('comments.someone'))),
+          el('span.comment__when', { text: comment.day || '' }),
+          comment.pending ? el('span.privacy-flag', { text: t('comments.awaiting') }) : null
         ]),
-        el('p.comment__body', { text: pick(comment.body) })
+        el('p.comment__body', null, bdi(comment.body))
       ])
     ]);
   }
 
-  function commentsPanel(memory) {
-    var rows = Store.commentsOn(memory.id);
-    var list = rows.length
-      ? el('ul.comments__list', null, rows.map(function (comment) { return commentRow(comment); }))
+  /**
+   * The thread.
+   *
+   * Published comments come from the item shard, so a signed-out visitor reads them with no
+   * database at all (§2). A signed-in member additionally sees their OWN pending ones,
+   * flagged — because a comment that vanished on submit reads as a comment that was lost,
+   * and §1's "reviewed before it is public" is a promise the interface should keep out loud.
+   */
+  function commentsPanel(entry) {
+    var item = state.items[entry.id];
+    var rows = (item && item.comments) || [];
+    var mine = (item && item._mine) || [];
+
+    var all = rows.concat(mine.filter(function (m) { return m.status !== 'published'; })
+      .map(function (m) {
+        return {
+          id: m.id, body: m.body, day: m.created_on,
+          author: { handle: null, display_name: t('comments.you') },
+          pending: true
+        };
+      }));
+
+    var list = all.length
+      ? el('ul.comments__list', null, all.map(commentRow))
       : el('div.comments__list', null, el('p.comments__empty', { text: t('comments.empty') }));
 
     return [
       el('div.comments__head', null, [
-        el('div.comments__count', { html: t('comments.title') + ' <b>' + num(rows.length) + '</b>' }),
-        el('div.comments__subject', { text: pick(memory.title) })
+        el('div.comments__count', null, [
+          t('comments.title') + ' ',
+          el('b', { text: num(item ? item.comment_count : (entry.comments || 0)) })
+        ]),
+        el('div.comments__subject', null, bdi(pick(titlePair(entry))))
       ]),
       list,
-      el('button.locked-prompt', {
+      state.signedIn ? commentForm(entry) : el('button.locked-prompt', {
         type: 'button',
-        onclick: state.signedIn ? function () { UI.toast(t('comments.title')); } : openGate
+        onclick: function () { openGate(); }
       }, [
-        el('span.locked-prompt__lock', { html: ICONS.lock('#26281F') }),
-        el('span', { text: state.signedIn ? t('comments.title') : t('comments.locked') })
+        el('span.locked-prompt__lock', null, ICONS.lock('#26281F')),
+        el('span', { text: t('comments.locked') })
       ])
     ];
   }
 
+  function commentForm(entry) {
+    var input = el('textarea.input.comment-form__input', {
+      rows: '2',
+      placeholder: t('comments.placeholder'),
+      'aria-label': t('comments.title')
+    });
+    var note = el('p.form-error', { role: 'alert', hidden: true });
+    var button = el('button.btn.btn--primary', { type: 'submit', text: t('comments.send') });
+
+    return el('form.comment-form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        note.hidden = true;
+        button.disabled = true;
+        ENGAGE.comment(entry.id, input.value, I18N.lang).then(function () {
+          input.value = '';
+          button.disabled = false;
+          UI.toast(t('comments.sent'));
+          // Re-read the member's own comments so the pending one appears where they left it.
+          return loadOwnComments(entry.id).then(function () {
+            if (state.viewer) renderViewerChrome(state.viewer.index);
+          });
+        }).catch(function (err) {
+          button.disabled = false;
+          note.textContent = t(err && err.key ? err.key : 'admin.err.generic');
+          note.hidden = false;
+        });
+      }
+    }, [input, note, el('div.comment-form__actions', null, [
+      el('span.review-note', { text: t('comments.reviewNote') }),
+      button
+    ])]);
+  }
+
+  function loadOwnComments(id) {
+    if (!state.signedIn) return Promise.resolve();
+    return ENGAGE.myComments(id).then(function (rows) {
+      if (!state.items[id]) return;
+      state.items[id]._mine = rows;
+    });
+  }
+
+  /* ── Viewer plumbing ─────────────────────────────────────── */
+
   function openViewer(index) {
     state.viewer = { index: index };
 
-    var scroller = el('div.viewer__scroller', {
-      onscroll: onViewerScroll
-    }, memories.map(viewerSlide));
+    var scroller = el('div.viewer__scroller', { onscroll: onViewerScroll },
+      viewerList().map(viewerSlide));
 
-    var overlay = el('div.viewer', { id: 'viewer', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('nav.archive') }, [
+    var overlay = el('div.viewer', {
+      id: 'viewer', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('nav.archive')
+    }, [
       el('div.viewer__stage', null, [
         scroller,
         el('div.viewer__topbar', null, [
-          el('a.viewer__close', { href: '#/archive', text: t('viewer.back') }),
+          el('a.viewer__close', { href: '/', text: t('viewer.back') }),
           el('span.viewer__position')
         ]),
         el('div.viewer__rail'),
@@ -406,14 +744,35 @@
     ]);
 
     qs('#overlays').appendChild(overlay);
-    global.document.body.style.overflow = 'hidden';
+    global.document.body.style.setProperty('overflow', 'hidden');
     renderViewerChrome(index);
+    focusItem(index);
 
-    // Jump to the chosen memory without animating past everything before it.
     scroller.scrollTop = index * scroller.clientHeight;
 
     state.releaseTrap = UI.trapFocus(overlay, closeViewer);
     global.addEventListener('keydown', onViewerKey);
+  }
+
+  /** Fetches the item shard for the focused slide and upgrades it in place. */
+  function focusItem(index) {
+    var entry = viewerList()[index];
+    if (!entry) return;
+    if (state.items[entry.id]) {
+      upgradeSlide(state.items[entry.id]);
+      renderViewerChrome(index);
+      return;
+    }
+    ARCHIVE.item(entry.id).then(function (item) {
+      if (!item) return;
+      state.items[entry.id] = item;
+      return loadOwnComments(entry.id).then(function () {
+        // The reader may have scrolled on while this was in flight.
+        if (!state.viewer || viewerList()[state.viewer.index] !== entry) return;
+        upgradeSlide(item);
+        renderViewerChrome(index);
+      });
+    }, function () { /* a slide that could not load its shard keeps its thumbnail */ });
   }
 
   var scrollSettle = null;
@@ -421,15 +780,36 @@
     global.clearTimeout(scrollSettle);
     var scroller = event.currentTarget;
     scrollSettle = global.setTimeout(function () {
+      var list = viewerList();
       var index = Math.round(scroller.scrollTop / scroller.clientHeight);
-      index = Math.max(0, Math.min(memories.length - 1, index));
-      if (index !== state.viewer.index) {
-        state.viewer.index = index;
-        renderViewerChrome(index);
-        // Keep the address bar on the memory in view without stacking history.
-        global.history.replaceState(null, '', '#/m/' + memories[index].id);
-      }
+      index = Math.max(0, Math.min(list.length - 1, index));
+      if (!state.viewer || index === state.viewer.index) return;
+      state.viewer.index = index;
+      renderViewerChrome(index);
+      focusItem(index);
+      // replaceState: scrolling is not navigation, and a history entry per slide would make
+      // Back walk the reader up through the feed instead of out of the viewer.
+      navigateReplaceItem(list[index].id);
+      // Near the end, pull the next page in so the scroller keeps going.
+      if (index >= list.length - 3) loadMoreIntoViewer();
     }, 90);
+  }
+
+  function navigateReplaceItem(id) {
+    global.history.replaceState(null, '', '/item/' + encodeURIComponent(id));
+  }
+
+  function loadMoreIntoViewer() {
+    if (state.page >= state.pages) return;
+    var before = viewerList().length;
+    loadNextPage().then(function () {
+      var scroller = qs('.viewer__scroller');
+      if (!scroller) return;
+      viewerList().slice(before).forEach(function (entry) {
+        scroller.appendChild(viewerSlide(entry));
+      });
+      if (state.viewer) renderViewerChrome(state.viewer.index);
+    }).catch(function () { /* the reader keeps what is already loaded */ });
   }
 
   function onViewerKey(event) {
@@ -449,23 +829,82 @@
     var overlay = qs('#viewer');
     if (overlay) overlay.remove();
     global.removeEventListener('keydown', onViewerKey);
-    global.document.body.style.overflow = '';
+    global.document.body.style.removeProperty('overflow');
     state.viewer = null;
     if (state.releaseTrap) { state.releaseTrap(); state.releaseTrap = null; }
   }
 
-  function toggleLike() {
-    var memory = memories[state.viewer.index];
-    var current = state.likes[memory.id] != null ? state.likes[memory.id] : memory.likes;
-    state.likes[memory.id] = current === memory.likes ? current + 1 : memory.likes;
-    renderViewerChrome(state.viewer.index);
+  /* ── Engagement ──────────────────────────────────────────── */
+
+  function toggleLike(entry) {
+    var on = !state.liked[entry.id];
+    state.liked[entry.id] = on;
+    state.likeDelta[entry.id] = (state.likeDelta[entry.id] || 0) + (on ? 1 : -1);
+    if (state.viewer) renderViewerChrome(state.viewer.index);
+
+    ENGAGE.setLike(entry.id, on).catch(function (err) {
+      // Put it back. An optimistic update that survives a refusal is a client telling a
+      // member their like was recorded when the database said no (§5).
+      state.liked[entry.id] = !on;
+      state.likeDelta[entry.id] = (state.likeDelta[entry.id] || 0) + (on ? -1 : 1);
+      if (state.viewer) renderViewerChrome(state.viewer.index);
+      UI.toast(t(err && err.key ? err.key : 'admin.err.generic'));
+    });
   }
 
-  /** Wraps a member-only action so a signed-out visitor gets the gate instead.
-   *
-   *  The action is handed to the gate as the pending intent (§9), so liking an item from
-   *  the viewer signs you in and then likes it — rather than signing you in and leaving
-   *  you to find the item again and work out whether the first press registered. */
+  function toggleSave(entry) {
+    var on = !state.saved[entry.id];
+    state.saved[entry.id] = on;
+    if (state.viewer) renderViewerChrome(state.viewer.index);
+    ENGAGE.setSave(entry.id, on).catch(function (err) {
+      state.saved[entry.id] = !on;
+      if (state.viewer) renderViewerChrome(state.viewer.index);
+      UI.toast(t(err && err.key ? err.key : 'admin.err.generic'));
+    });
+  }
+
+  /** §4 gives moderators "review reports"; until M3 nothing could create one. */
+  function openReport(targetType, targetId) {
+    var scrim;
+    function close() { closeOverlay(scrim); }
+
+    var reason = el('textarea.input', {
+      rows: '3', required: true, placeholder: t('report.placeholder'), 'aria-label': t('report.reason')
+    });
+    var note = el('p.form-error', { role: 'alert', hidden: true });
+
+    var form = el('form.dialog.dialog--form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        note.hidden = true;
+        ENGAGE.report(targetType, targetId, reason.value).then(function () {
+          close();
+          UI.toast(t('report.sent'));
+        }).catch(function (err) {
+          note.textContent = t(err && err.key ? err.key : 'admin.err.generic');
+          note.hidden = false;
+        });
+      }
+    }, [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: t('report.title') }),
+          el('p.dialog__blurb', { text: t('report.blurb') })
+        ]),
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+      ]),
+      reason,
+      note,
+      el('div.dialog__actions', null, [
+        el('button.btn.btn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
+        el('button.btn.btn--primary', { type: 'submit', text: t('report.submit') })
+      ])
+    ]);
+
+    scrim = overlayShell('scrim', [form], close);
+  }
+
+  /** Wraps a member-only action so a signed-out visitor gets the gate instead (§9). */
   function guard(action) {
     return function () {
       if (!state.signedIn) { openGate(action); return; }
@@ -481,8 +920,7 @@
       if (event.target === scrim && onDismiss) onDismiss();
     });
     qs('#overlays').appendChild(scrim);
-    var release = UI.trapFocus(scrim, onDismiss);
-    scrim._release = release;
+    scrim._release = UI.trapFocus(scrim, onDismiss);
     return scrim;
   }
 
@@ -492,20 +930,11 @@
     node.remove();
   }
 
-  /**
-   * The sign-in gate.
-   *
-   * §9 requires it to preserve intent: whatever the member was trying to do is parked in
-   * `state.pending` and replayed the moment they are signed in, so they land back on the
-   * same item rather than on the archive with their action forgotten.
-   *
-   * @param {function} [intent]  what to re-run once signed in
-   */
   function openGate(intent) {
     state.pending = typeof intent === 'function' ? { run: intent } : null;
     var scrim = overlayShell('scrim', [
       el('div.dialog.dialog--gate', null, [
-        el('div.dialog__lock', { html: ICONS.lockLarge('#A67B24') }),
+        el('div.dialog__lock', null, ICONS.lockLarge('#A67B24')),
         el('h2.dialog__title', { text: t('gate.title') }),
         el('p.dialog__blurb', { text: t('gate.blurb') }),
         el('button.btn.btn--primary.btn--block', {
@@ -564,7 +993,7 @@
 
     var errorNote = el('p.form-error', { role: 'alert', hidden: true });
     function showError(key, vars) {
-      /* textContent, never innerHTML — §6. These strings are ours, but the habit is the
+      /* textContent, never markup — §6. These strings are ours, but the habit is the
          defence: the day one of them interpolates a server value, this is already safe. */
       errorNote.textContent = t(key, vars);
       errorNote.hidden = false;
@@ -582,33 +1011,38 @@
     ];
 
     if (mode === 'signup') {
-      body.push(field(t('field.name'), { type: 'text', placeholder: t('field.namePh'), autocomplete: 'name' }));
+      /* §3: "handle is user-chosen, NOT a legal name." The field that used to sit here
+         asked for a full name, which for a politically sensitive archive (§7) is the
+         opposite of what onboarding should collect. */
+      body.push(field(t('field.handle'), { type: 'text', placeholder: t('field.handlePh'), autocomplete: 'username' },
+        el('span.field__hint', { text: t('field.handleNote') })));
       body.push(field(t('field.email'), { type: 'email', placeholder: 'name@example.com', email: true, autocomplete: 'email' }));
-      body.push(el('div.field-pair', null, [
-        field(t('field.password'), { type: 'password', placeholder: '••••••••', autocomplete: 'new-password' }),
-        field([t('field.city'), ' ', el('span.opt', { text: t('field.optional') })],
-          { type: 'text', placeholder: t('field.cityPh'), autocomplete: 'address-level2' })
-      ]));
+      body.push(field(t('field.password'), { type: 'password', placeholder: '••••••••', autocomplete: 'new-password' }));
       body.push(el('div.pact', null, [
         el('span.pact__tick', { 'aria-hidden': 'true', text: '✓' }),
         el('span', { text: t('auth.pact') })
       ]));
-      body.push(el('button.btn.btn--primary.btn--block', {
-        type: 'submit', text: t('signup.submit')
-      }));
+      body.push(el('button.btn.btn--primary.btn--block', { type: 'submit', text: t('signup.submit') }));
     } else {
       body.push(field(t('field.email'), { type: 'email', placeholder: 'name@example.com', email: true, autocomplete: 'email' }));
       body.push(field(t('field.password'), { type: 'password', placeholder: '••••••••', autocomplete: 'current-password' },
-        el('a.field__hint', { href: '#/archive', onclick: function (e) { e.preventDefault(); UI.toast(t('login.forgot')); }, text: t('login.forgot') })));
-      body.push(el('label.checkbox', null, [el('input', { type: 'checkbox', checked: true }), t('login.remember')]));
+        el('button.field__hint', {
+          type: 'button',
+          onclick: function () { UI.toast(t('login.forgot')); },
+          text: t('login.forgot')
+        })));
       body.push(el('button.btn.btn--olive.btn--block', { type: 'submit', text: t('login.submit') }));
     }
 
     body.push(captchaSlot);
     body.push(errorNote);
     body.push(el('div.dialog__foot', null, mode === 'signup'
-      ? [t('signup.haveAcct') + ' ', el('a', { href: '#', onclick: function (e) { e.preventDefault(); close(); openAuth('login'); }, text: t('action.signIn') })]
-      : [t('login.newHere') + ' ', el('a', { href: '#', onclick: function (e) { e.preventDefault(); close(); openAuth('signup'); }, text: t('login.createOne') })]
+      ? [t('signup.haveAcct') + ' ', el('button.linklike', {
+          type: 'button', onclick: function () { close(); openAuth('login'); }, text: t('action.signIn')
+        })]
+      : [t('login.newHere') + ' ', el('button.linklike', {
+          type: 'button', onclick: function () { close(); openAuth('signup'); }, text: t('login.createOne')
+        })]
     ));
 
     var busy = false;
@@ -620,9 +1054,13 @@
 
         var email = (UI.qs('input[type=email]', form) || {}).value || '';
         var password = (UI.qs('input[type=password]', form) || {}).value || '';
+        var handleInput = UI.qs('input[autocomplete=username]', form);
+        var handle = handleInput ? handleInput.value.trim() : '';
         var submitButton = UI.qs('button[type=submit]', form);
 
         clearError();
+        if (mode === 'signup' && !handle) { showError('signup.err.handleRequired'); return; }
+
         busy = true;
         if (submitButton) { submitButton.disabled = true; submitButton.textContent = t('auth.working'); }
 
@@ -646,7 +1084,7 @@
                 UI.toast(t('auth.confirmSent'));
                 return null;
               }
-              return result.user;
+              return claimHandle(handle).then(function () { return result.user; });
             })
             : AUTH.signIn(email, password, captcha);
         }).then(function (account) {
@@ -664,14 +1102,35 @@
     widget = TURNSTILE.mount(captchaSlot);
   }
 
-  /* Everything that has to happen once a real session exists. Called from the auth dialog
-     and from AUTH.restore() at startup, so a restored session and a fresh sign-in take
-     exactly the same path — the bug that pattern avoids is the one where a reloaded page
-     looks signed in but never replays the pending intent. */
+  /**
+   * The profile row, written once, by its owner.
+   *
+   * §3 makes the handle mandatory and user-chosen, and 0004 deliberately has NO trigger
+   * creating a profile at signup — "auto-generating one would either leak the email local
+   * part or invent a name for someone". So this is the explicit onboarding step that
+   * comment names, and it is here rather than in auth.js because it is a profiles INSERT
+   * under 0017's policy, not an auth call.
+   *
+   * A refusal is reported and the sign-up is NOT rolled back: the account exists, the
+   * session works, and a taken handle is something the member fixes on their own profile
+   * rather than a reason to make them sign up again.
+   */
+  function claimHandle(handle) {
+    var account = AUTH.user();
+    if (!account) return Promise.resolve();
+    return DB.insert('profiles', { id: account.id, handle: handle, display_name: handle })
+      .catch(function () {
+        UI.toast(t('signup.err.handleTaken'));
+      });
+  }
+
   function onSignedIn(account) {
     adoptAccount(account);
     renderMasthead();
-    if (state.viewer) renderViewerChrome(state.viewer.index);
+    loadOwnHandle();
+    refreshEngagement(state.feed.map(function (r) { return r.id; })).then(function () {
+      if (state.viewer) renderViewerChrome(state.viewer.index);
+    });
 
     /* §9. The action that hit the gate runs now, and the member ends up where they were
        rather than being returned to the archive to find their own way back. */
@@ -684,12 +1143,36 @@
     }
   }
 
+  /**
+   * The member's own handle.
+   *
+   * Not in the JWT: §7 makes the handle a user-chosen public identifier stored in
+   * `profiles`, and the token carries the auth user id and the role claim. /me needs it to
+   * ask for the right profile shard, and the masthead avatar uses its first character.
+   *
+   * A member with no profile row yet — signed up before the handle step, or whose
+   * claimHandle was refused — simply has none, and /me falls back to profile_view() by id
+   * returning nothing, which renderProfile shows as the onboarding-incomplete state.
+   */
+  function loadOwnHandle() {
+    if (!state.account) return Promise.resolve();
+    var id = state.account.id;
+    return DB.select('profiles', 'select=handle,display_name&id=eq.' + encodeURIComponent(id))
+      .then(function (rows) {
+        if (!state.account || state.account.id !== id) return;
+        var row = rows && rows[0];
+        if (!row) return;
+        state.account.handle = row.handle;
+        state.account.display_name = row.display_name;
+        renderMasthead();
+      }, function () { /* the avatar falls back to a language-appropriate initial */ });
+  }
+
   function signOut() {
     AUTH.signOut();
     adoptAccount(null);
     state.pending = null;
-    // A profile route is member-only; drop back to the archive on the way out.
-    if (route() === 'profile') { global.location.hash = '#/archive'; return; }
+    if (route() === 'profile') { navigate('/'); return; }
     renderMasthead();
     if (state.viewer) renderViewerChrome(state.viewer.index);
   }
@@ -730,7 +1213,7 @@
 
     var kindRow = el('div.kind-row', { role: 'group', 'aria-label': t('share.title') }, kinds.map(function (option) {
       var active = option.id === kind;
-      var button = el('button.kind', {
+      return el('button.kind', {
         type: 'button',
         'aria-pressed': active ? 'true' : 'false',
         onclick: function () {
@@ -738,19 +1221,30 @@
           UI.qsa('.kind', kindRow).forEach(function (node, i) {
             var on = kinds[i].id === kind;
             node.setAttribute('aria-pressed', on ? 'true' : 'false');
-            node.querySelector('svg').outerHTML = kinds[i].icon(on ? '#C05B3E' : '#3E4A2E');
+            // The icon is a NODE now, so it is replaced rather than assigned as markup
+            // (see ui.js on why there is no `html:` prop any more).
+            var slot = node.firstChild;
+            node.replaceChild(kinds[i].icon(on ? '#C05B3E' : '#3E4A2E'), slot);
           });
         }
       }, [
-        el('span', { html: option.icon(active ? '#C05B3E' : '#3E4A2E') }),
+        option.icon(active ? '#C05B3E' : '#3E4A2E'),
         el('span', { text: option.label })
       ]);
-      return button;
     }));
 
-    var decadeSelect = el('select.input', null, DATA.DECADES.map(function (d) {
-      return el('option', { value: String(d), selected: d === 1960 ? true : null, text: t('decade.' + d) });
-    }));
+    /* §3's EDTF-lite decade. Sent, as of migration 0047 — before that this select existed,
+       defaulted to the 1960s, and was discarded, leaving every member upload with a null
+       decade for a moderator to guess at. */
+    var decadeSelect = el('select.input', { 'aria-label': t('share.fDecade') },
+      /* Every decade the archive could hold, not only the ones it already does — a
+         contributor with the earliest photograph in the collection must be able to say so.
+         DATA.DECADES rather than index.json here, for the one place where the two lists
+         mean different things. */
+      [el('option', { value: '', text: t('share.fDecadeUnknown') })].concat(
+        DATA.DECADES.map(function (d) {
+          return el('option', { value: String(d), text: decadeLabel(d) });
+        })));
 
     /* §7's three, asked here because §7 says "captured at upload" — and because a licence
        collected afterwards is a licence collected from someone who has already lost
@@ -796,6 +1290,7 @@
         var draft = { kind: kind === 'voice' ? 'voice' : kind === 'event' ? 'event' : 'media' };
         draft['title_' + lang] = titleValue;
         draft['body_' + lang] = storyValue;
+        if (decadeSelect.value) draft.decade = decadeSelect.value;
 
         /* §7. Only `granted` is sent — granted_at is stamped by the database, because a
            timestamp evidencing that someone agreed at a moment is worthless if the person
@@ -823,7 +1318,7 @@
             },
             onProgress: function (fraction) {
               var pct = Math.round(fraction * 100);
-              progressBar.style.inlineSize = pct + '%';
+              progressBar.style.setProperty('inline-size', pct + '%');
               progress.setAttribute('aria-valuenow', String(pct));
             }
           });
@@ -852,19 +1347,19 @@
       ]),
       kindRow,
       field(t('share.fTitle'), { type: 'text', placeholder: t('share.fTitlePh'), required: true }),
-      el('div.field-pair', null, [
-        field(t('share.fPlace'), { type: 'text', placeholder: t('share.fPlacePh'), list: 'places' }),
-        el('div.field', null, [
-          el('label.field__label', { text: t('share.fDecade') }),
-          decadeSelect
-        ])
+      el('div.field', null, [
+        el('label.field__label', { text: t('share.fDecade') }),
+        decadeSelect,
+        /* The place field lived beside this one, with a datalist of seven hardcoded
+           landmarks. It went with data.js: a free-text place that resolves to nothing is a
+           question asked for no reason. §10's M4 owns place-name autocomplete, gazetteer
+           resolution and the drag-to-confirm pin — until then a moderator sets the place
+           from the queue, which is where the gazetteer will appear. */
+        el('p.field__hint', { text: t('share.fPlaceLater') })
       ]),
-      el('datalist', { id: 'places' }, DATA.PLACES.map(function (place) {
-        return el('option', { value: pick(place.name) });
-      })),
       field(t('share.fStory'), { multiline: true, placeholder: t('share.fStoryPh'), rows: '3' }),
       el('label.dropzone', null, [
-        el('span', { html: ICONS.upload }),
+        ICONS.upload(),
         el('span', { text: t('share.drop') }),
         el('span.dropzone__note', { text: t('share.dropNote') }),
         fileInput
@@ -900,208 +1395,342 @@
   }
 
   /* ── Profile ─────────────────────────────────────────────────
-     Display name, avatar and role badge are never gated — attribution has to stay
-     legible or the archive stops crediting anyone. Everything else is governed by
-     the user's `visibility` map. The owner viewing #/me sees all of it, with each
-     private section flagged so they can tell what visitors are missing. */
+     §7: display name, avatar and role badge are never gated — attribution has to stay
+     legible or the archive stops crediting anyone. Everything else is governed by the
+     owner's `visibility` map, applied at PUBLISH time (0044) so the shard a stranger reads
+     simply does not contain what was hidden. The owner's own view comes from
+     profile_view(), with their own token, and is the only place the private side exists. */
 
-  function profileLink(user, node) {
-    if (!user || !user.id) return node;
-    return el('a.profile-link', { href: '#/u/' + user.id, tabindex: '-1' }, node);
-  }
+  var profileCache = { key: null, data: null, own: null, mine: null };
 
-  function isPublic(user, field) {
-    return (user.visibility || {})[field] !== 'private';
-  }
+  function renderProfile() {
+    var own = isOwnProfileRoute();
 
-  function avatarNode(user, className) {
-    return el('span.' + (className || 'profile__avatar'), {
-      style: user.tone ? '--p1:' + user.tone : null,
-      'aria-hidden': 'true',
-      text: pick(user.initial)
-    });
-  }
+    if (own && !state.signedIn) return null;   // handled by render(), which opens the gate
 
-  function privateFlag() {
-    return el('span.privacy-flag', { text: t('profile.ownerOnly') });
-  }
-
-  /** One profile section, or nothing at all when a visitor may not see it.
-      The count is its own element — a "·" between an Arabic label and a digit
-      reads ambiguously once bidi reorders the line. */
-  function profileSection(user, field, isOwner, title, count, body) {
-    var visible = isPublic(user, field);
-    if (!visible && !isOwner) return null;
-    return el('section.profile__section', null, [
-      el('div.profile__section-head', null, [
-        el('h2.profile__section-title', { text: title }),
-        el('span.profile__section-count', { text: num(count) }),
-        !visible ? privateFlag() : null
-      ]),
-      body
-    ]);
-  }
-
-  function renderProfile(userId) {
-    var user = Store.get('users', userId);
-    if (!user) {
+    var data = profileCache.data;
+    if (!data) {
       return el('div.page-head', null, [
-        el('h1.page-head__title', { text: t('profile.notFound') }),
-        el('p.page-head__blurb', null, el('a', { href: '#/archive', text: t('viewer.back') }))
+        el('h1.page-head__title', { text: t(profileCache.key === null ? 'q.loading' : 'profile.notFound') }),
+        el('p.page-head__blurb', null, el('a', { href: '/', text: t('viewer.back') }))
       ]);
     }
 
-    /* #/me is your own view; #/u/<id> is always the public one — including for
-       your own id, which makes it a preview of what visitors actually get. */
-    var isSelf = state.signedIn && user.id === state.userId;
-    var isOwner = isSelf && hashPath() === 'me';
-    var contributions = Store.memoriesFor(user.id);
-    var comments = Store.commentsFor(user.id);
-
-    var facts = [];
-    if (isPublic(user, 'personalInfo') || isOwner) {
-      if (user.city) facts.push(el('span.profile__fact', { text: pick(user.city) }));
-      if (user.joined) facts.push(el('span.profile__fact', { text: t('profile.memberSince', { n: I18N.year(user.joined) }) }));
-      if (!isPublic(user, 'personalInfo')) facts.push(privateFlag());
-    }
+    var isOwner = Boolean(profileCache.own && profileCache.own.is_own);
+    var displayName = data.display_name || data.handle;
 
     var header = el('header.profile__header', null, [
-      avatarNode(user),
+      el('span.profile__avatar', {
+        style: toneStyle(avatarTone(data.handle)),
+        'aria-hidden': 'true',
+        text: initialFor(data)
+      }),
       el('div.profile__identity', null, [
-        el('h1.profile__name', { text: pick(user.name) }),
-        el('div.profile__gloss.gloss-line', { text: gloss(user.name) }),
+        el('h1.profile__name', null, bdi(displayName)),
+        el('div.profile__gloss.gloss-line', null, bdi('@' + data.handle)),
         el('div.profile__badges', null, [
-          el('span.badge', { text: t('mb.role' + roleKey(user)) }),
+          el('span.badge', { text: t('role.' + (data.label || 'member')) }),
           isOwner ? el('span.badge.badge--voice', { text: t('profile.you') }) : null
         ]),
-        facts.length ? el('div.profile__facts', null, facts) : null
+        data.member_since
+          ? el('div.profile__facts', null,
+              el('span.profile__fact', { text: t('profile.memberSince', { n: I18N.year(data.member_since) }) }))
+          : null
       ])
     ]);
 
-    var bio = (isPublic(user, 'bio') || isOwner) && pick(user.bio)
+    /* The owner's row overrides the shard's, field by field, and only downward-visible
+       fields differ: profile_view() returns the bio whatever its visibility when the caller
+       owns the profile. A stranger's copy of this page simply does not contain it. */
+    var bioText = isOwner && profileCache.own ? profileCache.own.bio : data.bio;
+    var bio = bioText
       ? el('div.profile__bio-wrap', null, [
-          el('p.profile__bio', { text: pick(user.bio) }),
-          !isPublic(user, 'bio') ? privateFlag() : null
+          el('p.profile__bio', null, bdi(bioText)),
+          isOwner && !isPublicField('bio') ? privateFlag() : null
         ])
       : null;
 
+    var contributions = data.contributions || [];
     var contributionsBody = contributions.length
-      ? el('div.profile__grid', null, contributions.map(function (memory) { return memoryCard(memory); }))
+      ? el('div.profile__grid', null, contributions.map(memoryCard))
       : el('p.profile__empty', { text: t('profile.noContributions') });
 
+    var comments = data.comments || [];
     var commentsBody = comments.length
-      ? el('ul.profile__comments', null, comments.map(function (comment) {
-          var memory = Store.get('memories', comment.memoryId);
+      ? el('ul.profile__comments', null, comments.map(function (c) {
+          var title = { ar: c.post_title_ar || c.post_title_en || '', en: c.post_title_en || c.post_title_ar || '' };
           return el('li.profile__comment', null, [
-            el('p.comment__body', { text: pick(comment.body) }),
+            el('p.comment__body', null, bdi(c.body)),
             el('div.profile__comment-meta', null, [
-              memory
-                ? el('a', { href: '#/m/' + memory.id, text: t('profile.onMemory', { t: pick(memory.title) }) })
-                : el('span', { text: t('profile.onRemoved') }),
-              el('span.comment__when', { text: pick(comment.when) })
+              el('a', { href: '/item/' + encodeURIComponent(c.post_id) }, [
+                t('profile.onMemory') + ' ', bdi(pick(title))
+              ]),
+              el('span.comment__when', { text: c.day || '' })
             ])
           ]);
         }))
       : el('p.profile__empty', { text: t('profile.noComments') });
 
     return el('div.profile', null, [
-      isSelf && !isOwner
+      isOwner && !own
         ? el('div.profile__preview', null, [
             el('span', { text: t('profile.previewNotice') }),
-            el('a', { href: '#/me', text: t('profile.backToMine') })
+            el('a', { href: '/me', text: t('profile.backToMine') })
           ])
         : null,
       header,
       bio,
-      isOwner ? editPanel(user) : null,
-      profileSection(user, 'contributions', isOwner, t('profile.contributions'), contributions.length, contributionsBody),
-      profileSection(user, 'comments', isOwner, t('profile.comments'), comments.length, commentsBody)
+      isOwner && own ? editPanel() : null,
+      isOwner && own ? pendingPanel() : null,
+      profileSection('contributions', isOwner, t('profile.contributions'), contributions.length, contributionsBody),
+      profileSection('comments', isOwner, t('profile.comments'), comments.length, commentsBody)
     ]);
   }
 
-  function roleKey(user) {
-    var map = { editor: 'Editor', partner: 'Partner', narrator: 'Narrator', admin: 'AdminShort' };
-    if (map[user.role]) return map[user.role];
-    return user.feminine ? 'ContributorF' : 'ContributorM';
+  function isPublicField(name) {
+    var vis = profileCache.own && profileCache.own.visibility;
+    return !vis || vis[name] !== 'private';
+  }
+
+  function privateFlag() {
+    return el('span.privacy-flag', { text: t('profile.ownerOnly') });
+  }
+
+  function profileSection(field, isOwner, title, count, body) {
+    var visible = isPublicField(field);
+    return el('section.profile__section', null, [
+      el('div.profile__section-head', null, [
+        el('h2.profile__section-title', { text: title }),
+        el('span.profile__section-count', { text: num(count) }),
+        isOwner && !visible ? privateFlag() : null
+      ]),
+      body
+    ]);
+  }
+
+  /**
+   * The member's own submissions, whatever state they are in.
+   *
+   * THE screen the ingest path has never had. A member whose upload the worker refused had
+   * no surface anywhere telling them so — the item simply never appeared, which is
+   * indistinguishable from a moderator having rejected it in silence. posts_full() returns
+   * the author's own rows including ingest_state and ingest_error (0009 grants the member
+   * their own error text specifically), so this is the first place the answer exists.
+   *
+   * What is deliberately NOT here is "expected by": CLAUDE.md §6 holds `expect_by` until a
+   * one-off timing probe against the deployed worker replaces the estimated factor in
+   * JOB_DEADLINE_MS, and §6 says that number ships once at the real figure rather than
+   * being published and corrected. So this screen says which state a submission is in and
+   * says nothing about when — which is true, and is more than the member had.
+   */
+  function pendingPanel() {
+    var rows = profileCache.mine || [];
+    var open = rows.filter(function (r) {
+      return r.status !== 'approved' || r.ingest_state !== 'ready';
+    });
+    if (!open.length) return null;
+
+    return el('section.profile__section', null, [
+      el('div.profile__section-head', null, [
+        el('h2.profile__section-title', { text: t('mine.title') }),
+        el('span.profile__section-count', { text: num(open.length) })
+      ]),
+      el('p.profile__empty', { text: t('mine.blurb') }),
+      el('ul.mine', null, open.map(function (row) {
+        var title = { ar: row.title_ar || row.title_en || '', en: row.title_en || row.title_ar || '' };
+        return el('li.mine__row', null, [
+          el('div.mine__title', null, bdi(pick(title))),
+          el('div.mine__meta', null, [
+            el('span.badge', { text: t('mine.state.' + submissionState(row)) }),
+            row.ingest_error
+              ? el('span.mine__error', { text: t('mine.err.' + row.ingest_error) })
+              : null
+          ])
+        ]);
+      }))
+    ]);
+  }
+
+  /* One label per state a member can actually be in, derived from two columns rather than
+     shown raw: `status` and `ingest_state` are independent, and the pair a member needs
+     explaining is (pending, failed) — approved-but-broken and never-reviewed look identical
+     otherwise, and only one of them is theirs to fix. */
+  function submissionState(row) {
+    if (row.ingest_state === 'failed') return 'failed';
+    if (row.ingest_state === 'awaiting_bytes') return 'incomplete';
+    if (row.ingest_state === 'processing') return 'processing';
+    if (row.status === 'rejected') return 'rejected';
+    if (row.status === 'withdrawn') return 'withdrawn';
+    return 'inReview';
+  }
+
+  function loadProfile() {
+    var own = isOwnProfileRoute();
+    var handle = own ? (state.account && state.account.handle) : routedHandle();
+    var key = own ? 'me:' + (state.account ? state.account.id : '') : 'u:' + handle;
+    if (profileCache.key === key) return Promise.resolve();
+
+    profileCache = { key: key, data: null, own: null, mine: null };
+
+    /* Two sources, and the split is §7's. The shard is the public projection everybody
+       gets; profile_view() is the owner's (and a moderator's) view of the private half. A
+       stranger's browser never receives the hidden fields at all — it is not asked to be
+       discreet about data it holds. */
+    var ownRow = (own || state.signedIn)
+      ? DB.rpc('profile_view', { p_handle: handle || '' }).then(function (rows) {
+          return (rows && rows[0]) || null;
+        }, function () { return null; })
+      : Promise.resolve(null);
+
+    return ownRow.then(function (row) {
+      profileCache.own = row;
+      var realHandle = handle || (row && row.handle);
+      if (!realHandle) return null;
+      profileCache.key = own ? key : 'u:' + realHandle;
+      return ARCHIVE.profile(realHandle);
+    }).then(function (shard) {
+      profileCache.data = shard || fallbackProfile(profileCache.own);
+      if (!own || !state.signedIn) return null;
+      // posts_full(): the member's own rows, in every state. See pendingPanel.
+      return DB.rpc('posts_full', {}).then(function (rows) {
+        profileCache.mine = (rows || []).filter(function (r) {
+          return state.account && r.created_by === state.account.id;
+        });
+      }, function () { profileCache.mine = []; });
+    }).then(function () { render(); }, function () { render(); });
+  }
+
+  /* A profile with nothing published has no shard — publishable_profiles() is bounded by
+     the archive (0044). Its owner still has a page, built from the row they can read. */
+  function fallbackProfile(own) {
+    if (!own) return null;
+    return {
+      handle: own.handle,
+      display_name: own.display_name,
+      avatar_path: own.avatar_path,
+      label: own.role_cache || 'member',
+      bio: own.bio,
+      member_since: own.member_since,
+      contributions: [],
+      comments: []
+    };
   }
 
   /* ── Edit profile & privacy (owner only) ─────────────────── */
 
-  function editPanel(user) {
-    var open = state.editOpen;
-
-    var controls = el('div.profile__edit-controls', null, [
-      el('button.btn.btn--ghost.profile__edit-toggle', {
-        type: 'button',
-        'aria-expanded': open ? 'true' : 'false',
-        onclick: function () { state.editOpen = !state.editOpen; render(); },
-        text: t('profile.editTitle')
-      }),
-      el('a.profile__preview-link', { href: '#/u/' + user.id, text: t('profile.previewLink') })
-    ]);
-
-    if (!open) return el('div.profile__edit', null, controls);
-
-    var namePair = UI.langPair(t('profile.displayName'), user.name);
-    var bioPair = UI.langPair(t('profile.bio'), user.bio, { multiline: true, rows: '3' });
-
-    var toggles = Store.VISIBILITY_FIELDS.map(function (fieldName) {
-      var on = isPublic(user, fieldName);
-      return el('div.privacy-row', null, [
-        el('div', null, [
-          el('div.privacy-row__name', { text: t('profile.field.' + fieldName) }),
-          el('div.privacy-row__hint', { text: t('profile.hint.' + fieldName) })
-        ]),
-        el('button.switch', {
+  function editPanel() {
+    var own = profileCache.own;
+    if (!own) return null;
+    if (!state.editOpen) {
+      return el('div.profile__edit', null, [
+        el('button.btn.btn--ghost.profile__edit-toggle', {
           type: 'button',
-          role: 'switch',
-          'aria-checked': on ? 'true' : 'false',
-          'aria-label': t('profile.field.' + fieldName) + ' — ' + (on ? t('profile.public') : t('profile.private')),
-          onclick: function () {
-            var next = {};
-            Store.VISIBILITY_FIELDS.forEach(function (f) { next[f] = isPublic(user, f) ? 'public' : 'private'; });
-            next[fieldName] = on ? 'private' : 'public';
-            Store.set('users', user.id, { visibility: next });
-            render();
-          }
+          'aria-expanded': 'false',
+          onclick: function () { state.editOpen = true; render(); },
+          text: t('profile.editTitle')
         }),
-        el('span.privacy-row__state', { text: on ? t('profile.public') : t('profile.private') })
+        el('a.profile__preview-link', { href: '/u/' + encodeURIComponent(own.handle), text: t('profile.previewLink') })
       ]);
+    }
+
+    var displayInput = el('input.input', { type: 'text', 'aria-label': t('profile.displayName') });
+    displayInput.value = own.display_name || '';
+    var bioInput = el('textarea.input', { rows: '3', 'aria-label': t('profile.bio') });
+    bioInput.value = own.bio || '';
+
+    var visibility = {};
+    ['bio', 'personalInfo', 'contributions', 'comments'].forEach(function (f) {
+      visibility[f] = (own.visibility && own.visibility[f]) === 'private' ? 'private' : 'public';
     });
+
+    var toggles = Object.keys(visibility).map(function (fieldName) {
+      var row = el('div.privacy-row');
+      function paint() {
+        var on = visibility[fieldName] === 'public';
+        mount(row, [
+          el('div', null, [
+            el('div.privacy-row__name', { text: t('profile.field.' + fieldName) }),
+            el('div.privacy-row__hint', { text: t('profile.hint.' + fieldName) })
+          ]),
+          el('button.switch', {
+            type: 'button',
+            role: 'switch',
+            'aria-checked': on ? 'true' : 'false',
+            'aria-label': t('profile.field.' + fieldName) + ' — ' + (on ? t('profile.public') : t('profile.private')),
+            onclick: function () {
+              visibility[fieldName] = on ? 'private' : 'public';
+              paint();
+            }
+          }),
+          el('span.privacy-row__state', { text: on ? t('profile.public') : t('profile.private') })
+        ]);
+      }
+      paint();
+      return row;
+    });
+
+    var note = el('p.form-error', { role: 'alert', hidden: true });
 
     var form = el('form.profile__edit-form', {
       onsubmit: function (event) {
         event.preventDefault();
-        var name = namePair.read();
-        Store.set('users', user.id, {
-          // A blank name would erase attribution everywhere, so it falls back.
-          name: { ar: name.ar || user.name.ar, en: name.en || user.name.en },
-          bio: bioPair.read()
-        });
-        UI.toast(t('profile.saved'));
-        render();
+        note.hidden = true;
+        /* select= is REQUIRED and is not tidiness: `Prefer: return=representation` with no
+           select is a SELECT of `*`, and 0015 revoked table-level SELECT on profiles. See
+           db.js — this is the defect the lifecycle harness found on posts. */
+        DB.patch('profiles', 'id=eq.' + encodeURIComponent(state.account.id) + '&select=handle',
+          { display_name: displayInput.value.trim() || null,
+            bio: bioInput.value.trim() || null,
+            visibility: visibility })
+          .then(function (rows) {
+            if (!rows || !rows.length) {
+              note.textContent = t('admin.err.denied');
+              note.hidden = false;
+              return;
+            }
+            UI.toast(t('profile.saved'));
+            state.editOpen = false;
+            profileCache.key = null;
+            loadProfile();
+          })
+          .catch(function (err) {
+            note.textContent = t(err && err.key ? err.key : 'admin.err.generic');
+            note.hidden = false;
+          });
       }
     }, [
-      namePair.node,
-      bioPair.node,
+      el('div.field', null, [el('label.field__label', { text: t('profile.displayName') }), displayInput]),
+      el('div.field', null, [el('label.field__label', { text: t('profile.bio') }), bioInput]),
       el('div.privacy-list', null, [
         el('div.privacy-list__head', null, [
           el('h3.profile__section-title', { text: t('profile.privacyTitle') }),
           el('p.privacy-list__note', { text: t('profile.privacyNote') })
         ])
       ].concat(toggles)),
+      note,
       el('div.dialog__actions', null, [
+        el('button.btn.btn--ghost', {
+          type: 'button', onclick: function () { state.editOpen = false; render(); }, text: t('action.cancel')
+        }),
         el('button.btn.btn--primary', { type: 'submit', text: t('profile.save') })
       ])
     ]);
 
-    return el('div.profile__edit.profile__edit--open', null, [controls, form]);
+    return el('div.profile__edit.profile__edit--open', null, [
+      el('button.btn.btn--ghost.profile__edit-toggle', {
+        type: 'button',
+        'aria-expanded': 'true',
+        onclick: function () { state.editOpen = false; render(); },
+        text: t('profile.editTitle')
+      }),
+      form
+    ]);
   }
 
   /* ── Info page ───────────────────────────────────────────── */
 
   function renderInfoPage() {
-    var sections = Store.list('pages');
+    var sections = ARCHIVE.pages();
 
     return el('div.infopage', null, [
       el('div.page-head', null, [
@@ -1112,7 +1741,7 @@
       ]),
       el('nav.infopage__toc', { 'aria-label': t('page.title') }, sections.map(function (section) {
         return el('a.infopage__toc-link', {
-          href: '#/page/' + section.slug,
+          href: '/page/' + encodeURIComponent(section.slug),
           'aria-current': routedPageSlug() === section.slug ? 'true' : null,
           text: pick(section.title)
         });
@@ -1120,270 +1749,276 @@
       el('div.infopage__body', null, sections.map(function (section) {
         return el('section.infosection', { id: 'section-' + section.slug }, [
           el('h2.infosection__title', { text: pick(section.title) }),
-          el('div.infosection__gloss.gloss-line', { text: gloss(section.title) })
+          gloss(section.title) ? el('div.infosection__gloss.gloss-line', { text: gloss(section.title) }) : null
         ].concat(
           pick(section.body).split(/\n\s*\n/).map(function (para) {
             return el('p.infosection__para', { text: para });
           })
         ).concat(
-          section.slug === 'donate' ? [donateContact(section)] : []
+          section.slug === 'donate' ? [donateContact()] : []
         ));
       }))
     ]);
   }
 
-  /* Email opens the mail client; the phone number opens WhatsApp. */
-  function donateContact(section) {
-    var contact = section.contact || {};
-    var email = contact.email || '';
-    var whatsapp = contact.whatsapp || '';
+  /* Email opens the mail client; the phone number opens WhatsApp. Both are content blocks
+     now (§9), so filling them in is a dashboard edit rather than a deploy. */
+  function donateContact() {
+    var email = pick(ARCHIVE.block('page.donate.email'));
+    var whatsapp = pick(ARCHIVE.block('page.donate.whatsapp'));
     var waDigits = whatsapp.replace(/[^\d]/g, '');
+
+    var rows = [];
+    if (email && email.indexOf('PLACEHOLDER') === -1) {
+      rows.push(el('a.donate-contact__row', { href: 'mailto:' + email }, [
+        el('span.donate-contact__label', { text: t('page.email') }),
+        el('span.donate-contact__value.lat', { text: email })
+      ]));
+    }
+    if (waDigits) {
+      rows.push(el('a.donate-contact__row', {
+        href: 'https://wa.me/' + waDigits, target: '_blank', rel: 'noopener'
+      }, [
+        el('span.donate-contact__label', { text: t('page.whatsapp') }),
+        el('span.donate-contact__value.lat', { text: whatsapp })
+      ]));
+    }
+    // Nothing configured yet renders no link at all. A mailto: to PLACEHOLDER_EMAIL is a
+    // dead control that looks live, which is worse than an absent one.
+    if (!rows.length) return null;
 
     return el('div.donate-contact', null, [
       el('h3.donate-contact__title', { text: t('page.donateReach') }),
-      el('div.donate-contact__rows', null, [
-        el('a.donate-contact__row', { href: 'mailto:' + email }, [
-          el('span.donate-contact__label', { text: t('page.email') }),
-          el('span.donate-contact__value.lat', { text: email })
-        ]),
-        el('a.donate-contact__row', {
-          href: waDigits ? 'https://wa.me/' + waDigits : 'https://wa.me/',
-          target: '_blank',
-          rel: 'noopener'
-        }, [
-          el('span.donate-contact__label', { text: t('page.whatsapp') }),
-          el('span.donate-contact__value.lat', { text: whatsapp })
-        ])
-      ]),
+      el('div.donate-contact__rows', null, rows),
       el('p.donate-contact__note', { text: t('page.donateNote') })
     ]);
   }
 
-  /* ── Map ─────────────────────────────────────────────────── */
+  /* ── Located memories ────────────────────────────────────────
+     §10's M4 owns the map: PostGIS-backed geo, the decade slider, place-name autocomplete,
+     and a PMTiles basemap on R2. This is not that.
 
-  var mapInstance = null;
-  var markerLayer = null;
+     What it IS: M4's own stated fallback — "tile-failure fallback to list view" — reading
+     the geo shards §2 already defines, filtered by decade. Leaflet and the public OSM tile
+     endpoint went with it, and both were forbidden anyway: §2 says "NEVER the public OSM
+     tile endpoint", and the CSP has blocked unpkg since M0, so the previous map rendered a
+     blank panel on every deployment that serves the policy.
 
-  function memoriesForDecade() {
-    if (state.decade === 'all') return memories;
-    return memories.filter(function (memory) { return memory.decade === state.decade; });
+     Reading the geo shards now rather than waiting means the shard format is exercised by
+     something before M4 depends on it, and it means a located item is reachable today. */
+
+  var geoCache = { items: null };
+
+  function loadGeo() {
+    if (geoCache.items) return Promise.resolve(geoCache.items);
+    /* Which cells exist comes from the release's index.json, not from a constant. At
+       GEO_PRECISION 5 one cell is ~4.9 km and covers Ramallah — which is exactly why
+       shards.ts chose 5 — so this is one request in practice. Asking the index rather than
+       hardcoding that cell is what keeps it true for an item contributed from outside the
+       city, which would otherwise be published into a shard nothing ever fetched. */
+    return ARCHIVE.index().then(function (idx) {
+      if (!idx.cells.length) { geoCache.items = []; return geoCache.items; }
+      return Promise.all(idx.cells.map(function (cell) { return ARCHIVE.geo(cell); }))
+        .then(function (bodies) {
+          var all = [];
+          bodies.forEach(function (b) { all = all.concat(b.items); });
+          geoCache.items = all;
+          return all;
+        });
+    }).catch(function () {
+      geoCache.items = [];
+      return geoCache.items;
+    });
   }
 
-  function renderMap() {
-    var decades = [{ id: 'all', label: t('map.all') }].concat(DATA.DECADES.map(function (d) {
-      return { id: d, label: t('decade.' + d) };
+  /** The decades that actually hold items, from index.json; DATA.DECADES until it loads. */
+  function knownDecades() {
+    var idx = ARCHIVE._state.index;
+    return idx && idx.decades.length ? idx.decades : DATA.DECADES;
+  }
+
+  function renderLocated() {
+    var items = geoCache.items;
+    if (!items) return el('p.profile__empty', { text: t('q.loading') });
+
+    var visible = state.decade === 'all'
+      ? items
+      : items.filter(function (row) { return row.decade === state.decade; });
+
+    var decades = [{ id: 'all', label: t('map.all') }].concat(knownDecades().map(function (d) {
+      return { id: d, label: decadeLabel(d) };
     }));
 
-    var bar = el('div.decade-bar', null, [
-      el('div.decade-bar__inner', { role: 'group', 'aria-label': t('map.decade') },
-        [el('span.decade-bar__label', { text: t('map.decade') })].concat(decades.map(function (option) {
-          return el('button.decade', {
-            type: 'button',
-            'aria-pressed': state.decade === option.id ? 'true' : 'false',
-            onclick: function () { state.decade = option.id; refreshMap(); },
-            text: option.label
-          });
-        })))
-    ]);
-
-    return el('div.map-page', null, [
-      el('div', { id: 'map' }),
-      el('div.map-count', { id: 'map-count' }),
-      bar
-    ]);
-  }
-
-  /* Returns whether the map actually came up.
-     Leaflet is loaded from unpkg, which `script-src 'self'` blocks — so `L` is undefined
-     on every deployment that serves the CSP, which is now all of them. admin.js already
-     guarded this; here the bare `L.map(...)` threw a ReferenceError that propagated out of
-     the router mid-route, AFTER the footer had been hidden, stranding the reader on a
-     blank panel with no way onward.
-     `typeof` rather than a truthiness test: `L` is an undeclared global, and any other
-     check on it throws before it can answer.
-     The return value exists so the caller can keep the page coherent — see the map branch
-     in the router. */
-  function initMap() {
-    if (mapInstance) { mapInstance.remove(); mapInstance = null; }
-    if (typeof L === 'undefined') return false;
-    mapInstance = L.map('map', { zoomControl: true, attributionControl: true })
-      .setView(RAMALLAH, 15);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© OpenStreetMap'
-    }).addTo(mapInstance);
-    markerLayer = L.layerGroup().addTo(mapInstance);
-    refreshMap();
-    return true;
-  }
-
-  function refreshMap() {
-    if (!mapInstance) return;
-    var visible = memoriesForDecade();
-
-    // Memories cluster by place, so a pin carries a count rather than overlapping.
-    var byPlace = {};
-    visible.forEach(function (memory) {
-      (byPlace[memory.place] = byPlace[memory.place] || []).push(memory);
-    });
-
-    markerLayer.clearLayers();
-    Object.keys(byPlace).forEach(function (placeId) {
-      var place = DATA.place(placeId);
-      if (!place) return;
-      var group = byPlace[placeId];
-      var icon = L.divIcon({
-        className: '',
-        html: '<span class="map-pin"><span class="map-pin__dot">' + num(group.length) + '</span>' +
-              '<span class="map-pin__label">' + pick(place.name) + '</span></span>',
-        iconSize: [22, 22],
-        iconAnchor: [11, 11]
-      });
-      L.marker([place.lat, place.lng], { icon: icon, keyboard: true, title: pick(place.name) })
-        .addTo(markerLayer)
-        .on('click', function () { openMapCard(group[0]); });
-    });
-
-    var counter = qs('#map-count');
-    if (counter) counter.textContent = t('map.inView', { n: num(visible.length) });
-
-    UI.qsa('.decade').forEach(function (node) {
-      var label = node.textContent;
-      var expected = state.decade === 'all' ? t('map.all') : t('decade.' + state.decade);
-      node.setAttribute('aria-pressed', label === expected ? 'true' : 'false');
-    });
-  }
-
-  function openMapCard(memory) {
-    var scrim;
-    function close() { closeOverlay(scrim); }
-    var place = DATA.place(memory.place);
-    var likes = state.likes[memory.id] != null ? state.likes[memory.id] : memory.likes;
-
-    var commentRows = Store.commentsOn(memory.id);
-    var comments = commentRows.length
-      ? el('ul.map-card__comments', null, commentRows.map(function (comment) { return commentRow(comment); }))
-      : el('div.map-card__comments', null, el('p.comments__empty', { text: t('comments.empty') }));
-
-    var card = el('div.map-card', null, [
-      el('div.map-card__plate.plate', { style: toneStyle(memory.tone) },
-        el('span.mono', { text: memory.plate || pick(memory.title) })),
-      el('div.map-card__body', null, [
-        el('button.map-card__back', { type: 'button', onclick: close, text: t('map.back') }),
-        el('h2.map-card__title', { text: pick(memory.title) }),
-        el('div.memory__gloss.gloss-line', { text: gloss(memory.title) }),
-        el('div.map-card__meta', null, [
-          badgeFor(memory),
-          el('span.era', { text: t('decade.' + memory.decade) }),
-          el('span.viewer__place', { style: 'color:var(--ink-60)', text: place ? pick(place.name) : '' }),
-          el('span.viewer__place', { style: 'color:var(--ink-45)', text: '♡ ' + num(likes) })
+    return el('div.located', null, [
+      el('div.page-head', null, [
+        el('div', null, [
+          el('h1.page-head__title', { text: t('map.title') }),
+          el('p.page-head__blurb', { text: t('map.blurbList') })
         ]),
-        el('div.map-card__divider'),
-        el('div.map-card__comments-head', {
-          html: t('comments.title') + ' <b>' + num(commentRows.length) + '</b>'
-        }),
-        comments,
-        el('button.locked-prompt', {
-          type: 'button',
-          onclick: state.signedIn ? function () { UI.toast(t('comments.title')); } : function () { close(); openGate(); }
-        }, [
-          el('span.locked-prompt__lock', { html: ICONS.lock('#26281F') }),
-          el('span', { text: state.signedIn ? t('comments.title') : t('comments.lockedShort') })
-        ])
-      ])
+        el('span.page-head__count', { text: t('map.inView', { n: num(visible.length) }) })
+      ]),
+      el('div.decade-bar', null,
+        el('div.decade-bar__inner', { role: 'group', 'aria-label': t('map.decade') },
+          [el('span.decade-bar__label', { text: t('map.decade') })].concat(decades.map(function (option) {
+            return el('button.decade', {
+              type: 'button',
+              'aria-pressed': state.decade === option.id ? 'true' : 'false',
+              onclick: function () { state.decade = option.id; render(); },
+              text: option.label
+            });
+          })))),
+      visible.length
+        ? el('div.grid', null, [el('div.grid__col', null, visible.map(function (row) {
+            var card = memoryCard(row);
+            card.appendChild(el('div.located__where', {
+              text: t('map.precision.' + (row.precision || 'area'))
+            }));
+            return card;
+          }))])
+        : el('p.profile__empty', { text: t('map.empty') })
     ]);
-
-    scrim = overlayShell('scrim.scrim--heavy', [card], close);
   }
 
   /* ── Events ──────────────────────────────────────────────── */
 
   function renderEvents() {
+    var events = state.feed.filter(function (row) { return row.kind === 'event'; });
+
     return el('div', null, [
       el('div.page-head', null, [
         el('div', null, [
           el('h1.page-head__title', { text: copyText('events.title') }),
           el('p.page-head__blurb', { text: copyText('events.blurb') })
         ]),
-        el('span.page-head__count', { text: t('events.count', { n: num(events().length) }) })
+        el('span.page-head__count', { text: t('events.count', { n: num(events.length) }) })
       ]),
-      el('ul.events', null, events().map(function (event) {
-        var plate = event.voice
-          ? el('div.event__plate.event__plate--voice', null, el('span', { html: ICONS.waveform(150, 28, 7) }))
-          : el('div.event__plate.plate', { style: toneStyle(event.tone) }, el('span.mono', { text: event.plate }));
-        plate.appendChild(el('span.event__date', { text: pick(event.date) }));
-
-        return el('li.event', null, [
-          plate,
-          el('div.event__body', null, [
-            el('h2.event__title', { text: pick(event.title) }),
-            el('div.event__gloss.gloss-line', { text: gloss(event.title) }),
-            el('div.event__where', { text: pick(event.where) }),
-            el('span.event__publisher.event__publisher--' + event.publisher, {
-              text: t('publisher.' + event.publisher)
-            })
-          ])
-        ]);
-      }))
+      events.length
+        ? el('ul.events', null, events.map(function (entry) {
+            var title = titlePair(entry);
+            var thumb = entry.thumb ? ARCHIVE.mediaUrl(entry.thumb) : null;
+            return el('li.event', null, [
+              el('a.event__plate' + (thumb ? '' : '.plate'), {
+                href: '/item/' + encodeURIComponent(entry.id),
+                style: thumb ? null : toneStyle(avatarTone(entry.id)),
+                'aria-label': pick(title)
+              }, thumb
+                ? el('img.memory__img', { src: thumb, alt: pick(title), loading: 'lazy' })
+                : el('span.mono', { text: t('feed.noPreview') })),
+              el('div.event__body', null, [
+                el('h2.event__title', null,
+                  el('a', { href: '/item/' + encodeURIComponent(entry.id) }, bdi(pick(title)))),
+                gloss(title) ? el('div.event__gloss.gloss-line', null, bdi(gloss(title))) : null,
+                entry.decade ? el('div.event__where', { text: decadeLabel(entry.decade) }) : null
+              ])
+            ]);
+          }))
+        : el('p.profile__empty', { text: t('events.empty') })
     ]);
-  }
-
-  /* Voice events use the gold-on-olive waveform from the design. */
-  function tintVoiceWaveforms() {
-    UI.qsa('.event__plate--voice rect').forEach(function (rect, i) {
-      rect.setAttribute('fill', i < 7 ? '#D9A441' : 'rgba(247,244,236,.3)');
-    });
   }
 
   /* ── Render ──────────────────────────────────────────────── */
 
   function render() {
-    refreshContent();
-
     var name = route();
-    var memoryIndex = routedMemoryIndex();
-
-    // Profiles are member-only: a signed-out visitor meets the gate and lands back
-    // on the archive rather than on an empty page.
-    if (name === 'profile' && !state.signedIn) {
-      // Captured before the redirect, so signing in returns them to the profile they asked
-      // for rather than to the archive they were bounced to (§9).
-      var wanted = global.location.hash;
-      global.location.replace('#/archive');
-      renderMasthead();
-      renderFooter();
-      mount(qs('#view'), renderArchive());
-      openGate(function () { global.location.hash = wanted; });
-      return;
-    }
 
     renderMasthead();
     renderFooter();
 
     var view = qs('#view');
-    if (name === 'map') {
-      mount(view, renderMap());
-      // The footer is hidden because the map fills the viewport. Hide it only once the
-      // map is actually up: doing it unconditionally around a map that failed to load
-      // removes the last navigation on the page and leaves nothing behind.
-      qs('#site-footer').hidden = initMap();
-    } else {
-      qs('#site-footer').hidden = false;
-      if (mapInstance) { mapInstance.remove(); mapInstance = null; }
-      if (name === 'profile') mount(view, renderProfile(routedProfileId()));
-      else if (name === 'page') mount(view, renderInfoPage());
-      else if (name === 'events') { mount(view, renderEvents()); tintVoiceWaveforms(); }
-      else mount(view, renderArchive());
+
+    if (state.error && !state.feed.length) {
+      mount(view, el('div.page-head', null, [
+        el('h1.page-head__title', { text: t('archive.err.title') }),
+        el('p.page-head__blurb', { text: t(state.error) })
+      ]));
+      closeViewer();
+      return;
     }
 
-    // The viewer is a route, not a mode: #/m/<id> opens it over the archive.
+    if (name === 'profile') {
+      if (isOwnProfileRoute() && !state.signedIn) {
+        // Captured before the redirect, so signing in returns them to the profile they
+        // asked for rather than to the archive they were bounced to (§9).
+        navigate('/', true);
+        mount(view, renderArchive());
+        openGate(function () { navigate('/me'); });
+        closeViewer();
+        return;
+      }
+      loadProfile();
+      mount(view, renderProfile() || el('div'));
+    } else if (name === 'map') {
+      mount(view, renderLocated());
+      // renderLocated shows a loading state while items is null; the .then re-renders
+      // rather than mounting a second time from inside the first render, which would leave
+      // the two competing for #view whenever the shard was already cached.
+      if (geoCache.items === null) {
+        loadGeo().then(function () { if (route() === 'map') render(); });
+      }
+    } else if (name === 'page') {
+      mount(view, renderInfoPage());
+    } else if (name === 'events') {
+      mount(view, renderEvents());
+    } else {
+      mount(view, renderArchive());
+    }
+
+    /* The viewer is a route, not a mode: /item/{id} opens it over the archive. */
+    var itemId = routedItemId();
     closeViewer();
-    if (memoryIndex > -1) openViewer(memoryIndex);
+    if (itemId) openViewerFor(itemId);
     else if (name === 'page' && routedPageSlug()) scrollToSection(routedPageSlug());
     else global.scrollTo(0, 0);
   }
 
-  /** #/page/<slug> renders the whole page, then brings that section into view. */
+  /**
+   * Open the viewer on an id, whether or not it is in the loaded feed.
+   *
+   * A deep link from WhatsApp arrives on an item that may be on feed page nine. Rather than
+   * loading nine pages to find it, the item is fetched directly and put at the front of the
+   * feed — so the reader sees what they came for immediately and can then scroll on into
+   * the rest of the archive.
+   */
+  function openViewerFor(id) {
+    var inFeed = -1;
+    state.feed.forEach(function (row, i) { if (row.id === id) inFeed = i; });
+    if (inFeed > -1) { state.lead = null; openViewer(inFeed); return; }
+
+    ARCHIVE.item(id).then(function (item) {
+      if (!item) {
+        // Redacted, or never published. Either way the archive does not have it, and the
+        // reader is told rather than left on a blank overlay. This is also the takedown
+        // path a shared link lands on: the item shard is gone and redactions.json names it.
+        UI.toast(t('archive.err.missing'));
+        navigate('/', true);
+        return;
+      }
+      state.items[id] = item;
+      // The feed-entry shape, built from the item shard. feedEntry() in shards.ts is the
+      // authority on these keys; this is the one place the front end reconstructs one, and
+      // it does so from the item shard's own fields rather than inventing any.
+      state.lead = {
+        id: item.id,
+        kind: item.kind,
+        title_ar: item.title_ar,
+        title_en: item.title_en,
+        decade: item.decade,
+        thumb: (ARCHIVE.role(item.media, 'thumb') || {}).path || null,
+        author: item.author,
+        likes: item.likes,
+        comments: item.comment_count,
+        day: item.day
+      };
+      return refreshEngagement([id]).then(function () {
+        // The reader may have navigated away while the shard was in flight.
+        if (routedItemId() !== id) return;
+        openViewer(0);
+      });
+    }, function () {
+      UI.toast(t('archive.err.offline'));
+    });
+  }
+
   function scrollToSection(slug) {
     var target = qs('#section-' + slug);
     if (!target) { global.scrollTo(0, 0); return; }
@@ -1391,12 +2026,32 @@
     global.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
   }
 
-  global.addEventListener('hashchange', render);
-  global.addEventListener('langchange', render);
-  // A dashboard edit in another tab reaches the public site without a reload.
-  Store.subscribe(function () { render(); });
+  /* ── Boot ────────────────────────────────────────────────── */
 
-  // The archive is masonry across a variable column count; re-lay it out on resize.
+  global.addEventListener('popstate', render);
+  global.document.addEventListener('click', onDocumentClick);
+  global.addEventListener('langchange', render);
+
+  /* Infinite scroll on the archive. Deliberately not IntersectionObserver on a sentinel:
+     the masonry is three columns of different heights, so the last card is not the lowest
+     point on the page and a sentinel after it fires early or late depending on which column
+     happens to be tallest. */
+  var scrollTimer = null;
+  global.addEventListener('scroll', function () {
+    if (route() !== 'archive' || state.viewer) return;
+    global.clearTimeout(scrollTimer);
+    scrollTimer = global.setTimeout(function () {
+      var remaining = global.document.body.scrollHeight - (global.pageYOffset + global.innerHeight);
+      if (remaining > 1200) return;
+      var before = state.feed.length;
+      loadNextPage().then(function () {
+        if (state.feed.length !== before && route() === 'archive' && !state.viewer) {
+          mount(qs('#view'), renderArchive());
+        }
+      }).catch(function () { /* the reader keeps what is already loaded */ });
+    }, 120);
+  }, { passive: true });
+
   var resizeTimer = null;
   var lastColumns = columnCount();
   global.addEventListener('resize', function () {
@@ -1407,18 +2062,33 @@
         lastColumns = next;
         mount(qs('#view'), renderArchive());
       }
-      if (mapInstance) mapInstance.invalidateSize();
     }, 150);
   });
 
-  render();
+  migrateHashRoute();
 
-  /* Restore a session before first paint settles, so a reload does not flash the
-     signed-out masthead at a member who never left.
+  /* The archive paints before anything about a session is known. §1: "Browsing is open" —
+     so a failed restore, a slow refresh or no account at all must not delay a single card.
 
-     Deliberately not awaited by render(): the archive is public (§1, "browsing is open"),
-     so it must paint whether or not there is a session to restore, and whether or not the
-     refresh call succeeds. A failed restore is the ordinary signed-out case. */
+     The order is manifest -> content -> first feed page, and it is sequential because each
+     depends on the last: the release path comes from the manifest and the shard paths come
+     from the release. §9's budget counts exactly this sequence. */
+  ARCHIVE.ready()
+    .then(function () { return ARCHIVE.content(); })
+    .then(function () { render(); return loadNextPage(); })
+    .then(function () {
+      render();
+      /* Last, and not awaited by anything above it. index.json only refines two lists that
+         already have a fallback (the decade bar and the geo cells), so making the first
+         paint wait on it would spend a request from §9's budget on something no first
+         screen shows. */
+      return ARCHIVE.index().catch(function () { return null; });
+    })
+    .catch(function (err) {
+      state.error = err && err.key ? err.key : 'archive.err.generic';
+      render();
+    });
+
   AUTH.restore().then(function (account) {
     if (account) onSignedIn(account);
   });
@@ -1429,7 +2099,7 @@
     if (!account && state.signedIn) {
       adoptAccount(null);
       renderMasthead();
-      if (route() === 'profile') global.location.hash = '#/archive';
+      if (route() === 'profile') navigate('/');
     }
   });
 })(window);

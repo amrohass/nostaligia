@@ -32,6 +32,24 @@
  * two-minute tick republishes exactly what was just rolled away from. The database sets the
  * hold in the same transaction as the flip; this module's job is to refuse to report success
  * when that did not happen.
+ *
+ * ── What a rollback does NOT undo, stated plainly ────────────
+ *
+ * §9's prerendered item pages. They live at the root of the bucket rather than under /v/,
+ * because a permalink cannot require resolving a pointer first (prerender.ts, itemPageKey),
+ * so there is no per-release copy of them to flip back to. After a rollback the archive
+ * serves release N-1 while every /item/{id} page still shows release N's text.
+ *
+ * That is a real gap and it is accepted rather than papered over, on two grounds. The
+ * content on those pages is approved content either way — a rollback restores an earlier
+ * ARRANGEMENT of the archive, not an earlier moderation decision, and the thing a rollback
+ * is usually reaching for (a bad build, a missing shard, a broken pointer) is not something
+ * an item page can express. And the pages self-heal: the next successful publish rewrites
+ * every one of them from whatever is publishable then.
+ *
+ * The case a rollback is NOT the tool for is content that should not be public. That is
+ * §8's takedown, which deletes the item page itself, immediately, and does not wait for a
+ * publish cycle or a pointer.
  */
 
 import { stableStringify } from "./shards.ts";

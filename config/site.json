@@ -90,6 +90,40 @@
     ]
   },
 
+  "_read_path_comment": [
+    "Where the browser fetches the archive from -- section 2's read path: manifest.json, then",
+    "feed/, item/, decade/, geo/, profile/ and content.json under /v/{ts}/, then redactions.json.",
+    "",
+    "The publisher writes all of it into the R2 `public` bucket, which is CDN-fronted, so",
+    "@cdn is the value that matches the deployment CLAUDE.md describes. `self` is the other",
+    "legitimate value -- it means the release tree is served from the Pages origin itself, and",
+    "it is what site/_headers already writes cache rules for. Either way it is ONE token here",
+    "rather than a hostname in the front end.",
+    "",
+    "connect-src must admit whatever this resolves to. @cdn is already in the list."
+  ],
+  "read_path": {
+    "base": "@cdn"
+  },
+
+  "_function_env_comment": [
+    "Values a deployed Edge Function needs that are not origins in the CORS sense. Same seam",
+    "as function_cors above and the same mitigation: the generator prints the exact",
+    "`supabase secrets set` line on every run, because nothing here can read the hosted value",
+    "back and confirm it still matches.",
+    "",
+    "site_origin is where a prerendered item page says it lives -- the canonical link, the",
+    "og:url, and the base for og:image. It has to be an absolute origin because a crawler",
+    "resolves nothing: WhatsApp fetches the URL it was given and reads the tags verbatim.",
+    "",
+    "STAGING ONLY, exactly like function_cors. PLACEHOLDER_DOMAIN is not an origin any",
+    "crawler will resolve, so the staging Pages origin is the honest value until a production",
+    "domain is provisioned -- at which point it REPLACES this rather than joining it."
+  ],
+  "function_env": {
+    "site_origin": "https://nostaligia.pages.dev"
+  },
+
   "_csp_comment": [
     "No 'unsafe-inline' and no 'unsafe-eval' anywhere -- section 6. @tokens resolve to",
     "https://<domain> from the table above.",
@@ -149,8 +183,6 @@
     "M4 and M6 unable to ship without doing what CLAUDE.md already requires."
   ],
   "known_violations": [
-    { "origin": "https://unpkg.com",             "why": "Leaflet JS + CSS from a third-party CDN", "removed_by": "M4 — PMTiles basemap on R2" },
-    { "origin": "https://tile.openstreetmap.org", "why": "section 2: NEVER the public OSM tile endpoint", "removed_by": "M4 — PMTiles basemap on R2" },
     { "origin": "https://fonts.googleapis.com",   "why": "section 9 wants a self-hosted subset; also leaks reader IPs to a third party", "removed_by": "M6 — font subsetting" },
     { "origin": "https://fonts.gstatic.com",      "why": "same as fonts.googleapis.com", "removed_by": "M6 — font subsetting" }
   ]

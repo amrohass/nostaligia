@@ -1,0 +1,6 @@
+# GENERATED FROM config/site.json BY scripts/build-site-config.mjs -- DO NOT EDIT
+#
+# History API routing (CLAUDE.md section 2). Every unmatched path serves the SPA shell
+# with a 200, so the browser keeps the URL it asked for.
+
+/*  /index.html  200

@@ -199,7 +199,9 @@ console.log('# upload.js — the refusal map');
                       'terminal_state', 'too_many_attempts', 'unauthenticated',
                       // §7's rights capture — claim_upload_slot, migration 0032.
                       'license_required', 'invalid_license', 'provenance_required',
-                      'consent_required']) {
+                      'consent_required',
+                      // §3's decade — claim_upload_slot, migration 0047.
+                      'invalid_decade']) {
     emitted.add(name);
   }
 

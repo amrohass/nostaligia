@@ -1,6 +1,7 @@
 /* The publish sequence. §2, in order, with the order as the safety property.
  *
- *     lease → read → build → WRITE EVERYTHING → validate → record → flip → release lease
+ *     lease → read → build → WRITE EVERYTHING → validate → record → flip → item pages
+ *           → release lease
  *
  * ── Why the order is the whole design ────────────────────────
  *
@@ -10,6 +11,11 @@
  * to `/v/{ISO-ts}/`, a path nothing points at, under keys nobody has ever requested. A
  * publisher killed at any point before the flip leaves an orphan directory and a `releases`
  * row marked inactive — which is litter, not an outage. The flip is one small object.
+ *
+ * The prerendered item pages are the one exception, and they are last for that reason. They
+ * cannot live under /v/ — a permalink that needed the manifest resolved first would put a
+ * request in front of every link anyone has ever shared — so they are written at the root,
+ * after the flip, and a failure among them does not fail the release. See step 9.
  *
  * That is also why validation sits between writing and flipping rather than before writing:
  * the thing worth validating is what actually landed in the bucket, not what we intended to
@@ -25,7 +31,18 @@
  * against real R2 without deliberately breaking real R2.
  */
 
-import { buildShards, type ShardFile, type SourcePost, stableStringify } from "./shards.ts";
+import {
+  buildShards,
+  type ContentBlocks,
+  contentFile,
+  profileFile,
+  publicPost,
+  type ShardFile,
+  type SourcePost,
+  type SourceProfile,
+  stableStringify,
+} from "./shards.ts";
+import { itemPage, itemPageKey } from "./prerender.ts";
 import type { ObjectSink } from "../_shared/r2.ts";
 
 // Re-exported so this module's callers and tests keep one import for the whole sequence.
@@ -35,6 +52,20 @@ export type { ObjectSink };
 export interface Db {
   publishablePosts(): Promise<Array<SourcePost & { hash_matches?: boolean }>>;
   redactedPostIds(): Promise<string[]>;
+  /** content_blocks, published half only (0043). Section 9's single source of truth. */
+  contentBlocks(): Promise<ContentBlocks>;
+  /** The public projection of every profile the archive names (0044). */
+  publishableProfiles(): Promise<SourceProfile[]>;
+  /**
+   * Posts that must NOT have a prerendered page, for the reason in step 9.
+   *
+   * The complement of publishablePosts, and asked for as its own call rather than derived
+   * by subtracting: the publisher only ever sees rows it may publish, so it has no way to
+   * know that a post it published last week was withdrawn this morning. Without this list
+   * that post's /item/{id} would keep serving its full text from the root of the bucket
+   * after it had vanished from every shard.
+   */
+  unpublishablePostIds(): Promise<string[]>;
   /**
    * The revisions come back with the lease, and that is the whole reason they are here.
    *
@@ -91,6 +122,15 @@ export interface Deps {
   /** The release timestamp and the lease holder. Injected so a test can assert exact keys. */
   now: () => Date;
   newHolder: () => string;
+  /**
+   * SITE_ORIGIN — where a shared link points. Every og:url and canonical link in every
+   * prerendered page is built from it, so a wrong value produces pages that look correct
+   * and send every reader to a host that is not this one. config/site.json carries it and
+   * the generator prints the `supabase secrets set` line.
+   */
+  siteOrigin: string;
+  /** CDN_ORIGIN, or "" — with no CDN there is no absolute image URL, so no og:image. */
+  cdnOrigin: string;
 }
 
 export interface PublishOutcome {
@@ -103,6 +143,9 @@ export interface PublishOutcome {
   /** Rows §5 refused. Reported, never silently dropped — see below. */
   rejectedHashes?: string[];
   redacted?: number;
+  /** Prerendered item pages written, and the ones that could not be. Step 9. */
+  pages?: number;
+  pagesFailed?: string[];
 }
 
 /** §2: "TTL 30–60 s" on the pointer, immutable for everything under /v/. */
@@ -115,6 +158,24 @@ const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
  * what stops a cached release from rendering a card for something that is gone.
  */
 const REDACTIONS_CACHE = "public, max-age=20, must-revalidate";
+/**
+ * §9's prerendered item pages, and the one cache header in this file that is neither
+ * immutable nor near-zero.
+ *
+ * They cannot be immutable: the object at `item/{id}/index.html` is REWRITTEN in place on
+ * every publish — it has to be, because the URL is a permalink somebody pasted into a group
+ * chat and it cannot carry a release timestamp (see prerender.ts's itemPageKey).
+ *
+ * They should not be near-zero either: a preview crawler fetches this once per share, from
+ * many edges, and this is the one document in the archive with an audience that arrives in
+ * bursts.
+ *
+ * Five minutes with must-revalidate is the compromise, and the number that makes it safe is
+ * not this one — §8's takedown deletes the object itself and purges the CDN path in the same
+ * request, so removal has never been bounded by a TTL. What this window bounds is how long a
+ * corrected title takes to reach a preview card.
+ */
+const ITEM_PAGE_CACHE = "public, max-age=300, must-revalidate";
 
 const LEASE_TTL_SECONDS = 300;
 
@@ -133,8 +194,21 @@ export function releaseFiles(
   posts: SourcePost[],
   redacted: string[],
   path: string,
+  content: ContentBlocks = {},
+  profiles: SourceProfile[] = [],
 ): ShardFile[] {
   const files = buildShards(posts);
+
+  // §9: "Page copy, cards, events, comments, and the info page all read from
+  // content_blocks/shards so the dashboard is the single source of truth." content.json is
+  // the first half of that sentence; the comments are inside the item shards buildShards
+  // just produced.
+  files.push(contentFile(content));
+
+  // One per profile the archive names — see publishable_profiles (0044) for why the set is
+  // bounded by the archive rather than by the user table.
+  for (const profile of profiles) files.push(profileFile(profile, posts));
+
   // Written INTO the release as well as at the root. A client that has a release cached for
   // a year and never re-reads the root would otherwise keep rendering a redacted item; this
   // copy is immutable and correct as of the build, and the root copy catches everything
@@ -159,6 +233,9 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
     // ── 2 · read ──
     const candidates = await deps.db.publishablePosts();
     const redacted = await deps.db.redactedPostIds();
+    const content = await deps.db.contentBlocks();
+    const profiles = await deps.db.publishableProfiles();
+    const unpublishable = await deps.db.unpublishablePostIds();
 
     // §5: "the publisher refuses rows whose hash ≠ approved hash." Refused, and NAMED —
     // a row that silently vanished would look exactly like one that was never approved,
@@ -171,7 +248,7 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
 
     // ── 3 · build ──
     const path = releasePath(deps.now());
-    const files = releaseFiles(posts, redacted, path);
+    const files = releaseFiles(posts, redacted, path, content, profiles);
 
     // ── 4 · write everything, while nothing points here ──
     for (const file of files) {
@@ -259,6 +336,51 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
       };
     }
 
+    // ── 9 · the permalinks, after the flip and never fatal ──
+    //
+    // §9's prerendered item pages are the one thing a release writes OUTSIDE /v/, because a
+    // permalink cannot require resolving a pointer first (prerender.ts, itemPageKey). Three
+    // consequences, and each is why this step is here rather than in step 4:
+    //
+    //   · they are written AFTER the flip, so a killed build leaves the previous pages
+    //     rather than a set that half-describes a release nobody activated. M2's "a killed
+    //     build is never visible" is about the archive the manifest names, and these are not
+    //     in it.
+    //   · deletions come first. Removing a page is never harmful and a post that stopped
+    //     being publishable — withdrawn, rejected after approval, edited past its approval
+    //     hash — must not keep serving its full text at a root URL. Takedown does not wait
+    //     for this (§8): it deletes the page itself, in the same request as the bytes.
+    //   · a failure here does NOT fail the release. The archive is correct without a
+    //     prerendered page; the SPA renders the same item from the same shard. Holding the
+    //     pointer hostage to a preview card would be the wrong thing to be strict about.
+    const pagesFailed: string[] = [];
+    let pages = 0;
+
+    for (const id of unpublishable) {
+      try {
+        await deps.sink.remove(itemPageKey(id));
+      } catch {
+        pagesFailed.push(itemPageKey(id));
+      }
+    }
+
+    for (const post of posts) {
+      try {
+        await deps.sink.put(
+          itemPageKey(post.id),
+          itemPage(publicPost(post), {
+            siteOrigin: deps.siteOrigin,
+            cdnOrigin: deps.cdnOrigin,
+          }),
+          "text/html; charset=utf-8",
+          ITEM_PAGE_CACHE,
+        );
+        pages++;
+      } catch {
+        pagesFailed.push(itemPageKey(post.id));
+      }
+    }
+
     return {
       published: true,
       reason: "published",
@@ -268,6 +390,8 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
       posts: posts.length,
       rejectedHashes,
       redacted: redacted.length,
+      pages,
+      pagesFailed,
     };
   } finally {
     // Always. A publisher that threw while holding the lease would otherwise block every

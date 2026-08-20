@@ -92,11 +92,19 @@ export async function handleRequest(req: Request): Promise<Response> {
     return json(rolled, rolled.rolledBack ? 200 : 409, req);
   }
 
+  // SITE_ORIGIN is required, CDN_ORIGIN is not, and the asymmetry is deliberate. A
+  // prerendered page with no og:url is a preview card that does not resolve, so there is no
+  // sensible default and env() throws; a page with no og:image is a small card instead of a
+  // large one, which is a degradation rather than a defect. Guessing an image host would be
+  // worse than having none — it would emit thousands of cached pages pointing at a URL that
+  // has never existed.
   const outcome = await publish({
     db,
     sink,
     now: () => new Date(),
     newHolder: () => crypto.randomUUID(),
+    siteOrigin: env("SITE_ORIGIN"),
+    cdnOrigin: Deno.env.get("CDN_ORIGIN") ?? "",
   });
 
   // 200 for "somebody else is publishing" as well as for a publish. It is the expected

@@ -43,6 +43,11 @@
       anonKey: ""
     }),
 
+    // Where the read path begins (section 2). An empty string means same origin -- see
+    // read_path in config/site.json. archive.js joins paths onto this, and nothing else in
+    // the front end knows where the archive lives.
+    archiveBase: "https://PLACEHOLDER_CDN_DOMAIN",
+
     // The exact policy served by _headers. Exposed so a page can assert at runtime that the
     // policy it is running under is the one this repository generated, rather than assuming.
     csp: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; font-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob: https://PLACEHOLDER_CDN_DOMAIN; media-src 'self' blob: https://PLACEHOLDER_CDN_DOMAIN; connect-src 'self' https://PLACEHOLDER_CDN_DOMAIN https://pjqvtmhizbnimqyxjbyq.supabase.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"

@@ -8,9 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="assets/css/tokens.css">
-<link rel="stylesheet" href="assets/css/atlas.css">
+<link rel="stylesheet" href="/assets/css/tokens.css">
+<link rel="stylesheet" href="/assets/css/atlas.css">
 </head>
 <body>
 
@@ -24,19 +23,33 @@
 
 <div id="overlays"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Leaflet and the public OpenStreetMap tile endpoint were loaded here. Both are gone in
+     M3. CLAUDE.md §2 forbids the OSM endpoint outright ("NEVER the public OSM tile
+     endpoint") and the CSP has blocked unpkg since M0, so the map rendered a blank panel on
+     every deployment that actually serves the policy. /map now reads the geo shards §2
+     defines and shows located memories as a list — which is M4's own stated fallback — and
+     M4 adds the PMTiles basemap on R2 on top of it. -->
+
 <!-- Turnstile (CLAUDE.md §6: on signup and submit). Loaded async and explicitly rendered,
      so the widget appears only in the dialog that needs it rather than on every page view.
      The origin is declared in config/site.json and allowed by script-src and frame-src. -->
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
-<script src="assets/js/config.js"></script>
-<script src="assets/js/i18n.js"></script>
-<script src="assets/js/data.js"></script>
-<script src="assets/js/store.js"></script>
-<script src="assets/js/ui.js"></script>
-<script src="assets/js/auth.js"></script>
-<script src="assets/js/turnstile.js"></script>
-<script src="assets/js/upload.js"></script>
-<script src="assets/js/public.js"></script>
+
+<!-- Absolute paths, not relative. History API routing (§2) means this same shell is served
+     at /item/{id} and /u/{handle} through site/_redirects, where `assets/js/…` would
+     resolve against the route rather than the root and 404. The publisher's prerendered
+     pages carry the identical list — prerender.ts's SPA_SCRIPTS, which a test pins against
+     this file. -->
+<script src="/assets/js/config.js"></script>
+<script src="/assets/js/i18n.js"></script>
+<script src="/assets/js/data.js"></script>
+<script src="/assets/js/archive.js"></script>
+<script src="/assets/js/ui.js"></script>
+<script src="/assets/js/auth.js"></script>
+<script src="/assets/js/db.js"></script>
+<script src="/assets/js/engage.js"></script>
+<script src="/assets/js/turnstile.js"></script>
+<script src="/assets/js/upload.js"></script>
+<script src="/assets/js/public.js"></script>
 </body>
 </html>

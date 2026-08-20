@@ -83,7 +83,12 @@ ok(run('padding:20px;;').length === 1 && run(';').length === 0,
 const files = [
   'site/index.html', 'site/admin.html',
   ...readdirSync(join(root, 'site/assets/js')).filter(f => f.endsWith('.js')).map(f => `site/assets/js/${f}`),
-  ...readdirSync(join(root, 'site/assets/css')).filter(f => f.endsWith('.css')).map(f => `site/assets/css/${f}`)
+  ...readdirSync(join(root, 'site/assets/css')).filter(f => f.endsWith('.css')).map(f => `site/assets/css/${f}`),
+  // Not in site/, and served to browsers anyway. The publisher writes prerender.ts's output
+  // to item/{id}/index.html in the R2 bucket, which is the FIRST document anyone arriving
+  // from a shared link ever loads (CLAUDE.md section 9). Scanning site/ alone would leave
+  // the one page a stranger sees outside the ratchet, which is exactly backwards.
+  'supabase/functions/publish/prerender.ts'
 ];
 
 const own = new Set(Object.values(cfg.domains).map(d => `https://${d}`));
@@ -94,7 +99,14 @@ for (const rel of files) {
     const origin = m[0].replace(/^http:/, 'https:');
     // wa.me is a link target, not a subresource. CSP governs what the page FETCHES;
     // navigation is form-action/frame-src territory and neither applies to an <a href>.
+    //
+    // www.w3.org is the SVG namespace URI, which createElementNS takes and no browser has
+    // ever fetched. It appears because ui.js builds real SVG nodes instead of assigning
+    // strings to innerHTML (section 6) — so the ratchet would report the XSS fix as a new
+    // third-party dependency. Matched on the exact namespace rather than the host, because
+    // w3.org DOES serve fetchable things and a blanket exemption would hide one.
     if (origin === 'https://wa.me' || own.has(origin)) continue;
+    if (/^https?:\/\/www\.w3\.org\/2000\/svg/.test(m.input.slice(m.index))) continue;
     found.add(origin);
   }
 }

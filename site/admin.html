@@ -8,10 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="assets/css/tokens.css">
-<link rel="stylesheet" href="assets/css/atlas.css">
-<link rel="stylesheet" href="assets/css/admin.css">
+<link rel="stylesheet" href="/assets/css/tokens.css">
+<link rel="stylesheet" href="/assets/css/atlas.css">
+<link rel="stylesheet" href="/assets/css/admin.css">
 </head>
 <body>
 
@@ -20,18 +19,19 @@
   <div class="admin__main" id="main"></div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="assets/js/config.js"></script>
-<script src="assets/js/i18n.js"></script>
-<script src="assets/js/data.js"></script>
-<script src="assets/js/store.js"></script>
-<script src="assets/js/ui.js"></script>
-<script src="assets/js/auth.js"></script>
-<script src="assets/js/db.js"></script>
+<!-- Leaflet is gone with M3; the places screen reads the real gazetteer table and the
+     basemap is M4's (CLAUDE.md §2 — PMTiles on R2, never the public OSM endpoint).
+     store.js is gone too: every screen below reads the database now. -->
+<script src="/assets/js/config.js"></script>
+<script src="/assets/js/i18n.js"></script>
+<script src="/assets/js/data.js"></script>
+<script src="/assets/js/ui.js"></script>
+<script src="/assets/js/auth.js"></script>
+<script src="/assets/js/db.js"></script>
 <!-- admin.js is NOT loaded here. admin-boot.js signs the visitor in, asks the database
      what role they hold, and injects it only for a moderator or admin (CLAUDE.md §5).
      That is bundle weight and tidiness, never secrecy: the file is readable by anyone who
      requests it, and the database refuses them regardless. -->
-<script src="assets/js/admin-boot.js"></script>
+<script src="/assets/js/admin-boot.js"></script>
 </body>
 </html>

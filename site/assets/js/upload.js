@@ -90,6 +90,10 @@
     invalid_license: 'up.err.licenseUnknown',
     provenance_required: 'up.err.provenance',
     consent_required: 'up.err.consent',
+    /* §3's EDTF-lite decade, added in M3 (migration 0047). The sheet offers a fixed select,
+       so this is unreachable from the form and mapped for the same reason as the three
+       above: the caller who reaches it is not using the form. */
+    invalid_decade: 'up.err.decade',
     duplicate_object_key: 'up.err.generic',
     quota_check_failed: 'up.err.generic',
     signing_failed: 'up.err.generic',

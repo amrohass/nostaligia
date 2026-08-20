@@ -64,6 +64,41 @@ const BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz";
 
 export type PostKind = "media" | "voice" | "event";
 
+/**
+ * A published comment, as 0044's publishable_posts() nests it.
+ *
+ * §9 lists comments among the things that "read from content_blocks/shards", and §2's zero
+ * database reads makes that mandatory rather than merely tidy: 0015 grants `anon` SELECT on
+ * nothing, so a comment a visitor cannot get from a shard is a comment they cannot read.
+ *
+ * The commenter is named by handle, exactly as the post's author is, and for the same §7
+ * reason — created_by is the join key that turns separate remarks into one person's history.
+ */
+export interface SourceComment {
+  id: string;
+  body: string;
+  lang: string | null;
+  /** Day precision (§7), from comments.created_on. */
+  day: string;
+  author_handle: string | null;
+  author_display_name: string | null;
+  author_avatar_path: string | null;
+}
+
+/** A profile, as 0044's publishable_profiles() returns it: the public projection, already. */
+export interface SourceProfile {
+  handle: string;
+  display_name: string | null;
+  avatar_path: string | null;
+  /** profiles.role_cache. DISPLAY ONLY (§4) — nothing may read it as authorization. */
+  label: string | null;
+  /** Already null unless visibility says public — the decision is 0044's, not this file's. */
+  bio: string | null;
+  member_since: number | null;
+  show_contributions: boolean;
+  show_comments: boolean;
+}
+
 /** A media_assets row, as the publisher selects it. */
 export interface SourceAsset {
   role: "master" | "rendition" | "thumb" | "poster";
@@ -111,6 +146,8 @@ export interface SourcePost {
   author_avatar_path: string | null;
   like_count: number;
   comment_count: number;
+  /** Published comments only. 0044 filters; nothing here re-decides what may be shown. */
+  comments: SourceComment[];
   /** Day precision already, from the `created_on` column §7 exists to make people use. */
   created_on: string;
   media: SourceAsset[];
@@ -253,7 +290,38 @@ export function feedEntry(row: SourcePost) {
   };
 }
 
-/** The item page. Everything public about one post, and nothing else. */
+/**
+ * One published comment, allowlisted.
+ *
+ * `status` does not travel, and its absence is the point: only 'published' rows reach this
+ * function at all, so a status field in the shard could only ever say "published" — and a
+ * field that is always the same value is a field somebody will one day set differently.
+ * created_by is absent for the reason the header gives about the post's author.
+ */
+function publicComment(c: SourceComment) {
+  return {
+    id: c.id,
+    body: c.body,
+    lang: c.lang ?? null,
+    day: c.day,
+    author: c.author_handle
+      ? {
+        handle: c.author_handle,
+        display_name: c.author_display_name ?? null,
+        avatar_path: c.author_avatar_path ?? null,
+      }
+      : null,
+  };
+}
+
+/**
+ * The item page. Everything public about one post, and nothing else.
+ *
+ * Note the deliberate asymmetry with feedEntry: there, `comments` is a NUMBER, because a
+ * card has room for a count and §9's budget counts the first feed page. Here it is the
+ * thread, and the count travels beside it as `comment_count`. Two shapes, two jobs; the key
+ * that means a number is spelled differently from the key that means a list.
+ */
 export function publicPost(row: SourcePost) {
   return {
     id: row.id,
@@ -282,9 +350,93 @@ export function publicPost(row: SourcePost) {
     provenance: row.provenance,
     author: author(row),
     likes: row.like_count,
-    comments: row.comment_count,
+    comment_count: row.comment_count,
+    comments: (row.comments ?? []).map(publicComment),
     day: row.created_on,
     media: publicMedia(row.media),
+  };
+}
+
+/* ── content.json ──────────────────────────────────────────── */
+
+/** `content_blocks`, published half only, as {key: {ar, en}}. §9's single source of truth. */
+export type ContentBlocks = Record<string, { ar?: string; en?: string }>;
+
+/**
+ * The whole of the site's editable copy, in one file.
+ *
+ * One file rather than one per block: there are a few dozen blocks totalling a few
+ * kilobytes, every page needs several of them, and §9's budget counts the first paint. A
+ * shard per block would be a few dozen requests to render a header.
+ */
+export function contentFile(blocks: ContentBlocks): ShardFile {
+  return { path: "content.json", json: stableStringify({ blocks }) };
+}
+
+/* ── profile/{handle}.json ─────────────────────────────────── */
+
+/**
+ * One profile page, as everyone sees it.
+ *
+ * §7: "Handle and avatar are always public. Everything else on a profile (bio,
+ * contributions, comments) is governed by profiles.visibility." 0044 has already applied
+ * that to `bio`; the two lists are gated here, because they are assembled here.
+ *
+ * A hidden list is an EMPTY list, never a missing key and never the list with a flag beside
+ * it. A flag would put the data in the file and ask the client to be discreet about it,
+ * which is the same mistake as hiding unapproved content in the browser (§5).
+ *
+ * Attribution is not gated and cannot be: a contributor who hides their contribution LIST
+ * still appears as the author on each card, because §7 makes handle and avatar public
+ * precisely so the archive can keep crediting people. What visibility governs is the
+ * aggregate — the page that collects one person's whole history in one place, which is the
+ * de-anonymisation vector §7 names.
+ */
+export function profileFile(profile: SourceProfile, rows: SourcePost[]): ShardFile {
+  const handle = profile.handle;
+
+  const contributions = profile.show_contributions
+    ? rows.filter((r) => r.author_handle === handle).map(feedEntry)
+    : [];
+
+  // Flattened from the posts rather than queried separately: the comment bodies are already
+  // in hand, and a second query would be a second chance for the two to disagree about which
+  // comments are published.
+  const comments = profile.show_comments
+    ? rows.flatMap((r) =>
+      (r.comments ?? [])
+        .filter((c) => c.author_handle === handle)
+        .map((c) => ({
+          id: c.id,
+          post_id: r.id,
+          post_title_ar: r.title_ar,
+          post_title_en: r.title_en,
+          body: c.body,
+          lang: c.lang ?? null,
+          day: c.day,
+        }))
+    )
+    : [];
+
+  // Newest first, then by id — the same tie-break buildShards uses, for the same reason: an
+  // unstable order rewrites the shard on every publish.
+  comments.sort((a, b) => (a.day === b.day ? a.id.localeCompare(b.id) : b.day.localeCompare(a.day)));
+
+  return {
+    // Lower-cased because a handle is a URL segment and a URL segment is what a browser
+    // sends. `normalized_handle` already folds case on the database side, so the stored
+    // handle is lower-case for Latin script and unchanged for Arabic, which has none.
+    path: `profile/${handle.toLowerCase()}.json`,
+    json: stableStringify({
+      handle,
+      display_name: profile.display_name ?? null,
+      avatar_path: profile.avatar_path ?? null,
+      label: profile.label ?? "member",
+      bio: profile.bio ?? null,
+      member_since: profile.member_since ?? null,
+      contributions,
+      comments,
+    }),
   };
 }
 
@@ -378,6 +530,30 @@ export function buildShards(rows: SourcePost[]): ShardFile[] {
       }),
     });
   }
+
+  // ── index.json ──
+  //
+  // What this release CONTAINS: how many feed pages, which decades have items, which geo
+  // cells exist. One small file, immutable with the release like everything else here.
+  //
+  // It exists because the alternative is guessing. Without it the front end has to carry a
+  // hardcoded decade list and a hardcoded geohash cell for Ramallah — two constants that
+  // are correct today, silently wrong the first time somebody contributes a 1940s
+  // photograph or an item from outside the city, and wrong in the direction where the
+  // content exists and simply never appears. The publisher already knows the answer;
+  // writing it down costs a few hundred bytes and removes both constants.
+  //
+  // Derived from what was just built rather than recomputed, so it cannot disagree with the
+  // files it describes.
+  files.push({
+    path: "index.json",
+    json: stableStringify({
+      pages,
+      total: ordered.length,
+      decades: [...byDecade.keys()].sort((a, b) => a - b),
+      cells: [...byCell.keys()].sort(),
+    }),
+  });
 
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }

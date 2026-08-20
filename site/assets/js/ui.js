@@ -1,11 +1,35 @@
 /* Small DOM helpers and the shared icon set.
    Kept deliberately thin — the app files below build markup with these directly
-   rather than pulling in a framework. */
+   rather than pulling in a framework.
+
+   ── There is no `html:` prop, and there cannot be ────────────
+
+   §6: "XSS: textContent only, or DOMPurify. Every innerHTML / insertAdjacentHTML /
+   outerHTML on user content is a defect."
+
+   el() used to accept `{html: '<svg…>'}` and assign it to innerHTML. Every call site was an
+   icon or a `<b>` around a number, and none of them was user content — which is exactly why
+   it survived three milestones. The prop is gone rather than documented, because the defect
+   it invites is not the call sites that exist: it is the next one, written by someone who
+   sees `html:` in the helper's signature and reaches for it with a title in hand.
+
+   What replaced it is below: svgEl() builds real SVG nodes, and el()'s children already
+   accept nodes. Nothing in this codebase can now put a string into the DOM as markup.
+   scripts/frontend-xss-test.mjs asserts that by scanning the served tree.
+
+   ── bdi() ───────────────────────────────────────────────────
+
+   §6's other half: "Render user strings in <bdi>." 0045 strips the override characters on
+   ingest; <bdi> handles the case that needs no special characters at all — an Arabic title
+   inside an English sentence, or the reverse, where the two scripts' natural directions make
+   the surrounding punctuation and digits land in the wrong place. Every user-authored string
+   in this front end goes through bdi(). */
 
 (function (global) {
   'use strict';
 
   var doc = global.document;
+  var SVG_NS = 'http://www.w3.org/2000/svg';
 
   /** el('div.memory', {onclick: fn}, [children]) */
   function el(spec, props, children) {
@@ -18,7 +42,6 @@
       Object.keys(props).forEach(function (key) {
         var value = props[key];
         if (value == null || value === false) return;
-        if (key === 'html') { node.innerHTML = value; return; }
         if (key === 'text') { node.textContent = value; return; }
         if (key === 'style') { applyStyle(node, value); return; }
         if (key === 'dataset') {
@@ -34,6 +57,45 @@
     }
 
     append(node, children);
+    return node;
+  }
+
+  /* An SVG element, in the SVG namespace.
+
+     createElement('svg') produces an HTMLUnknownElement that renders as nothing — SVG needs
+     createElementNS, and every child of it does too, which is why this recurses rather than
+     handing off to el(). Attributes are set without a namespace, which is correct for
+     everything here (`xlink:*` would need setAttributeNS and nothing uses it). */
+  function svgEl(tag, attrs, children) {
+    var node = doc.createElementNS(SVG_NS, tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (key) {
+        if (attrs[key] == null || attrs[key] === false) return;
+        node.setAttribute(key, attrs[key]);
+      });
+    }
+    if (children) {
+      (Array.isArray(children) ? children : [children]).forEach(function (child) {
+        if (child) node.appendChild(child);
+      });
+    }
+    return node;
+  }
+
+  /**
+   * A user-authored string, isolated.
+   *
+   * <bdi> resolves the string's direction from its own content and keeps that resolution
+   * from leaking into the surrounding line. The alternative — dir="auto" on the parent —
+   * applies one direction to a whole mixed line and gets it wrong for at least one of the
+   * two scripts, which on this site is every card that pairs an Arabic title with its
+   * English gloss.
+   *
+   * textContent, so it is a text node and not markup, for the same reason as everywhere else.
+   */
+  function bdi(value) {
+    var node = doc.createElement('bdi');
+    node.textContent = value == null ? '' : String(value);
     return node;
   }
 
@@ -105,39 +167,62 @@
     return '--p1:' + pair[0] + ';--p2:' + pair[1] + (extra ? ';' + extra : '');
   }
 
+  /* Every icon returns a NODE. They used to return strings that a caller assigned to
+     innerHTML — see the header. The signatures are otherwise unchanged, so a call site
+     moves from `{html: ICONS.lock()}` to passing it as a child. */
   var ICONS = {
     /* Gold padlock — marks a control a signed-out visitor cannot use. */
     lock: function (fill) {
-      return '<svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">' +
-        '<rect x="1.5" y="4.2" width="7" height="4.6" rx="1.2" fill="' + (fill || '#26281F') + '"></rect>' +
-        '<path d="M3.2 4.2V3a1.8 1.8 0 0 1 3.6 0v1.2" fill="none" stroke="' + (fill || '#26281F') + '" stroke-width="1.3"></path></svg>';
+      return svgEl('svg', { width: 9, height: 9, viewBox: '0 0 10 10', 'aria-hidden': 'true' }, [
+        svgEl('rect', { x: 1.5, y: 4.2, width: 7, height: 4.6, rx: 1.2, fill: fill || '#26281F' }),
+        svgEl('path', {
+          d: 'M3.2 4.2V3a1.8 1.8 0 0 1 3.6 0v1.2',
+          fill: 'none', stroke: fill || '#26281F', 'stroke-width': 1.3
+        })
+      ]);
     },
     lockLarge: function (fill) {
-      return '<svg width="18" height="18" viewBox="0 0 10 10" aria-hidden="true">' +
-        '<rect x="1.5" y="4.2" width="7" height="4.6" rx="1.2" fill="' + (fill || '#A67B24') + '"></rect>' +
-        '<path d="M3.2 4.2V3a1.8 1.8 0 0 1 3.6 0v1.2" fill="none" stroke="' + (fill || '#A67B24') + '" stroke-width="1.3"></path></svg>';
+      return svgEl('svg', { width: 18, height: 18, viewBox: '0 0 10 10', 'aria-hidden': 'true' }, [
+        svgEl('rect', { x: 1.5, y: 4.2, width: 7, height: 4.6, rx: 1.2, fill: fill || '#A67B24' }),
+        svgEl('path', {
+          d: 'M3.2 4.2V3a1.8 1.8 0 0 1 3.6 0v1.2',
+          fill: 'none', stroke: fill || '#A67B24', 'stroke-width': 1.3
+        })
+      ]);
     },
     camera: function (stroke) {
-      return '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">' +
-        '<rect x="2.5" y="5" width="19" height="14.5" rx="2.5" fill="none" stroke="' + stroke + '" stroke-width="1.8"></rect>' +
-        '<circle cx="12" cy="12" r="3.4" fill="none" stroke="' + stroke + '" stroke-width="1.8"></circle>' +
-        '<rect x="8" y="2.6" width="8" height="3" rx="1.2" fill="' + stroke + '"></rect></svg>';
+      return svgEl('svg', { width: 22, height: 22, viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
+        svgEl('rect', { x: 2.5, y: 5, width: 19, height: 14.5, rx: 2.5, fill: 'none', stroke: stroke, 'stroke-width': 1.8 }),
+        svgEl('circle', { cx: 12, cy: 12, r: 3.4, fill: 'none', stroke: stroke, 'stroke-width': 1.8 }),
+        svgEl('rect', { x: 8, y: 2.6, width: 8, height: 3, rx: 1.2, fill: stroke })
+      ]);
     },
     mic: function (stroke) {
-      return '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">' +
-        '<rect x="9.4" y="2.6" width="5.2" height="12" rx="2.6" fill="none" stroke="' + stroke + '" stroke-width="1.8"></rect>' +
-        '<path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" fill="none" stroke="' + stroke + '" stroke-width="1.8"></path>' +
-        '<path d="M12 18v3.4" stroke="' + stroke + '" stroke-width="1.8"></path></svg>';
+      return svgEl('svg', { width: 22, height: 22, viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
+        svgEl('rect', { x: 9.4, y: 2.6, width: 5.2, height: 12, rx: 2.6, fill: 'none', stroke: stroke, 'stroke-width': 1.8 }),
+        svgEl('path', { d: 'M5.5 11.5a6.5 6.5 0 0 0 13 0', fill: 'none', stroke: stroke, 'stroke-width': 1.8 }),
+        svgEl('path', { d: 'M12 18v3.4', stroke: stroke, 'stroke-width': 1.8 })
+      ]);
     },
     calendar: function (stroke) {
-      return '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">' +
-        '<rect x="3" y="4.5" width="18" height="17" rx="2.5" fill="none" stroke="' + stroke + '" stroke-width="1.8"></rect>' +
-        '<path d="M3 9.5h18" stroke="' + stroke + '" stroke-width="1.8"></path>' +
-        '<path d="M8 2.5v4M16 2.5v4" stroke="' + stroke + '" stroke-width="1.8"></path></svg>';
+      return svgEl('svg', { width: 22, height: 22, viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
+        svgEl('rect', { x: 3, y: 4.5, width: 18, height: 17, rx: 2.5, fill: 'none', stroke: stroke, 'stroke-width': 1.8 }),
+        svgEl('path', { d: 'M3 9.5h18', stroke: stroke, 'stroke-width': 1.8 }),
+        svgEl('path', { d: 'M8 2.5v4M16 2.5v4', stroke: stroke, 'stroke-width': 1.8 })
+      ]);
     },
-    upload: '<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">' +
-      '<path d="M12 16V5M12 5l-4.2 4.2M12 5l4.2 4.2" fill="none" stroke="#C05B3E" stroke-width="1.8" stroke-linecap="round"></path>' +
-      '<path d="M4 16.5v2A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5v-2" fill="none" stroke="#C05B3E" stroke-width="1.8" stroke-linecap="round"></path></svg>',
+    upload: function () {
+      return svgEl('svg', { width: 24, height: 24, viewBox: '0 0 24 24', 'aria-hidden': 'true' }, [
+        svgEl('path', {
+          d: 'M12 16V5M12 5l-4.2 4.2M12 5l4.2 4.2',
+          fill: 'none', stroke: '#C05B3E', 'stroke-width': 1.8, 'stroke-linecap': 'round'
+        }),
+        svgEl('path', {
+          d: 'M4 16.5v2A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5v-2',
+          fill: 'none', stroke: '#C05B3E', 'stroke-width': 1.8, 'stroke-linecap': 'round'
+        })
+      ]);
+    },
     /* The Google and Apple marks lived here, for sign-in buttons that CLAUDE.md §2 does
        not permit ("email + password only"). Deleted with M1 piece 4 rather than left
        unused: they are ~1.5 KB against §9's 150 KB budget, and a vendor mark sitting in
@@ -147,12 +232,23 @@
     waveform: function (width, height, played) {
       var heights = [8, 16, 22, 12, 18, 10, 24, 14, 20, 8, 16, 22, 6];
       var bars = heights.map(function (h, i) {
-        var fill = i < (played == null ? 7 : played) ? '#C05B3E' : 'rgba(38,40,31,.25)';
-        return '<rect x="' + (i * 10) + '" y="' + ((26 - h) / 2) + '" width="4" height="' + h +
-          '" rx="2" fill="' + fill + '"></rect>';
-      }).join('');
-      return '<svg viewBox="0 0 134 26" width="' + width + '" height="' + height +
-        '" style="display:block" aria-hidden="true">' + bars + '</svg>';
+        return svgEl('rect', {
+          x: i * 10,
+          y: (26 - h) / 2,
+          width: 4,
+          height: h,
+          rx: 2,
+          fill: i < (played == null ? 7 : played) ? '#C05B3E' : 'rgba(38,40,31,.25)'
+        });
+      });
+      var node = svgEl('svg', {
+        viewBox: '0 0 134 26', width: width, height: height, 'aria-hidden': 'true'
+      }, bars);
+      // display:block through CSSOM rather than a style attribute — style-src blocks the
+      // attribute (see applyStyle) and an SVG inline in a flex row otherwise sits on the
+      // text baseline with a few pixels of descender space under it.
+      node.style.setProperty('display', 'block');
+      return node;
     }
   };
 
@@ -230,6 +326,8 @@
 
   global.UI = {
     el: el,
+    svgEl: svgEl,
+    bdi: bdi,
     append: append,
     clear: clear,
     mount: mount,
