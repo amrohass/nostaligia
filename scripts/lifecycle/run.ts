@@ -70,6 +70,9 @@ const MINIO_ENDPOINT = env("R2_ENDPOINT", "http://127.0.0.1:9000");
 const R2_ACCOUNT_ID = env("R2_ACCOUNT_ID", "lifecycle");
 const R2_ACCESS_KEY_ID = env("R2_ACCESS_KEY_ID");
 const R2_SECRET_ACCESS_KEY = env("R2_SECRET_ACCESS_KEY");
+/* The publisher's own door (M2). Not the service key — see publish/handler.ts: this opens
+   exactly one endpoint, behind a lease that already refuses a second concurrent publish. */
+const PUBLISH_SECRET = env("PUBLISH_SECRET");
 
 const checks = new Checks();
 
@@ -128,6 +131,20 @@ function draft(title: string) {
   };
 }
 
+/** Signs an existing user back in. The role claim is minted at token issue (§4), so a
+    session opened before a grant carries the old role until it is re-issued. */
+async function signIn(email: string): Promise<{ jwt: string; sub: string }> {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: ANON_KEY },
+    body: JSON.stringify({ email, password: "lifecycle-harness-password-1" }),
+  });
+  if (!res.ok) throw new Error(`sign-in failed ${res.status}: ${await res.text()}`);
+  const out = await res.json();
+  if (!out.access_token) throw new Error(`sign-in returned no session: ${JSON.stringify(out)}`);
+  return { jwt: out.access_token, sub: out.user.id };
+}
+
 async function requestUpload(
   jwt: string,
   body: Record<string, unknown>,
@@ -174,6 +191,51 @@ async function mediaAssets(postId: string): Promise<Array<Record<string, unknown
     { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } },
   );
   return res.ok ? await res.json() : [];
+}
+
+/** Makes a signed-up user a moderator. Written as service_role: §4 keeps role out of any
+    column a browser can reach, so there is no other way to arrange one. */
+async function makeModerator(userId: string): Promise<boolean> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/user_roles`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      Prefer: "resolution=merge-duplicates",
+    },
+    body: JSON.stringify({ user_id: userId, role: "moderator", granted_by: userId }),
+  });
+  await res.body?.cancel();
+  return res.ok;
+}
+
+/** An approval, exactly as admin.js sends it: `status` and nothing else, as the moderator.
+    The trigger supplies approved_by from auth.uid(), and 0042's dispatch hangs off it. */
+async function approve(jwt: string, postId: string): Promise<number> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${postId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: ANON_KEY,
+      Authorization: `Bearer ${jwt}`,
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify({ status: "approved" }),
+  });
+  const rows = res.ok ? await res.json() : [];
+  await res.body?.cancel().catch(() => {});
+  return Array.isArray(rows) ? rows.length : 0;
+}
+
+/** Reads an object out of the public bucket as text, or null when it is not there. */
+async function publicObject(key: string): Promise<string | null> {
+  try {
+    const bytes = await store.head("public", key, 1024 * 1024);
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 /** Waits for the worker to finish. Bounded — a hang must fail, not stall the run. */
@@ -419,6 +481,93 @@ if (exhausted) {
     "a URL was minted for a request over quota — the refusal is after the signing, not before it",
   );
 }
+
+/* ── 7 · A REAL publish, and a real takedown (M2) ───────────── */
+
+// The same argument this file was written for, applied to the other half of the system.
+// Every M2 test until now ran against a FakeSink that recorded the call: the shard bytes,
+// the cache-control headers, the manifest flip and the delete had never been through an S3
+// server. R2Sink had no R2_ENDPOINT seam at all, so this could not have been run even if
+// somebody had wanted to — adding it is what makes the section below possible.
+//
+// WHAT IS STILL NOT PROVED HERE, and it is the same list as the top of this file: MinIO is
+// not R2, there is no CDN, and "the pointer flipped" is asserted by reading the object back
+// out of the bucket rather than by watching a browser follow it.
+
+const mod = await signUp(`lifecycle-mod-${stamp}@harness.local`);
+ck(await makeModerator(mod.sub), "could not grant the moderator role — the rest of §7 is untestable");
+
+// Re-authenticate: the role claim is minted into the token at sign-in (§4), and the token
+// from signUp above was issued before the grant existed.
+const modSession = await signIn(`lifecycle-mod-${stamp}@harness.local`);
+
+ck(await approve(modSession.jwt, postId) === 1,
+  "the moderator's approval changed no row — policy 0018 refused it, or the rights are missing");
+
+// 0042: approving dispatches the publisher. That POST goes nowhere in this harness — no
+// Vault secret is set, so publish_tick answers not_configured — which is deliberate. The
+// publish below is made by hand for the same reason exif-gate calls the pipeline directly:
+// what is under test is the publisher, not pg_net's delivery.
+const published = await tryFetch(`${SUPABASE_URL}/functions/v1/publish`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: `Bearer ${PUBLISH_SECRET}` },
+  body: JSON.stringify({ source: "lifecycle" }),
+});
+ck(published.ok, `the publisher refused: ${published.status} ${published.detail}`);
+
+// THE assertion nothing else makes: the pointer object is really in the bucket, and it
+// really names a release directory. A FakeSink cannot tell you an S3 server accepted the
+// PUT, and §2's whole read path begins by fetching this one object.
+const manifest = await publicObject("manifest.json");
+ck(manifest !== null, "no manifest.json in the bucket — the pointer never landed");
+
+const release = manifest ? (JSON.parse(manifest).release as string) : "";
+ck(/^\/v\/\d{4}-\d{2}-\d{2}T/.test(release), `manifest names no release: ${manifest}`);
+
+// The shard the manifest points at has to exist, and has to carry the item. A pointer to a
+// directory with a missing shard is a page that 404s for a year, cached.
+const feed = release ? await publicObject(`${release.slice(1)}feed/page-1.json`) : null;
+ck(feed !== null, `the release names no feed page: ${release}feed/page-1.json is not there`);
+ck(feed !== null && feed.includes(postId), "the published feed does not contain the approved item");
+
+// §7, on the bytes rather than on our intentions. The published shard is scanned for the
+// caption the master's EXIF carries and for the uploader's user id — the two things §7
+// names as the aggregate that de-anonymises a contributor.
+ck(feed === null || !feed.includes(GPS_CAPTION), "the published feed carries the master's EXIF caption");
+ck(feed === null || !feed.includes(member.sub), "the published feed carries the uploader's user id (§7)");
+
+// §8: "delete/rename the object in R2 immediately … the next scheduled publish removes it
+// from the shards as a formality — the bytes are already gone." Asserted as bytes.
+const thumb = (await mediaAssets(postId)).find((a) => a.role === "thumb");
+const thumbPath = String(thumb?.storage_path ?? "");
+ck(thumbPath !== "", "no thumb to take down");
+ck(await publicObject(thumbPath) !== null, "the derivative was not in the bucket before takedown");
+
+const tookDown = await tryFetch(`${SUPABASE_URL}/functions/v1/takedown`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    apikey: ANON_KEY,
+    Authorization: `Bearer ${modSession.jwt}`,
+  },
+  body: JSON.stringify({ post_id: postId, note: "lifecycle harness" }),
+});
+
+// NOT ok: the CDN purger is unconfigured here, and takedown.ts reports ok:false with
+// cdn_reason for exactly that — §8's step 2 cannot be done, and saying so is the whole
+// point of that branch. What has to be true is that step 1 happened anyway.
+ck(
+  tookDown.status === 200 || tookDown.status === 502,
+  `takedown answered ${tookDown.status}: ${tookDown.detail}`,
+);
+ck(await publicObject(thumbPath) === null, "the derivative is STILL in the bucket after a takedown (§8)");
+
+// §8 step 3. The list is what a client filters against between the takedown and the next
+// release, so it is the only thing standing between a cached shard and a card for content
+// that is gone.
+const redactions = await publicObject("redactions.json");
+ck(redactions !== null, "no redactions.json at the root");
+ck(redactions !== null && redactions.includes(postId), "redactions.json does not name the taken-down item");
 
 // Printed BEFORE report(), which exits. CI gates on this number: a run that stops early
 // has zero failures and looks identical to a run that verified everything, which is the

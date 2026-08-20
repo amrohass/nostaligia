@@ -37,6 +37,47 @@ export interface R2Config {
   accessKeyId: string;
   secretAccessKey: string;
   bucket: string;
+  /** Undefined — the normal case — means Cloudflare R2. See r2Endpoint() below. */
+  endpoint?: { host: string; protocol: "http:" | "https:" };
+}
+
+/**
+ * Where a presigned URL points. Undefined — the normal case — means Cloudflare R2.
+ *
+ * Selected by an explicit opt-in, never by a missing credential. A sink that silently fell
+ * back when R2 was misconfigured would report success while writing the archive nowhere.
+ * There is no inference from an absent variable, no "if not production", and no default
+ * other than Cloudflare: unset R2_ENDPOINT signs for R2, and nothing else can cause that
+ * not to happen.
+ *
+ * A malformed value THROWS rather than falling back, for the inverse reason — a harness
+ * that believed it was talking to MinIO while signing for Cloudflare is the same silent
+ * success, pointed the other way.
+ *
+ * ── Why HERE and not in sigv4.ts, and why the worker still has its own ──
+ *
+ * sigv4.ts is deliberately free of I/O and of anything ambient; an environment read inside
+ * the signer would put deployment configuration in the one file whose header explains why
+ * it has no dependencies. This module already does I/O, so it is the natural home for the
+ * Edge Functions — request-upload re-exports this rather than keeping the copy it used to
+ * have.
+ *
+ * worker/src/main.ts keeps its own six lines on purpose, and its header says so: the worker
+ * is a separate deployable that imports exactly two modules from _shared, and adding a
+ * third dependency to save six lines is the worse trade.
+ *
+ * Not a security surface. See sigv4.ts:101-112 — the endpoint is not a secret, it is
+ * covered by the signature through the host header, and pointing it elsewhere cannot widen
+ * what a URL authorises, only produce one R2 would reject.
+ */
+export function r2Endpoint(): { host: string; protocol: "http:" | "https:" } | undefined {
+  const raw = Deno.env.get("R2_ENDPOINT");
+  if (!raw) return undefined;
+  const u = new URL(raw);
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    throw new Error("R2_ENDPOINT must be an http: or https: URL");
+  }
+  return { host: u.host, protocol: u.protocol };
 }
 
 /** Long enough to survive a slow upload, short enough that a leaked URL is not a key. */

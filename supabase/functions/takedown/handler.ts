@@ -15,7 +15,7 @@
  */
 
 import { bearer, corsHeaders, env, fail, json } from "../_shared/http.ts";
-import { R2Sink } from "../_shared/r2.ts";
+import { r2Endpoint, R2Sink } from "../_shared/r2.ts";
 import { cloudflareFromEnv, CloudflarePurger } from "./cdn.ts";
 import { PostgrestTakedownDb } from "./db.ts";
 import { takeDown } from "./takedown.ts";
@@ -50,10 +50,15 @@ export async function handleRequest(req: Request): Promise<Response> {
   const rawNote = typeof body.note === "string" ? body.note.trim() : "";
   const note = rawNote ? rawNote.slice(0, NOTE_MAX) : null;
 
+  // endpoint: unset in production, which signs for Cloudflare. §8 says takedown deletes the
+  // bytes; until this was here, "the bytes are gone" had only ever been asserted against a
+  // fake sink that recorded the call. Read once and shared by both buckets, so a takedown
+  // can never end up deleting the derivative from one store and the master from another.
   const r2 = {
     accountId: env("R2_ACCOUNT_ID"),
     accessKeyId: env("R2_ACCESS_KEY_ID"),
     secretAccessKey: env("R2_SECRET_ACCESS_KEY"),
+    endpoint: r2Endpoint(),
   };
   const publicSink = new R2Sink({ ...r2, bucket: "public" });
 

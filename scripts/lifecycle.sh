@@ -23,6 +23,8 @@
 #   R2_SECRET_ACCESS_KEY        required
 #   R2_ACCOUNT_ID               default "lifecycle" — a MinIO host ignores it
 #   MEDIA_WORKER_URL            default http://127.0.0.1:8080   (checked, not started)
+#   PUBLISH_SECRET              required — the publisher's own door, and it must match the
+#                               value the Edge Functions were started with
 #
 # The Edge Functions must be served with R2_ENDPOINT set to the same value, or check 1
 # fails and says so by name. That is deliberate: a harness that silently signed for
@@ -42,6 +44,9 @@
 #
 #   · NOT §11 gate 2, and NOT M1's exit criterion. Both say "end to end", which means real
 #     R2 and a deployed worker. This is MinIO on localhost.
+#   · The M2 half — a real publish and a real takedown — is against the same MinIO. "The
+#     pointer flipped" is asserted by reading manifest.json back out of the bucket, not by
+#     watching a browser follow it, and no CDN purge happens because none is configured.
 #   · "No originals/ object reachable through the public path" is a BUCKET-POLICY PROXY.
 #     MinIO has no CDN in front of it, so what is checked is which bucket our code recorded
 #     — a claim about us, not about what a CDN would serve.
@@ -68,7 +73,7 @@ if [ -z "${SUPABASE_ANON_KEY:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; t
 fi
 
 missing=""
-for v in SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+for v in SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY          PUBLISH_SECRET; do
   [ -z "${!v:-}" ] && missing="$missing $v"
 done
 if [ -n "$missing" ]; then
@@ -113,6 +118,7 @@ echo
 
 export SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY
 export R2_ENDPOINT R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
+export PUBLISH_SECRET
 
 exec deno run \
   --allow-net --allow-env --allow-read --allow-write --allow-run \

@@ -472,6 +472,11 @@ jobs:
           # its environment once at boot, so a variable appended afterwards is a variable
           # complete-upload does not have when it goes to sign a job.
           echo "MEDIA_WORKER_SECRET=lifecycle-worker-secret" >> supabase/functions/.env
+          # The publisher's door (M2). Throwaway, and the same value the harness sends.
+          # CDN_ORIGIN and the Cloudflare purge token are deliberately NOT set: takedown
+          # then reports cdn_reason=not_configured, which is the branch the harness asserts
+          # — the bytes are deleted and the operator is told a cached copy may survive.
+          echo "PUBLISH_SECRET=lifecycle-publish-secret" >> supabase/functions/.env
           cat supabase/functions/.env
 
       # The ONLY difference from the database job's invocation: edge-runtime is not in the
@@ -560,6 +565,7 @@ jobs:
           export R2_ACCESS_KEY_ID=rmatestkey
           export R2_SECRET_ACCESS_KEY=rmatestsecret123
           export MEDIA_WORKER_URL=http://127.0.0.1:8080
+          export PUBLISH_SECRET=lifecycle-publish-secret
 
           # The Actions-specific half, and the reason it is HERE rather than in the script:
           # lifecycle.sh must stay runnable on a laptop with no notion of workflow commands.
@@ -582,11 +588,15 @@ jobs:
 
           # The count gate, and the reason it exists: a run that stops early records zero
           # failures and is indistinguishable from a run that verified everything. Exactly
-          # the argument the database job makes about an empty pgTAP suite. 18 fixed
-          # assertions plus two per derivative, so 20 is a floor no partial run reaches.
+          # the argument the database job makes about an empty pgTAP suite.
+          #
+          # Raised from 20 to 35 when the M2 section landed — 33 fixed assertions plus two
+          # per derivative. The floor has to move with the harness or it stops being a
+          # floor: the whole publish and takedown section could be deleted and a gate of 20
+          # would still be green.
           ran=$(grep -oE 'LIFECYCLE checks=[0-9]+' lifecycle.out | grep -oE '[0-9]+' || true)
           echo "::notice title=lifecycle::assertions executed: ${ran:-none}"
-          if [ "$rc" -eq 0 ] && { [ -z "$ran" ] || [ "$ran" -lt 20 ]; }; then
+          if [ "$rc" -eq 0 ] && { [ -z "$ran" ] || [ "$ran" -lt 35 ]; }; then
             echo "::error::lifecycle passed having run only ${ran:-0} assertions — it stopped early"
             rc=1
           fi

@@ -56,6 +56,7 @@
 
 import { presignR2Put } from "../_shared/sigv4.ts";
 import { bearer, corsHeaders, env, fail, json, rpc, unverifiedClaim } from "../_shared/http.ts";
+import { r2Endpoint } from "../_shared/r2.ts";
 
 // ── Caps, §6 ─────────────────────────────────────────────────
 // 1024-based, matching how every operating system reports a file size to the person
@@ -122,20 +123,16 @@ export const URL_TTL_SECONDS = 300;
  * talking to MinIO while handing out Cloudflare URLs — the silent success this whole
  * comment exists to refuse, inverted.
  *
- * Six lines duplicated from the worker rather than shared. _shared/sigv4.ts is
- * deliberately free of I/O and of anything ambient — its header explains why it has no
- * dependencies — and putting an environment read inside the signer would move deployment
- * configuration into the one file that must not have any.
+ * MOVED to ../_shared/r2.ts, and re-exported here so this module's public surface and its
+ * tests are unchanged. It used to be six lines duplicated from the worker; the publisher
+ * and takedown now need the same behaviour, and a third copy is where a rule starts
+ * drifting. _shared/r2.ts rather than _shared/sigv4.ts, because the signer is deliberately
+ * free of I/O and of anything ambient and an environment read belongs nowhere near it —
+ * see that file's header. The WORKER still keeps its own copy, on the reasoning its own
+ * header gives: it imports exactly two modules from _shared and a third dependency is a
+ * worse trade than six lines.
  */
-export function r2Endpoint(): { host: string; protocol: "http:" | "https:" } | undefined {
-  const raw = Deno.env.get("R2_ENDPOINT");
-  if (!raw) return undefined;
-  const u = new URL(raw);
-  if (u.protocol !== "http:" && u.protocol !== "https:") {
-    throw new Error("R2_ENDPOINT must be an http: or https: URL");
-  }
-  return { host: u.host, protocol: u.protocol };
-}
+export { r2Endpoint } from "../_shared/r2.ts";
 
 // Declared types only. The processing function re-derives the real type from magic
 // bytes and rejects anything that disagrees with this — an allowlist here keeps the

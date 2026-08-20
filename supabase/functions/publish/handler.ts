@@ -24,7 +24,7 @@ import { timingSafeEqual } from "../_shared/secret.ts";
 import { publish } from "./release.ts";
 import { rollback } from "./rollback.ts";
 import { PostgrestDb } from "./db.ts";
-import { R2Sink } from "../_shared/r2.ts";
+import { r2Endpoint, R2Sink } from "../_shared/r2.ts";
 import { CloudflarePurger, cloudflareFromEnv } from "../takedown/cdn.ts";
 
 /** §2: shards and the pointer both live in the CDN-fronted bucket. */
@@ -59,11 +59,16 @@ export async function handleRequest(req: Request): Promise<Response> {
   }
 
   const db = new PostgrestDb();
+  // endpoint: unset in production, which signs for Cloudflare. It is what lets
+  // scripts/lifecycle.sh drive a REAL publish against MinIO — until this line existed,
+  // every object R2Sink writes was verified only against a fake, and the shard bytes, the
+  // cache-control headers and the manifest flip had never been through an S3 server.
   const sink = new R2Sink({
     accountId: env("R2_ACCOUNT_ID"),
     accessKeyId: env("R2_ACCESS_KEY_ID"),
     secretAccessKey: env("R2_SECRET_ACCESS_KEY"),
     bucket: PUBLIC_BUCKET,
+    endpoint: r2Endpoint(),
   });
 
   if (body.action === "rollback") {
