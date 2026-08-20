@@ -132,7 +132,8 @@ function draft(title: string) {
 }
 
 /** Signs an existing user back in. The role claim is minted at token issue (§4), so a
-    session opened before a grant carries the old role until it is re-issued. */
+    session opened before a grant carries the old role in its claim until it is re-issued —
+    which is why admin-boot.js asks the database instead of trusting the token. */
 async function signIn(email: string): Promise<{ jwt: string; sub: string }> {
   const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: "POST",
@@ -497,8 +498,11 @@ if (exhausted) {
 const mod = await signUp(`lifecycle-mod-${stamp}@harness.local`);
 ck(await makeModerator(mod.sub), "could not grant the moderator role — the rest of §7 is untestable");
 
-// Re-authenticate: the role claim is minted into the token at sign-in (§4), and the token
-// from signUp above was issued before the grant existed.
+// Re-authenticated, and NOT because the approval needs it: policy 0018 calls
+// is_moderator(), which reads user_roles from the DATABASE rather than from the token — the
+// same choice admin-boot.js makes, because a claim is stale for up to an hour after a
+// change. The fresh token is for everything that DOES read the claim, request-upload's
+// role-aware caps among them, so the harness carries a session that agrees with the row.
 const modSession = await signIn(`lifecycle-mod-${stamp}@harness.local`);
 
 ck(await approve(modSession.jwt, postId) === 1,
