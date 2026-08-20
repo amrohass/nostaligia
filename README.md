@@ -19,12 +19,51 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | M | Contents | State |
 |---|---|---|
 | **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **complete** — 8/8 items, exit criteria met, CSP/HSTS verified live |
-| M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | **in progress** — pieces 1–3 done (upload gates, ingest lifecycle, media worker); Turnstile wiring, approval trigger and the moderation queue remain |
-| M2 | Sharding · versioned releases · single-writer lock · takedown | not started |
+| M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | **built, 9/9 pieces** — every exit criterion met against a local stack; two of them wait on a deployment to be met for real (see below) |
+| M2 | Sharding · versioned releases · single-writer lock · takedown | **in progress** — the lock, shard builder, publisher, takedown, debounced cron and rollback are in; scope for the rest is open |
 | M3 | Front end on shards · History API · prerendered item pages · XSS/bidi sweep | not started |
 | M4 | PostGIS geo · decade slider · PMTiles basemap | not started |
 | M5 | Fuzzing · consent/licence · seed importer · export · tested restore | not started |
 | M6 | Font subsetting · RTL pass · monitoring · Lighthouse | not started |
+
+### M1 progress
+
+| # | Piece | State |
+|---|---|---|
+| 1 | `request-upload` — auth, role-aware caps from the JWT, daily quota, signed PUT | **done**, gate-1 tests + a SigV4 round-trip against MinIO |
+| 2 | Ingest state machine — `ingest_state`, `claim_upload_slot`, `begin_ingest`, `release_ingest`, `complete_ingest`/`fail_ingest`, attempt ceiling | **done**, 6 pgTAP files |
+| 3 | The media worker — one container for image, audio and video; magic bytes, SVG refusal, re-encode, the 1440/1080/720/480 ladder, poster, thumb, audio normalize | **done**, 63 unit tests + a real 4K encode in CI |
+| 4 | Real sessions, Turnstile on signup / sign-in / submit, the upload path in the browser | **done**, 33 front-end assertions |
+| 5 | The moderation queue on real data — `admin-boot.js` gates on `authz_role()`, the queue reads PostgREST as the moderator | **done**, 15 pgTAP assertions |
+| 6 | Rights captured at upload — licence, provenance, consent, refused at `claim_upload_slot` | **done** |
+| 7 | §11 gate 2 — EXIF stripping asserted on bytes, inside the deployed image | **done**, and self-checking (it re-runs against a file it knows is dirty) |
+| 8 | The EXECUTE matrix — every definer function's grants, including `media_worker`'s | **done** |
+| 9 | The bucket rule as code — `DB.mediaUrl` returns null for anything outside `public/` | **done** |
+| — | R1, carried from M0: the queue flags `location_precision = 'exact'` | **done** — data contract in pgTAP, rendering by inspection |
+| — | The lifecycle harness — the seams every unit test stops short of | **done**, and proven to discriminate by mutation (run 32360434524) |
+
+**M1's exit criteria, honestly split.**
+
+*Met.* "Every unauthorized variant is refused" — 454 pgTAP assertions including the full
+denial matrix, plus the two Edge Functions' gate tests and the worker's front door.
+
+*Met against a local stack, not against the deployed one.* "Full contribution lifecycle
+works" is green in the `lifecycle` CI job — a real presigned PUT to a real S3 server, the
+container verifying and decoding the job, derivatives landing in the buckets the database
+was told about. That is MinIO on localhost and a container on a docker network. And "a 4K
+master survives intact in `originals/` while only renditions are CDN-reachable" is proven
+for the master (a real 3840×2160 encode runs inside the deployed image) but the
+CDN-reachability half is a **bucket-policy proxy**: what is checked is which bucket our
+code recorded, because there is no CDN in front of MinIO. Both close when the worker is
+deployed and an R2 bucket binding exists. `scripts/lifecycle/run.ts` lists all five things
+a green run there does not prove.
+
+*Deliberately unwritten, and held on one measurement.* `public.reap_stale_ingests()`, its
+`c_ingest_lease`, and the `expect_by` field in `complete-upload`'s 202. All three derive
+from `JOB_DEADLINE_MS` (CLAUDE.md §6), whose dominant term is still an estimate; `expect_by`
+is a client-facing contract, so it ships once at the real figure rather than being
+published and corrected. What unblocks them is a single run of a real 20-minute 4K master
+against the deployed worker.
 
 ### M0 progress
 
@@ -198,8 +237,22 @@ they are not the same event and must not be reported as if they were.
 
 ### The test suite
 
-`npx supabase test db` — 162 assertions, 8 files. CI runs it on every push
-([.github/workflows/ci.yml](.github/workflows/ci.yml)) and gates on `pg_prove`'s TAP
+Six CI jobs ([.github/workflows/ci.yml](.github/workflows/ci.yml)), and the counts below
+go stale — so **CI derives them rather than trusting them**. The database job sums every
+`plan(N)` in `supabase/tests/` and globs the file count, then fails if `pg_prove` reports
+anything different: a hardcoded number goes stale downward, and a suite that silently
+shrinks is a green tick over nothing.
+
+| job | what it runs |
+|---|---|
+| `secrets` | gitleaks over the **full history** (`fetch-depth: 0`), the forbidden-path guard, and a rule self-test with controls |
+| `frontend` | the generated `_headers`/`config.js` match `config/site.json`; CSP survivability and the external-origin ratchet; auth, upload refusals and the anon-key guard |
+| `functions` | the Edge Functions' gate-1 refusals; the presigner verified against a real S3 implementation |
+| `worker` | worker units; the image builds and type-checks; `R2Store` against MinIO; a real 3840×2160 ladder **inside the deployed image**; throughput at two source lengths; §11 gate 2 (GPS EXIF) |
+| `database` | every migration on a fresh database, then again (determinism), the harness probe, the pgTAP suite gated on counts, and two publishers contending for one lease |
+| `lifecycle` | the write path end to end against a real S3 server and the worker container — the only thing that executes `endpoint: r2Endpoint()` at either call site |
+
+`npx supabase test db` runs the database suite locally. CI gates on `pg_prove`'s TAP
 parsing, never a psql exit code: **psql exits 0 even when a pgTAP assertion fails.**
 
 | file | what it pins |
@@ -212,12 +265,33 @@ parsing, never a psql exit code: **psql exits 0 even when a pgTAP assertion fail
 | `05_matrix` | 4 roles × 15 tables × 4 operations = **240 cells**, each `allow` / `empty` / `deny` |
 | `06_attacks` | forged columns, escalation, handle forging, `originals/` leakage |
 | `07_triggers` | edit-after-approval sweep, hash stability, audit permanence, role logs, service-role paths |
+| `08_upload_quota` | the daily ceilings of §6, claimed in one atomic RPC |
+| `09_ingest_state` | the four machine states; ingest columns unwritable by a member and `ingest_error` readable by one; ingest is not part of the content hash |
+| `10_ingest_rpcs` | `complete_ingest` / `fail_ingest` — the worker's whole reach |
+| `11_claim_upload_slot` | the draft row the worker resolves, and every field a member may not choose |
+| `12_begin_ingest` | the `awaiting_bytes → processing` claim, and attempt N **of max** on every branch |
+| `13_ingest_attempts` | the retry ceiling, and the privileges that ARE the ceiling |
+| `14_release_ingest` | giving back a job no worker took, without giving back the attempt |
+| `15_moderation_queue` | the queue predicate, approval and its rights precondition, pending paths staying private, and R1's exact-coordinate data contract |
+| `16_function_grants` | the EXECUTE matrix, `media_worker` included |
+| `17_publish_lease` | the single writer, including an expired lease held by the right owner |
+| `18_publishable_posts` | what a release is allowed to contain |
+| `19_takedown` | the removal that only looks finished |
+| `20_publish_cron` | the debounce, and what "changed" has to mean |
+| `21_publish_rollback` | rollback, and the hold that outlives the next tick |
+| `22_rpc_ownership` | no definer function left executable by `PUBLIC` |
 
 [supabase/harness_probe.sql](supabase/harness_probe.sql) is run by CI *before* the suite
 and is not part of it — it contains a deliberate failure. It proves the harness can
 distinguish pass from fail, and that `SET LOCAL ROLE` actually takes effect. Without that
 second check every denial assertion would run as superuser and pass without testing
 anything.
+
+The same argument is made twice more, because a check that cannot fail is this project's
+recurring defect: the `lifecycle` job gates on the **number of assertions executed**, since
+a harness that stops early records zero failures and looks identical to one that verified
+everything; and `worker/scripts/exif-gate.ts` re-runs its own inspection against a file it
+knows is dirty.
 
 ### Requirements carried into later milestones
 
@@ -226,7 +300,7 @@ reasoning is M0's and the implementation is not.
 
 | # | Requirement | Milestone |
 |---|---|---|
-| R1 | **The moderation queue must visually flag any submission with `location_precision = 'exact'`**, so publishing a precise coordinate is reviewed as a decision rather than accepted as a default. The schema deliberately does *not* gate this — `exact` is legitimate for a public landmark — so the control is editorial, not structural. | M1 |
+| R1 | **The moderation queue must visually flag any submission with `location_precision = 'exact'`**, so publishing a precise coordinate is reviewed as a decision rather than accepted as a default. The schema deliberately does *not* gate this — `exact` is legitimate for a public landmark — so the control is editorial, not structural. | **done in M1** — a labelled chip on the queue row *and* the precision spelled out in the inspector; `15_moderation_queue` pins the data contract and the premise that `exact` publishes the true point unfuzzed |
 | R2 | The day-precision timestamp assertion in `stage0_incremental.ps1` covers the generated column only. Postgres already forces that case (`created_at::date` is STABLE and would be rejected at DDL time). The place a local-time bug can actually occur is the **publish-time** day-precision path, which has no such guard — re-point the assertion there. | M2/M3 |
 | R3 | CI must gate on `pg_prove`'s TAP parsing, never on a psql exit code: psql exits 0 even when a pgTAP assertion fails. | M0 item 5 |
 
@@ -285,11 +359,17 @@ scripts/
   build-site-config.mjs    config/site.json -> _headers + config.js; --check gates CI
   frontend-csp-test.mjs    14 assertions: CSSOM styling + the external-origin ratchet
   verify-deployed-headers.mjs  fetches a live deployment; proves headers are SERVED
-.github/workflows/ci.yml   three jobs: secrets · frontend (headers/CSP) · database
+  frontend-auth-test.mjs   33 assertions: session storage, refusal coverage, anon-key guard
+  sigv4-roundtrip.ts       the presigner, verified by a real S3 server rather than by itself
+  publish-race.sh          two psql backends contending for one publish lease
+  lifecycle.sh             the write path end to end; owns the environment contract
+  lifecycle/run.ts         ...and the assertions. Reads its "does not prove" list first
+.github/workflows/ci.yml   six jobs: secrets · frontend · functions · worker · database · lifecycle
 
 supabase/
   config.toml              CLI config + access-token hook (local stack only)
-  migrations/              23 files, applied in filename order
+  migrations/              41 files, applied in filename order. M0 is …0811…; M1 adds the
+                           upload and ingest path, M2 the publish path
     …090100_extensions     PostGIS into `extensions`
     …090200_helpers        touch_updated_at, visibility + handle validation
     …090300_enums          13 types
@@ -313,9 +393,26 @@ supabase/
     …092100_location_fuzz  location_public derived in-database, never client-supplied
     …092200_jsonb_shape    details/consent key allowlists and byte ceilings
     …092300_media_visible  can_read_post_media() — see "Two Postgres rules", below
-  tests/                   8 files, 162 assertions, run by `npx supabase test db`
+    …0812…, …0819…, …0820… the upload quota, the ingest state machine and its RPCs, the
+                           rights capture, the publish lease, takedown, the cron, rollback
+  functions/               Edge Functions, Deno, unit-tested in the `functions` job
+    request-upload/        auth · Turnstile · role caps from the JWT · quota · signed PUT
+    complete-upload/       "the bytes are up" → begin_ingest → the worker, with a rollback
+    publish/               the shard builder, the publisher, the pointer flip, rollback
+    takedown/              §8 — bytes first, shards afterwards
+    _shared/               magic bytes, SigV4, the R2 client, secret handling, http
+  tests/                   23 files, run by `npx supabase test db`; CI derives the counts
   harness_probe.sql        NOT in tests/ — contains a deliberate failure, by design
   stage0_incremental.ps1   proves 0014–0015 apply forward-only onto a populated database
+
+worker/                    the media worker (§6) — ONE container for image, audio, video
+  Dockerfile               `deno cache` type-checks the whole graph at build time
+  src/main.ts              the front door: signature, replay window, body cap, watchdog
+  src/pipeline.ts          quarantine in, derivatives out; JOB_DEADLINE_MS lives here
+  src/ladder.ts            the 1440/1080/720/480 rungs, poster, thumb, audio, waveform
+  src/store.ts             R2Store — presigned GET/PUT/COPY/DELETE
+  scripts/exif-gate.ts     §11 gate 2, run inside the deployed image, self-checking
+  scripts/ladder-fixture.ts  a real 4K encode from lavfi — no fixture committed
 
 index.html                 public shell
 admin.html                 back-office shell
@@ -323,12 +420,22 @@ assets/css/tokens.css      palette, type, radii, shadows
 assets/css/atlas.css       public components
 assets/css/admin.css       back-office components
 assets/js/i18n.js          AR/EN strings, numerals, direction
-assets/js/data.js          seed content (pre-backend)
+assets/js/data.js          seed content (pre-backend) — M3 replaces what still reads it
 assets/js/store.js         content store — the seam a backend replaces
 assets/js/ui.js            DOM helpers, icon set, toast, focus trap
+assets/js/auth.js          sessions. The access token is never written to storage (§7)
+assets/js/turnstile.js     explicit render; the handle carries reset(), because it is single-use
+assets/js/db.js            PostgREST calls, and DB.mediaUrl — §6's bucket rule as code
+assets/js/upload.js        the three-call contribution path; enforces nothing, by design
+assets/js/config.js        GENERATED — window.CONFIG
 assets/js/public.js        public app
-assets/js/admin.js         back-office app
+assets/js/admin-boot.js    signs in, asks authz_role() — the DATABASE, not the JWT claim
+assets/js/admin.js         back-office app; dynamically imported for moderators only
 ```
+
+That last block lives under `site/`, which is the Pages output directory — so `supabase/`,
+`worker/`, `scripts/` and the docs are unreachable from the web by construction, not by
+a rule someone has to remember.
 
 ---
 
@@ -583,7 +690,7 @@ they are listed so nobody mistakes them for the intended design.
 | Hash routing (`#/archive`, `#/m/<id>`) | `public.js`, `admin.js` | §2 History API, real per-item URLs | M3 |
 | Public OSM tile endpoint | `public.js`, `admin.js` | §2 PMTiles on R2, never OSM | M4 |
 | Leaflet + Google Fonts from CDNs | both shells | §9 self-hosted subset fonts | M6 |
-| Google / Apple sign-in buttons | `public.js` | §2 email + password only | M1 |
+| ~~Google / Apple sign-in buttons~~ | `public.js` | §2 email + password only | **removed in M1** — the marks are gone from `ui.js` too, not merely hidden |
 | `html:` prop → `innerHTML` on records | `ui.js` and 3 admin call sites | §6 every one is a defect | M3 |
 | Inline `style` attributes (48 sites) | `ui.js` `el()` | §6 CSP without `unsafe-inline` | M0 item 7 |
 | Role vocabulary (contributor/editor/partner/narrator) | `data.js`, `i18n.js` | §4 exactly three roles | M3 |
@@ -628,13 +735,18 @@ carries an EDTF-lite range.
 ## Launch gates
 
 The system may be built and internally deployed without these. It may not be **public**
-until all four pass (CLAUDE.md §11).
+until all five pass (CLAUDE.md §11).
 
 1. RLS denial matrix passes — every mutation as anon, member, moderator; all denials
    asserted; green in CI.
-2. EXIF stripping verified on a real photograph carrying GPS data, end to end.
+2. EXIF stripping verified on a real photograph carrying GPS data, end to end. *CI runs
+   this against the deployed image on generated bytes; "end to end" means the deployed
+   system, so the gate is not met until it runs there.*
 3. One restore tested from a backup held by the maintainer.
 4. A named human on the takedown path, with a stated response time.
+5. Publish-age monitoring separates a held pipeline from an idle one — an operator hold
+   left set stops the archive as silently as a broken cron, so the alert must report
+   `held_by_operator` distinctly from `unchanged`, and fire on the first.
 
 Plus an independent penetration test, scheduled, executed and its findings triaged. **The
 public launch date is set after the pen test, not before.**
