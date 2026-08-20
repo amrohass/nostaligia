@@ -390,13 +390,16 @@ jobs:
           # siteverify endpoint, so this is a live round-trip to Cloudflare that happens to
           # always succeed — not a stub, and not a bypass in the code.
           echo "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA" >> supabase/functions/.env
+          # Written BEFORE the stack starts, with everything else. The edge runtime reads
+          # its environment once at boot, so a variable appended afterwards is a variable
+          # complete-upload does not have when it goes to sign a job.
+          echo "MEDIA_WORKER_SECRET=lifecycle-worker-secret" >> supabase/functions/.env
+          cat supabase/functions/.env
 
       # The ONLY difference from the database job's invocation: edge-runtime is not in the
       # exclusion list, because this job needs functions served.
       - name: The stack, WITH edge functions
-        run: |
-          supabase start -x realtime,storage-api,imgproxy,studio,logflare,vector,supavisor,mailpit
-          echo "MEDIA_WORKER_SECRET=lifecycle-worker-secret" >> supabase/functions/.env
+        run: supabase start -x realtime,storage-api,imgproxy,studio,logflare,vector,supavisor,mailpit
 
       - name: The worker image, as it will be deployed
         run: docker build -f worker/Dockerfile -t rma-media-worker .
@@ -438,7 +441,20 @@ jobs:
           export R2_ACCESS_KEY_ID=rmatestkey
           export R2_SECRET_ACCESS_KEY=rmatestsecret123
           export MEDIA_WORKER_URL=http://127.0.0.1:8080
-          bash scripts/lifecycle.sh
+
+          # The Actions-specific half, and the reason it is HERE rather than in the script:
+          # lifecycle.sh must stay runnable on a laptop with no notion of workflow commands.
+          # This turns each failed check into an annotation, which is the only part of a run
+          # readable from the API without a token — so a failure can be diagnosed from the
+          # run itself rather than by opening the web UI.
+          rc=0
+          bash scripts/lifecycle.sh 2>&1 | tee lifecycle.out || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            grep -E '^[[:space:]]*(✗|lifecycle:)' lifecycle.out | while IFS= read -r line; do
+              echo "::error title=lifecycle::${line}"
+            done
+          fi
+          exit "$rc"
 
       - name: Worker logs
         if: failure()
