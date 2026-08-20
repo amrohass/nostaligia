@@ -326,3 +326,127 @@ jobs:
       - name: Stop the stack
         if: always()
         run: supabase stop --no-backup
+
+  # ── The lifecycle harness ──────────────────────────────────────────────────
+  # The seams. Every job above tests one component against fakes: request-upload's
+  # tests never mint a URL, the worker's never receive one, exif-gate runs the pipeline
+  # against a directory. This job is the only place where a presigned URL is actually
+  # PUT to, a job is actually verified by the container, and a derivative actually lands
+  # in the bucket the database was told about.
+  #
+  # It is also the ONLY thing that executes `endpoint: r2Endpoint()` at either call site.
+  # Comment both out and all 190 unit tests still pass; this job cannot get past check 1.
+  #
+  # Green here is NOT §11 gate 2 and NOT M1's exit criterion. Both say "end to end",
+  # which means real R2 and a deployed worker; this is MinIO on localhost with no CDN
+  # anywhere. scripts/lifecycle/run.ts lists the five things it does not prove.
+  lifecycle:
+    name: the write path, end to end, against a real S3 server
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # The GPS fixture is generated, not committed — the same argument ladder-fixture.ts
+      # makes. ubuntu-latest carries no ffmpeg.
+      - name: ffmpeg, for the fixture
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: MinIO, with the three buckets §2 names
+        run: |
+          docker run -d --name rma-lifecycle-minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=rmatestkey -e MINIO_ROOT_PASSWORD=rmatestsecret123 \
+            --entrypoint sh minio/minio \
+            -c "mkdir -p /data/quarantine /data/originals /data/public && minio server /data"
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && break || sleep 2
+          done
+
+      # R2_ENDPOINT is what makes this job possible at all: without it request-upload
+      # signs for <account>.r2.cloudflarestorage.com and the PUT goes nowhere reachable.
+      # Written before `supabase start` so the edge runtime picks it up at boot.
+      #
+      # Untracked, created at runtime, throwaway values. The forbidden-paths job reads
+      # `git ls-files`, so a generated .env is not something it can see — and there is
+      # nothing here worth seeing.
+      - name: Edge Function environment, pointed at MinIO
+        run: |
+          cat > supabase/functions/.env <<'EOF'
+          R2_ENDPOINT=http://127.0.0.1:9000
+          R2_ACCOUNT_ID=lifecycle
+          R2_ACCESS_KEY_ID=rmatestkey
+          R2_SECRET_ACCESS_KEY=rmatestsecret123
+          MEDIA_WORKER_URL=http://127.0.0.1:8080
+          UPLOAD_ALLOWED_ORIGINS=http://127.0.0.1:3000
+          EOF
+          # Cloudflare's documented always-pass test secret. request-upload calls the real
+          # siteverify endpoint, so this is a live round-trip to Cloudflare that happens to
+          # always succeed — not a stub, and not a bypass in the code.
+          echo "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA" >> supabase/functions/.env
+
+      # The ONLY difference from the database job's invocation: edge-runtime is not in the
+      # exclusion list, because this job needs functions served.
+      - name: The stack, WITH edge functions
+        run: |
+          supabase start -x realtime,storage-api,imgproxy,studio,logflare,vector,supavisor,mailpit
+          echo "MEDIA_WORKER_SECRET=lifecycle-worker-secret" >> supabase/functions/.env
+
+      - name: The worker image, as it will be deployed
+        run: docker build -f worker/Dockerfile -t rma-media-worker .
+
+      # --network host so the container reaches Kong on 127.0.0.1:54321 and MinIO on
+      # 127.0.0.1:9000, both published to the runner's loopback.
+      #
+      # NOTE, and it is a real limitation: the worker authenticates to PostgREST with the
+      # local SERVICE ROLE key rather than a minted media_worker JWT. complete_ingest is
+      # granted to both, so the pipeline runs — but this job therefore does NOT exercise
+      # the media_worker least-privilege boundary. 16_function_grants.test.sql is what
+      # covers that, and it covers it at the database rather than over the wire.
+      - name: The worker container
+        run: |
+          eval "$(supabase status -o env | sed 's/^/export /')"
+          docker run -d --name rma-lifecycle-worker --network host \
+            -e MEDIA_WORKER_SECRET=lifecycle-worker-secret \
+            -e SUPABASE_URL=http://127.0.0.1:54321 \
+            -e SUPABASE_ANON_KEY="$ANON_KEY" \
+            -e MEDIA_WORKER_JWT="$SERVICE_ROLE_KEY" \
+            -e R2_ENDPOINT=http://127.0.0.1:9000 \
+            -e R2_ACCOUNT_ID=lifecycle \
+            -e R2_ACCESS_KEY_ID=rmatestkey \
+            -e R2_SECRET_ACCESS_KEY=rmatestsecret123 \
+            -e PORT=8080 \
+            rma-media-worker
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8080/healthz && break || sleep 2
+          done
+
+      - name: The lifecycle
+        run: |
+          eval "$(supabase status -o env | sed 's/^/export /')"
+          export SUPABASE_URL=http://127.0.0.1:54321
+          export SUPABASE_ANON_KEY="$ANON_KEY"
+          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
+          export R2_ENDPOINT=http://127.0.0.1:9000
+          export R2_ACCOUNT_ID=lifecycle
+          export R2_ACCESS_KEY_ID=rmatestkey
+          export R2_SECRET_ACCESS_KEY=rmatestsecret123
+          export MEDIA_WORKER_URL=http://127.0.0.1:8080
+          bash scripts/lifecycle.sh
+
+      - name: Worker logs
+        if: failure()
+        run: docker logs rma-lifecycle-worker || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f rma-lifecycle-worker rma-lifecycle-minio || true
+          supabase stop --no-backup || true
+          rm -f supabase/functions/.env
