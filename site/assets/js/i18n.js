@@ -355,6 +355,17 @@
     'q.addTag':    { ar: '+ وسم', en: '+ tag' },
     'q.consent':   { ar: 'أقرّ بحقوق المشاركة ووافق على العرض العام.',
                      en: 'Confirmed the sharing rights and agreed to public display.' },
+    // R1 (§7). `exact` is legitimate — a public landmark has no doorstep to expose — so
+    // the schema does not refuse it and the control is editorial. These three strings ARE
+    // that control: they are the only place the choice is put in front of a moderator.
+    'q.exactFlag': { ar: 'إحداثيات دقيقة', en: 'Exact coordinates' },
+    'q.exactWhy':  { ar: 'سيُنشر موقع دقيق غير مموّه. راجعه كقرار، لا كإعداد افتراضي (§٧).',
+                     en: 'A precise, unfuzzed location will be published. Review it as a decision, not a default (§7).' },
+    'q.precision': { ar: 'دقّة الموقع', en: 'Location precision' },
+    'precision.exact':  { ar: 'دقيق', en: 'Exact' },
+    'precision.street': { ar: 'الشارع', en: 'Street' },
+    'precision.area':   { ar: 'المنطقة', en: 'Area' },
+    'precision.hidden': { ar: 'مخفي — لا إحداثيات', en: 'Hidden — no coordinates' },
     'q.internalNote': { ar: 'ملاحظة داخلية للفريق', en: 'Internal note for the team' },
     'q.internalNotePh': { ar: 'اكتب ملاحظة لا تظهر للمساهم…', en: 'A note the contributor never sees…' },
     'q.arrived':   { ar: 'وصلت {a} · يتبقّى {b} على الموعد',

@@ -277,9 +277,22 @@
    * empty with a 403 — found by 15_moderation_queue, which had the same mistake in its
    * ORDER BY.
    */
+  /* location_precision is asked for because of R1, not for display: §7 fuzzes domestic
+     coordinates by default, and `exact` is the one value that opts a contributor out of
+     that. It is legitimate — a public landmark has no home to expose — which is exactly
+     why the schema does not refuse it and why the control has to be editorial. A
+     moderator must SEE the choice, or precise coordinates get published by never being
+     noticed.
+
+     Safe to name here, and checked rather than assumed: 0015 grants it to
+     `authenticated`, and 15_moderation_queue asserts that with `location` as the control.
+     PostgREST refuses the WHOLE request when a query names one ungranted column, so
+     adding a column to this list is never cosmetic — it is how the queue silently
+     becomes empty. */
   var QUEUE_QUERY = [
     'select=id,kind,title_ar,title_en,body_ar,body_en,created_on,' +
-      'license,provenance,decade,media_assets(role,rendition,storage_path,bucket,mime,width,height,bytes,duration_s)',
+      'license,provenance,decade,location_precision,' +
+      'media_assets(role,rendition,storage_path,bucket,mime,width,height,bytes,duration_s)',
     'status=eq.pending',
     'ingest_state=eq.ready',
     'order=created_on.asc',
@@ -360,6 +373,10 @@
          liability. */
       license: row.license || '',
       provenance: row.provenance || '',
+      /* Null for a post with no coordinates at all, which is most of them. Only the
+         string 'exact' raises the flag — 'street' and 'area' are already fuzzed and
+         'hidden' publishes nothing. */
+      locationPrecision: row.location_precision || null,
       plate: [master && master.mime,
               master && master.width ? master.width + '×' + master.height : null,
               master && master.bytes ? Math.round(master.bytes / 1024) + ' KB' : null]
@@ -438,6 +455,10 @@
               }, [
                 el('div.queue-item__row', null, [
                   el('span.queue-item__title', { text: pick(item.title) }),
+                  /* R1. In the LIST as well as the detail pane, because a moderator
+                     working a queue of thirty decides what to open from this row — a flag
+                     only in the inspector is a flag seen after the decision to look. */
+                  exactFlag(item),
                   // Latin digits: the SLA chip is set in Inter and reads left-to-right.
                   el('span.sla' + slaClass(item.hoursLeft), { text: item.hoursLeft + 'h' })
                 ]),
@@ -493,6 +514,20 @@
           el('div.detail__fields', null, [
             detailField(t('q.place'), pick(item.place)),
             detailField(t('q.decade'), pick(item.decade)),
+            /* The list flag says "look"; this says what was chosen and what publishing it
+               would mean. Shown for every value, not only 'exact', so the field is a fact
+               about the post rather than an alarm that appears from nowhere. */
+            item.locationPrecision
+              ? el('div.detail__field', null, [
+                  el('span.detail__key', { text: t('q.precision') }),
+                  el('span.detail__value', null, [
+                    el('span', { text: t('precision.' + item.locationPrecision) }),
+                    item.locationPrecision === 'exact'
+                      ? el('span.detail__warn', { text: t('q.exactWhy') })
+                      : null
+                  ])
+                ])
+              : null,
             el('div.detail__field', null, [
               el('span.detail__key', { text: t('q.tags') }),
               el('div.detail__tags', null, item.tags.map(function (tag) {
@@ -564,6 +599,26 @@
         }())
       ])
     ]);
+  }
+
+  /* R1, carried into M1 from M0's reasoning: the queue must visually flag any submission
+     with location_precision = 'exact'.
+
+     A chip rather than a colour on the row, and labelled rather than iconographic, because
+     the moderator has to be able to act on it: the decision is "did this contributor mean
+     to publish their own doorstep", and an unlabelled dot does not ask that question.
+
+     Returns null — not an empty element — for everything else. `el()` skips null children,
+     so a post with no coordinates costs no DOM and no whitespace. */
+  function exactFlag(item) {
+    if (item.locationPrecision !== 'exact') return null;
+    return el('span.flag.flag--exact', {
+      text: t('q.exactFlag'),
+      title: t('q.exactWhy'),
+      /* The chip is decoration to a screen reader without this; the label below it in the
+         detail pane is the full sentence. */
+      'aria-label': t('q.exactWhy')
+    });
   }
 
   function detailField(key, value) {

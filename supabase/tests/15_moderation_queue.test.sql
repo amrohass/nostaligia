@@ -22,7 +22,8 @@ begin;
 create extension if not exists pgtap;
 
 -- 6 the predicate · 3 approval and its rights precondition · 2 the paths stay private
-select plan(11);
+-- · 4 R1, the exact-coordinate flag's data contract
+select plan(15);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-0000000000e1', 'queue-author@t.local'),
@@ -68,6 +69,19 @@ values
    null, null, '00000000-0000-0000-0000-0000000000e1',
    '00000000-0000-0000-0000-0000000000e1/norights', 'ready', 'pending', null, null, null);
 
+-- R1's fixture. Separated from the INSERT above only because it names two more columns.
+-- location_precision = 'exact' is the contributor opting OUT of §7's default fuzzing, and
+-- it is the single thing the queue has to make visible.
+insert into public.posts (id, kind, title_en, body_en, license, provenance, created_by,
+                          ingest_object_key, ingest_state, status,
+                          location, location_precision, location_source)
+values
+  ('00000000-0000-0000-0000-00000000cc06', 'media', 'a precise point', 'reviewable',
+   'CC-BY-SA-4.0', 'family album', '00000000-0000-0000-0000-0000000000e1',
+   '00000000-0000-0000-0000-0000000000e1/exact', 'ready', 'pending',
+   extensions.st_setsrid(extensions.st_makepoint(35.2034, 31.9022), 4326)::extensions.geography,
+   'exact', 'user');
+
 insert into public.media_assets (post_id, role, storage_path, bucket, mime)
 values ('00000000-0000-0000-0000-00000000cc01', 'master',
         '00000000-0000-0000-0000-0000000000e1/ready', 'originals', 'image/jpeg'),
@@ -104,7 +118,7 @@ set local request.jwt.claims to
   '{"sub":"00000000-0000-0000-0000-0000000000e2","role":"authenticated"}';
 
 select is(
-  (select count(*)::integer from pg_temp.queue_ids()), 2,
+  (select count(*)::integer from pg_temp.queue_ids()), 3,
   'a moderator''s queue holds exactly the reviewable items');
 
 select is(
@@ -179,6 +193,52 @@ select is(
   (select count(m.id)::integer from public.media_assets m
     where m.post_id = '00000000-0000-0000-0000-00000000cc05'), 0,
   '...nor the storage paths of its derivatives, which is what keeps the CDN URL unguessable');
+
+-- ═══ 12–15 · R1 — the exact-coordinate flag's data contract ══
+--
+-- R1 (README, carried from M0): the queue must visually flag any submission with
+-- location_precision = 'exact'. The RENDERING is admin.js's and is not asserted here —
+-- this file has no DOM. What it pins is everything the rendering rests on, and each of
+-- these fails silently in a way that leaves a green build and an unflagged coordinate.
+
+set local role authenticated;
+set local request.jwt.claims to
+  '{"sub":"00000000-0000-0000-0000-0000000000e2","role":"authenticated"}';
+
+-- QUEUE_QUERY names this column. PostgREST refuses the WHOLE request when a query names
+-- one ungranted column, so an ungranted location_precision does not hide the flag — it
+-- empties the queue. That has already happened twice in this dashboard's short life, with
+-- created_at and created_by.
+select ok(
+  has_column_privilege('authenticated', 'public.posts', 'location_precision', 'SELECT'),
+  'the queue may read location_precision — the column its R1 flag is built on');
+
+-- CONTROL. Without it the assertion above passes just as well against a table whose
+-- grants are simply wide open, which is the state 0015 exists to prevent.
+select ok(
+  not has_column_privilege('authenticated', 'public.posts', 'location', 'SELECT'),
+  '...while the raw point it protects is still unreadable by anyone (§7)');
+
+-- The privilege existing is not the value arriving. This is what the dashboard actually
+-- receives for the fixture whose contributor chose to publish a precise point.
+select is(
+  (select p.location_precision::text from public.posts p
+    where p.id = '00000000-0000-0000-0000-00000000cc06'),
+  'exact',
+  '...and a submission that opted out of fuzzing says so in the queue''s own row');
+
+reset role;
+
+-- R1's PREMISE, and the reason the control has to be editorial rather than structural:
+-- fuzz_location passes 'exact' through untouched, so location_public IS the true point.
+-- Nothing downstream softens it. If this ever stops being true the flag is no longer the
+-- last thing standing between a contributor's choice and a published doorstep, and R1
+-- should be rewritten rather than left in place meaning something else.
+select ok(
+  (select extensions.st_equals(p.location_public::extensions.geometry,
+                               p.location::extensions.geometry)
+     from public.posts p where p.id = '00000000-0000-0000-0000-00000000cc06'),
+  'exact publishes the true point unfuzzed — the moderator''s flag is the only control');
 
 select * from finish();
 rollback;

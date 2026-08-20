@@ -263,6 +263,29 @@ html[lang="en"] .queue-item__sub { font: 400 11.5px/1.5 var(--font-en); }
 .sla--soon { background: var(--terracotta-a14); color: var(--terracotta); }
 .sla--warn { background: var(--gold-a20); color: var(--gold-ink-deep); }
 
+/* R1 — the exact-coordinate flag. Terracotta, the same alarm colour .chip--alert and
+   .sla--soon already use, so a moderator learns one warning colour rather than three.
+   Logical properties throughout (§9): this sits beside a title in an RTL column. */
+.flag {
+  font: 600 10px var(--font-ar);
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+  flex: none;
+}
+html[lang="en"] .flag { font: 600 9.5px var(--font-en); }
+.flag--exact { background: var(--terracotta-a14); color: var(--terracotta); }
+
+/* The sentence under the precision value. Its own line, because it is the reason rather
+   than the value, and a moderator reading the field should not have to hover a chip. */
+.detail__warn {
+  display: block;
+  margin-block-start: 4px;
+  font: 400 11px/1.55 var(--font-ar);
+  color: var(--terracotta);
+}
+html[lang="en"] .detail__warn { font: 400 11px/1.5 var(--font-en); }
+
 .pane-detail {
   flex: 1;
   min-width: 0;
