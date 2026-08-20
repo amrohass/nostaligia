@@ -17,10 +17,17 @@
 // is the point of the file — if a gate-1 refusal ever regresses to running after gate 2
 // or gate 3, these stop returning what they claim and start returning 401.
 
-import { ABSOLUTE_MAX_BYTES, handleRequest, r2Endpoint } from "./handler.ts";
+import {
+  ABSOLUTE_MAX_BYTES,
+  handleRequest,
+  r2Endpoint,
+  ROLE_CAPS,
+  URL_TTL_SECONDS,
+} from "./handler.ts";
 import { presignR2Put } from "../_shared/sigv4.ts";
 
-const GiB = 1024 * 1024 * 1024;
+const MiB = 1024 * 1024;
+const GiB = 1024 * MiB;
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
@@ -51,6 +58,44 @@ async function refusal(body: unknown): Promise<{ status: number; error: string; 
 
 Deno.test("the absolute ceiling is 4 GiB, derived from the largest role cap in §6", () => {
   assertEquals(ABSOLUTE_MAX_BYTES, 4 * GiB, "§6 gives moderator/admin a 4 GB maximum");
+});
+
+// §6's table, all four numbers, pinned as numbers.
+//
+// This looks like it restates the constant and it does — and it is the only thing in the
+// repository that notices the member row moving. ABSOLUTE_MAX_BYTES is a Math.max over the
+// table, so raising member to 4 GiB / 20 min changes nothing about the ceiling: the
+// assertion above stays green, the boundary tests stay green, the role-floor file stays
+// green, and every gate in this function keeps working exactly as designed on a limit that
+// is no longer §6's. Measured — that mutation left all twenty tests passing.
+//
+// It matters because this is one half of a cost ceiling and the halves multiply. §6 gives
+// a member 20 uploads a day; at 200 MB that is at most 4 GiB of ingest and no 4K
+// transcode. At a moderator's per-file cap it is 80 GB and twenty of them, off one
+// account, which is the shape of the billing incident §6 was written after.
+//
+// Change these figures in CLAUDE.md §6 and here together, the same rule the daily quotas
+// and the publish counter floor carry.
+// Nothing else in the repository would notice this growing. The presign tests below pin
+// the HOST and the signature's determinism; neither reads the expiry, so a TTL of a day
+// would leave every one of them green and every minted URL writable for a day.
+Deno.test("the presigned PUT expires in five minutes", () => {
+  assertEquals(URL_TTL_SECONDS, 300, "a leaked upload URL is a write into quarantine/");
+});
+
+Deno.test("§6's role-aware caps are the table §6 states, per role", () => {
+  assertEquals(ROLE_CAPS.member.maxBytes, 200 * MiB, "a member's per-file cap is 200 MB");
+  assertEquals(ROLE_CAPS.member.maxDurationS, 3 * 60, "and three minutes");
+  assertEquals(ROLE_CAPS.moderator.maxBytes, 4 * GiB, "a moderator's is 4 GB");
+  assertEquals(ROLE_CAPS.moderator.maxDurationS, 20 * 60, "and twenty minutes");
+  // §6 gives admin the same row as moderator. Asserted rather than assumed, because the
+  // two are written out separately and could drift apart unnoticed.
+  assertEquals(ROLE_CAPS.admin.maxBytes, ROLE_CAPS.moderator.maxBytes, "admin matches moderator");
+  assertEquals(
+    ROLE_CAPS.admin.maxDurationS,
+    ROLE_CAPS.moderator.maxDurationS,
+    "in duration too",
+  );
 });
 
 Deno.test("a declaration above every role's cap is refused with no token and no auth", async () => {

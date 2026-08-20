@@ -64,7 +64,11 @@ import { bearer, corsHeaders, env, fail, json, rpc, unverifiedClaim } from "../_
 const MiB = 1024 * 1024;
 const GiB = 1024 * MiB;
 
-const ROLE_CAPS = {
+// Exported so the table itself can be pinned, not merely the ceiling derived from it.
+// ABSOLUTE_MAX_BYTES is a Math.max over these rows, so widening the MEMBER row leaves it
+// unchanged at 4 GiB — every assertion about the ceiling stays green while a member
+// silently acquires a moderator's per-file allowance. Measured by mutation.
+export const ROLE_CAPS = {
   member: { maxBytes: 200 * MiB, maxDurationS: 3 * 60 },
   moderator: { maxBytes: 4 * GiB, maxDurationS: 20 * 60 },
   admin: { maxBytes: 4 * GiB, maxDurationS: 20 * 60 },
@@ -80,7 +84,20 @@ export const ABSOLUTE_MAX_BYTES = Math.max(
 );
 
 const QUARANTINE_BUCKET = "quarantine";
-const URL_TTL_SECONDS = 300;
+
+/**
+ * How long the presigned PUT stays usable.
+ *
+ * Exported so it can be pinned. A leaked or logged upload URL is a write into the
+ * quarantine bucket by anyone holding it, bounded only by this number and by the
+ * content-length the signature covers — so it is a security parameter, not a convenience
+ * one, and it must not be able to grow unnoticed.
+ *
+ * Five minutes is set against the slowest legitimate case: a member on a Ramallah mobile
+ * connection has to START the PUT within it, not finish it. S3 checks the signature's
+ * expiry when the request begins.
+ */
+export const URL_TTL_SECONDS = 300;
 
 /**
  * Where the presigned PUT points. Undefined — the normal case — means Cloudflare R2.

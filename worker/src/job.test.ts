@@ -91,6 +91,20 @@ Deno.test("hex case and surrounding whitespace do not decide authenticity", asyn
 // the signature. These assert that it is then actually USED — a signed timestamp nobody
 // checks is a signature that is valid forever.
 
+// The three below are written against REPLAY_WINDOW_MS rather than against a literal, so
+// that they stay boundary tests if the window ever legitimately moves. That is right for
+// them and it leaves exactly one hole: the window's VALUE. Widened to an hour, all three
+// still pass — measured by mutation, and the whole worker suite with them — while a
+// captured job body stays replayable twelve times longer.
+//
+// So the value is pinned once, here, in the same shape as DURATION_CEILING_S and
+// JOB_DEADLINE_MS. Five minutes is chosen against the only legitimate delay in this path:
+// complete-upload signs the job and POSTs it immediately, so the gap is one HTTP hop plus
+// a Cloud Run cold start. Minutes of slack, not tens of minutes.
+Deno.test("the replay window is five minutes, not whatever the boundary tests follow", () => {
+  assertEquals(REPLAY_WINDOW_MS, 5 * 60 * 1000, "a signed job is not a long-lived token");
+});
+
 Deno.test("a job older than the window is refused", async () => {
   const stale = new Date(NOW.getTime() - REPLAY_WINDOW_MS - 1000).toISOString();
   const body = jobBody(stale);
