@@ -192,10 +192,16 @@ Deno.test("/healthz reports liveness and no state at all", async () => {
  * request-upload's matching call sits behind auth, Turnstile and a quota RPC its gate-1
  * tests deliberately never reach.
  *
- * scripts/lifecycle.sh is what covers it, and covers it completely rather than partially —
- * that harness cannot pass at all unless both call sites honour the variable, because a URL
- * signed for Cloudflare is not one MinIO will accept. Until it runs, those two lines are
- * checked by reading them and by nothing else.
+ * So this is an UNCOVERED GAP, not a gap covered elsewhere. Nothing in CI exercises those
+ * two lines today: the workflow's database job starts the stack with `-x edge-runtime`, so
+ * an Edge Function has never been served in CI at all, and the worker job drives the
+ * container directly rather than through request-upload.
+ *
+ * scripts/lifecycle.sh is intended to close it, and would close it completely rather than
+ * partially — that harness cannot pass at all unless both call sites honour the variable,
+ * because a URL signed for Cloudflare is not one MinIO will accept. It is not written yet
+ * and running it in CI additionally requires the stack to serve edge functions. Until both
+ * are true, these two lines are checked by reading them and by nothing else.
  */
 
 const SIGN_FIXTURE = {

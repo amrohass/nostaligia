@@ -194,10 +194,15 @@ Deno.test("an unlisted origin gets no CORS headers at all", async () => {
 // no seam for that line here: the presign call sits behind auth, Turnstile and a quota RPC,
 // and this file is gate 1, which by design sends nothing that gets that far.
 //
-// scripts/lifecycle.sh is what covers it, and covers it completely rather than partially —
-// that harness cannot pass at all unless both call sites honour the variable, because a URL
-// signed for Cloudflare is not one MinIO will accept. Until it runs, that line is checked
-// by reading it and by nothing else.
+// So this is an UNCOVERED GAP, not a gap covered elsewhere. Nothing in CI exercises that
+// line today, and the reason is structural rather than an oversight: the workflow starts the
+// stack with `-x edge-runtime`, so no Edge Function has ever been served in CI.
+//
+// scripts/lifecycle.sh is intended to close it, and would close it completely rather than
+// partially — that harness cannot pass at all unless both call sites honour the variable,
+// because a URL signed for Cloudflare is not one MinIO will accept. It is not written yet,
+// and running it in CI additionally requires the stack to serve edge functions. Until both
+// are true, that line is checked by reading it and by nothing else.
 
 const SIGN_FIXTURE = {
   accountId: "acc0unt",
