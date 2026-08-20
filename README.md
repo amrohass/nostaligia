@@ -673,6 +673,27 @@ The access-token hook must be enabled by hand until `supabase config push` is sa
 Nothing in M0's authorization depends on it — policies read `authz_role()`, which goes to
 the table. Leaving the hook off degrades M1, never M0.
 
+**The publish function must be deployed with JWT verification off**, and this is the one
+setting that fails in a way nothing else reports:
+
+```powershell
+npx supabase functions deploy publish --no-verify-jwt
+```
+
+Its caller is `pg_net`, dispatched from the approval trigger, and what it carries is
+`PUBLISH_SECRET` — a shared secret, not a token. The gateway parses `Authorization` as a
+JWT and rejects anything that is not one, so a publish deployed with the default returns
+`401 UNAUTHORIZED_INVALID_JWT_FORMAT` before a line of the function runs, and the archive
+simply stops updating with nothing in the function's own logs to say why. Found by the
+lifecycle harness, which is the only thing that calls that endpoint through a gateway;
+every unit test calls `handleRequest()` directly, below it.
+
+`supabase/config.toml` records the same setting for the local stack. The gate is not what
+protects the endpoint — the function compares the secret in constant time, and behind it a
+lease already refuses a second concurrent publish.
+
+Every other function keeps `verify_jwt = true`.
+
 ### Serving the front end
 
 Static, no build step:

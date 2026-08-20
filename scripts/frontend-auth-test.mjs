@@ -258,6 +258,50 @@ console.log('# db.js — the bucket rule');
   }
 }
 
+// ── 6c · a PATCH that asks for `*` is a 403, every time ─────────────────────
+//
+// `Prefer: return=representation` makes PostgREST select the row it just wrote. With no
+// `select=` that is `*`, and migration 0015 revoked table-level SELECT on posts — so the
+// UPDATE succeeds, the representation is refused, and the whole request rolls back with
+//
+//     403 42501  permission denied for table posts
+//
+// It shipped in M1 and every test in this repository was blind to it: pgTAP asserts the
+// same approval in SQL, where there is no representation, and this file stubs fetch. The
+// lifecycle harness found it the first time a real moderator token met a real PostgREST.
+//
+// Two assertions, and the second is what makes the first mean something: a guard that
+// refuses everything would satisfy "the bad shape is refused" on its own.
+{
+  const win = makeWindow();
+  let requested = null;
+  win.AUTH = { accessToken: () => Promise.resolve('token') };
+  // db.js reads res.text(), not res.json() — it has to distinguish an empty body from a
+  // JSON null. The shared okJson stub above only provides json(), so this block brings its
+  // own rather than widening a helper five other blocks depend on.
+  const okText = (body) => Promise.resolve({
+    ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(body))
+  });
+  win.fetch = (url) => { requested = url; return okText([{ id: 'x', status: 'approved' }]); };
+  load('site/assets/js/db.js', win);
+
+  let refused = null;
+  await win.DB.patch('posts', 'id=eq.abc', { status: 'approved' })
+    .then(() => {}, (e) => { refused = e; });
+  ok(refused !== null && requested === null,
+     'a PATCH with no select= is refused before it reaches the network');
+
+  requested = null;
+  // Caught rather than awaited bare. A guard that refuses EVERYTHING would otherwise reject
+  // here, take the whole file down with an unhandled rejection, and lose the TAP output and
+  // the count along with it — a crash is a failure, but it is not a legible one.
+  let rows = null;
+  await win.DB.patch('posts', 'id=eq.abc&select=id,status', { status: 'approved' })
+    .then((r) => { rows = r; }, () => { rows = null; });
+  ok(Array.isArray(rows) && requested !== null && requested.includes('select=id,status'),
+     '...and one that names its columns goes through unchanged');
+}
+
 // ── 7 · every message key exists in BOTH languages ──────────────────────────
 {
   const winI = makeWindow({

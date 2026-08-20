@@ -86,8 +86,36 @@
      * `Prefer: return=representation` is not a nicety: without it PostgREST answers 204
      * with no body, and a moderator's screen cannot tell an update that matched one row
      * from one that matched none — which is exactly what an RLS refusal looks like.
+     *
+     * ── The filter MUST name a select, and this is not style ──
+     *
+     * `return=representation` makes PostgREST SELECT the rows it just wrote, and with no
+     * `select=` it selects `*`. Migration 0015 revoked table-level SELECT on posts and
+     * grants it column by column, so `*` is
+     *
+     *     403 42501  permission denied for table posts
+     *
+     * every time, for every caller, however correct the update was. The UPDATE itself
+     * succeeds and is then rolled back with the request — so this is not a read problem
+     * that shows up as a missing field, it is an approval that does not happen.
+     *
+     * It shipped, and nothing in the repository could see it: pgTAP asserts the same
+     * approval in SQL, where there is no representation to select, and every front-end test
+     * stubs fetch. The lifecycle harness found it the first time a real moderator token
+     * reached a real PostgREST.
+     *
+     * Thrown rather than defaulted. A default `select=id` would make the next table's call
+     * site silently ask for a column it may not be granted, which is this same bug wearing
+     * a helpful face.
      */
     patch: function (table, filter, body) {
+      if (String(filter).indexOf('select=') === -1) {
+        return Promise.reject(DbError(
+          'admin.err.generic',
+          0,
+          'DB.patch needs an explicit select= — see db.js for why representation of * is a 403'
+        ));
+      }
       return call('/' + table + '?' + filter, {
         method: 'PATCH',
         body: body,

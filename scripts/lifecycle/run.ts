@@ -223,7 +223,11 @@ async function approve(
   jwt: string,
   postId: string,
 ): Promise<{ rows: number; status: number; detail: string }> {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${postId}`, {
+  // select=id,status, exactly as admin.js sends it, and for the reason db.js records:
+  // `return=representation` with no select is `*`, and 0015 revoked table-level SELECT on
+  // posts. That is the defect this harness found — the dashboard could not approve
+  // anything, and pgTAP could not see it because SQL has no representation to select.
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${postId}&select=id,status`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",

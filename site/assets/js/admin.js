@@ -659,7 +659,12 @@
     work.queueBusy = item.id;
     render();
 
-    DB.patch('posts', 'id=eq.' + encodeURIComponent(item.id), { status: status })
+    /* select=id,status is REQUIRED, not tidy. `return=representation` makes PostgREST
+       select the row it just wrote, and with no select= that is `*` — which migration 0015
+       revoked at the table level, so every approval came back 403 "permission denied for
+       table posts" with the UPDATE rolled back. Both columns are in 0015's grant list.
+       DB.patch now refuses a filter without one; see db.js. */
+    DB.patch('posts', 'id=eq.' + encodeURIComponent(item.id) + '&select=id,status', { status: status })
       .then(function (rows) {
         work.queueBusy = null;
         /* PostgREST answers 200 with an EMPTY array when the row exists but no policy
