@@ -127,7 +127,13 @@ function configureWorker(on: boolean): void {
   }
 }
 
-const FRESH = { ok: true, post_id: POST_ID, already_processing: false, attempts: 1 };
+const FRESH = {
+  ok: true,
+  post_id: POST_ID,
+  already_processing: false,
+  attempts: 1,
+  max_attempts: 3,
+};
 
 Deno.test("an unreachable worker releases the row instead of stranding it", async () => {
   configureWorker(true);
@@ -188,12 +194,49 @@ Deno.test("a successful hand-off does NOT release — the worker owns it now", a
 
 Deno.test("an already-processing row invokes nothing and releases nothing", async () => {
   configureWorker(true);
-  const r = recorder({ ok: true, post_id: POST_ID, already_processing: true, attempts: 1 }, 202);
+  const r = recorder(
+    { ok: true, post_id: POST_ID, already_processing: true, attempts: 2, max_attempts: 3 },
+    202,
+  );
   const res = await handleRequest(post({ object_key: "a/b" }, TOKEN), r.deps);
 
   assertEquals(res.status, 200, "a retry after a dropped response has done nothing wrong");
   assertEquals(r.workerCalls, 0, "and must not spawn a second worker");
   assertEquals(r.rpcs.includes("release_ingest"), false, "nor take the job off the first one");
+});
+
+// ── "processing" is not an open-ended promise ────────────────
+//
+// Migration 0040 put max_attempts on every branch of begin_ingest that reports attempts, so
+// a client can tell "attempt 1, a retry is coming" from "attempt 3, a failure now is
+// terminal". That only reaches the client if THIS function passes it on, and until these
+// two tests existed nothing checked that it did: dropping both fields from the 202 left all
+// thirteen tests in this file green — measured by mutation, not assumed.
+//
+// Both branches, because they are the two halves of one client's experience. The 202 is the
+// first attempt; the 200 is every poll after it, and the polling client is the one actually
+// deciding how much longer to wait.
+
+Deno.test("the 202 carries which attempt this is, and of how many", async () => {
+  configureWorker(true);
+  const r = recorder(FRESH, 202);
+  const body = await (await handleRequest(post({ object_key: "a/b" }, TOKEN), r.deps)).json();
+
+  assertEquals(body.attempt, 1, "the client is not told which attempt it is on");
+  assertEquals(body.max_attempts, 3, "...nor how many it gets — 'attempt 1' alone means nothing");
+});
+
+Deno.test("...and so does the 200 a polling client actually receives", async () => {
+  configureWorker(true);
+  const r = recorder(
+    { ok: true, post_id: POST_ID, already_processing: true, attempts: 2, max_attempts: 3 },
+    202,
+  );
+  const body = await (await handleRequest(post({ object_key: "a/b" }, TOKEN), r.deps)).json();
+
+  assertEquals(body.status, "processing", "still processing");
+  assertEquals(body.attempt, 2, "a poll on attempt 2 was told nothing about attempt 2");
+  assertEquals(body.max_attempts, 3, "...or about the ceiling it is approaching");
 });
 
 Deno.test("exhausting the attempt ceiling is a 429, not a 400", async () => {

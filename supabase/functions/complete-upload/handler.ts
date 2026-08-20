@@ -125,8 +125,20 @@ export async function handleRequest(req: Request, deps: Deps = LIVE): Promise<Re
   // Already handed to a worker by an earlier call. Reporting 200 rather than an error is
   // deliberate: a client retrying after a dropped response has done nothing wrong, and
   // the correct outcome for it is "your upload is being processed".
+  //
+  // Carries attempt and max_attempts, and THIS is the branch migration 0040 was written
+  // for. Its header says "a client polling an in-flight job learns 2 of 3 rather than 2";
+  // the polling client is the one that lands here, on every call after the first. Reporting
+  // the pair only on the 202 gave the numbers to the caller that needed them least — the
+  // one making its first attempt, which already knows it is on its first attempt.
   if (begun.already_processing === true) {
-    return json({ ok: true, post_id: begun.post_id, status: "processing" }, 200, req);
+    return json({
+      ok: true,
+      post_id: begun.post_id,
+      status: "processing",
+      attempt: begun.attempts,
+      max_attempts: begun.max_attempts,
+    }, 200, req);
   }
 
   // ── 4 · wake the worker ────────────────────────────────────

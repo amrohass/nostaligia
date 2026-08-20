@@ -69,6 +69,14 @@ jobs:
       - name: No tracked path may look like a credential file
         run: |
           set -euo pipefail
+          # CONTROL, and the same argument the harness probe makes about pgTAP: `grep`
+          # finding nothing and `git ls-files` PRODUCING nothing are indistinguishable
+          # from this step's exit code, and one of them means the check ran against an
+          # empty list. pipefail does not close it either — grep's exit 1 is the rightmost
+          # non-zero status, so it wins over a failing git.
+          tracked=$(git ls-files | wc -l)
+          echo "scanning $tracked tracked paths"
+          [ "$tracked" -gt 0 ] || { echo "::error::git ls-files returned nothing — this check would pass over anything"; exit 1; }
           if hits=$(git ls-files | grep -Ei -f scripts/forbidden-paths.ere); then
             echo "::error::tracked paths matching scripts/forbidden-paths.ere:"
             echo "$hits"
@@ -500,6 +508,15 @@ jobs:
       - name: The worker container
         run: |
           eval "$(supabase status -o env | sed 's/^/export /')"
+          # `eval "$(…)"` cannot fail. A failing `supabase status` leaves sed with nothing
+          # to transform, eval runs an empty string, and every variable below expands to ""
+          # — so the container starts with no keys, answers /healthz perfectly well, and
+          # this step goes GREEN. The failure then surfaces two steps later as a worker
+          # that cannot reach PostgREST, which is the most expensive place to find it.
+          # Same defect class as 532f32d, reached through a construct `set -e` does not see.
+          for v in ANON_KEY SERVICE_ROLE_KEY; do
+            [ -n "${!v:-}" ] || { echo "::error::$v is empty — supabase status produced nothing"; exit 1; }
+          done
           NET=$(docker inspect "$(docker ps --filter name=supabase_kong --format '{{.Names}}' | head -1)" \
                   --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
           KONG=$(docker ps --filter name=supabase_kong --format '{{.Names}}' | head -1)

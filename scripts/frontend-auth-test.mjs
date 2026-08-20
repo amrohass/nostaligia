@@ -288,6 +288,14 @@ console.log('# db.js — the bucket rule');
   // translation would otherwise render as its own identifier.
   for (const id of winU.UPLOAD.LICENSES) keys.add('license.' + id);
 
+  // R1's strings, and the whole location_precision enum with them. The dashboard renders
+  // `t('precision.' + row.location_precision)`, and I18N.t returns the KEY when it misses
+  // — so a value with no translation reaches a moderator as the literal text
+  // "precision.street" rather than as a visible failure. The four values are migration
+  // 0006's enum; the database is the authority and this is the copy that must follow it.
+  for (const k of ['q.exactFlag', 'q.exactWhy', 'q.precision']) keys.add(k);
+  for (const p of ['exact', 'street', 'area', 'hidden']) keys.add('precision.' + p);
+
   const missing = [...keys].filter(k => {
     const ar = winI.I18N.t(k);
     return !ar || ar === k;

@@ -420,16 +420,25 @@ Deno.test("a job already past its deadline does no work at all", async () => {
   });
 });
 
-// THE assertion that the remaining rungs actually abort. A ladder that blows its budget on
-// rung two must not go on to encode three and four: the clock advances past the deadline
-// mid-run, and the encode count has to come in under the full ladder.
+// THE assertion that the remaining rungs actually abort, and it is pinned to an EXACT
+// count rather than an upper bound. That is deliberate and it is the whole discrimination.
 //
-// WHAT IT DOES NOT PIN: which of the two call sites does the aborting. checkDeadline is
-// called from encode() and from probe(), and probe() runs once per published asset, so the
-// two interleave all the way down the ladder — measured by mutation, removing EITHER site
-// alone leaves this green while removing both fails it. That redundancy is worth having
-// and is not worth testing away; recorded here so the test is not read as proving more
-// than it does.
+// checkDeadline is called from two places — encode() and probe() — and probe() runs once
+// per published asset, so the two interleave all the way down the ladder. An upper bound
+// of "fewer than the full ladder" is satisfied by EITHER site alone: with the check
+// deleted from encode() the clock is only consulted after each publish, so rungs two and
+// three encode in full before anything notices, and the count comes in at 3. Measured, not
+// reasoned — that mutation left the bounded version green.
+//
+// Three encodes where the design promises one is not a rounding difference. Each is a
+// 4K rung, and JOB_DEADLINE_MS exists precisely to stop a job spending them; a ceiling
+// whose test tolerates two extra encodes past the deadline is not testing the ceiling.
+//
+// So: exactly one. The clock advances 30 per check against a deadline of 100, which fires
+// on the fourth — probe(source), encode(1080p), probe(1080p output), then the 720p encode
+// is refused. If the number of probes on this path ever legitimately changes, this figure
+// changes with it and somebody re-derives it, which is the correct outcome for a cost
+// ceiling and the reason it is not written as a range.
 Deno.test("a deadline reached mid-ladder abandons the remaining rungs", async () => {
   await withWorkDir(async (workDir) => {
     const h = harness(SIGNATURES.webm, PROBE.video);
@@ -442,10 +451,10 @@ Deno.test("a deadline reached mid-ladder abandons the remaining rungs", async ()
     });
 
     assertEquals(outcome.kind, "failed", "the job did not stop");
-    // A 1080p source is three rungs plus poster plus thumb. Fewer than that is the proof.
-    assert(
-      h.ffmpeg.encodes < 5,
-      `all ${h.ffmpeg.encodes} encodes ran — the deadline did not abort the ladder`,
+    assertEquals(
+      h.ffmpeg.encodes,
+      1,
+      "the ladder ran past its budget — see this test's header for why the count is exact",
     );
   });
 });
