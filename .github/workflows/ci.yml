@@ -419,7 +419,12 @@ jobs:
           R2_ACCOUNT_ID=lifecycle
           R2_ACCESS_KEY_ID=rmatestkey
           R2_SECRET_ACCESS_KEY=rmatestsecret123
-          MEDIA_WORKER_URL=http://127.0.0.1:8080
+          # A CONTAINER NAME, not 127.0.0.1, and this is the bug run 32354171082 exposed:
+          # request-upload and complete-upload run inside the edge-runtime CONTAINER, where
+          # 127.0.0.1 is that container's own loopback. The worker was on the host, so
+          # complete-upload returned 502 worker_unreachable and every downstream check
+          # cascaded. The worker now joins the Supabase network under this name.
+          MEDIA_WORKER_URL=http://rma-lifecycle-worker:8080
           UPLOAD_ALLOWED_ORIGINS=http://127.0.0.1:3000
           EOF
           # Cloudflare's documented always-pass test secret. request-upload calls the real
@@ -440,23 +445,49 @@ jobs:
       - name: The worker image, as it will be deployed
         run: docker build -f worker/Dockerfile -t rma-media-worker .
 
-      # --network host so the container reaches Kong on 127.0.0.1:54321 and MinIO on
-      # 127.0.0.1:9000, both published to the runner's loopback.
+      # ── Who can reach whom, which run 32354171082 got wrong ──
       #
-      # NOTE, and it is a real limitation: the worker authenticates to PostgREST with the
-      # local SERVICE ROLE key rather than a minted media_worker JWT. complete_ingest is
-      # granted to both, so the pipeline runs — but this job therefore does NOT exercise
-      # the media_worker least-privilege boundary. 16_function_grants.test.sql is what
-      # covers that, and it covers it at the database rather than over the wire.
+      # Three parties on two networks, and every address below is the one the SPEAKER can
+      # resolve rather than the one that reads naturally:
+      #
+      #   edge runtime → worker   container name on the Supabase network. The functions run
+      #                           INSIDE a container, so 127.0.0.1:8080 was that container's
+      #                           own loopback and complete-upload got 502 worker_unreachable.
+      #   worker → MinIO          container name, same network. MinIO is joined to it below.
+      #   worker → PostgREST      Kong's container name and INTERNAL port 8000, not the
+      #                           published 54321.
+      #   harness → everything    127.0.0.1 on the published ports. It runs on the runner.
+      #
+      # And the one that looks inconsistent and is not: request-upload keeps
+      # R2_ENDPOINT=127.0.0.1:9000 because it only SIGNS a URL — the PUT is made by the
+      # harness, on the host. The worker signs its own URLs and fetches them itself, so it
+      # needs the name it can resolve. Two processes, two correct answers.
+      #
+      # NOTE, a real limitation: the worker authenticates to PostgREST with the local
+      # SERVICE ROLE key rather than a minted media_worker JWT. complete_ingest is granted
+      # to both, so the pipeline runs — but this job therefore does NOT exercise the
+      # media_worker least-privilege boundary. 16_function_grants.test.sql covers that at
+      # the database instead.
       - name: The worker container
         run: |
           eval "$(supabase status -o env | sed 's/^/export /')"
-          docker run -d --name rma-lifecycle-worker --network host \
+          NET=$(docker inspect "$(docker ps --filter name=supabase_kong --format '{{.Names}}' | head -1)" \
+                  --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+          KONG=$(docker ps --filter name=supabase_kong --format '{{.Names}}' | head -1)
+          [ -n "$NET" ] && [ -n "$KONG" ] || { echo "::error::could not find the Supabase network or Kong"; exit 1; }
+          echo "network=$NET kong=$KONG"
+
+          # MinIO was started before this network existed, so it is joined now rather than
+          # at creation. It keeps its published port too — the harness still reaches it on
+          # 127.0.0.1:9000.
+          docker network connect "$NET" rma-lifecycle-minio
+
+          docker run -d --name rma-lifecycle-worker --network "$NET" -p 8080:8080 \
             -e MEDIA_WORKER_SECRET=lifecycle-worker-secret \
-            -e SUPABASE_URL=http://127.0.0.1:54321 \
+            -e SUPABASE_URL="http://$KONG:8000" \
             -e SUPABASE_ANON_KEY="$ANON_KEY" \
             -e MEDIA_WORKER_JWT="$SERVICE_ROLE_KEY" \
-            -e R2_ENDPOINT=http://127.0.0.1:9000 \
+            -e R2_ENDPOINT=http://rma-lifecycle-minio:9000 \
             -e R2_ACCOUNT_ID=lifecycle \
             -e R2_ACCESS_KEY_ID=rmatestkey \
             -e R2_SECRET_ACCESS_KEY=rmatestsecret123 \

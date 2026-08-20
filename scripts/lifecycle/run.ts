@@ -185,6 +185,31 @@ function spoofedSvg(): Uint8Array {
   );
 }
 
+/**
+ * fetch that reports a transport failure instead of throwing.
+ *
+ * This exists because of a specific missed diagnosis. Branch
+ * verify/lifecycle-discriminates removed `endpoint: r2Endpoint()` to prove check 1 catches
+ * it. The run went red — and produced NO check output at all, because the PUT then went to
+ * a Cloudflare host that does not exist, fetch threw, and the process died before
+ * checks.report() could say which assertion had failed. A red on no check in particular
+ * proves nothing, so that run could not settle the question it was launched to settle.
+ *
+ * Every network call the harness makes to an address under test goes through here. A dead
+ * host becomes a named failing check, which is the whole point of having checks.
+ */
+async function tryFetch(
+  url: string,
+  init: RequestInit,
+): Promise<{ ok: boolean; status: number; detail: string }> {
+  try {
+    const res = await fetch(url, init);
+    return { ok: res.ok, status: res.status, detail: res.ok ? "" : await res.text() };
+  } catch (e) {
+    return { ok: false, status: 0, detail: `transport failure reaching ${url}: ${e}` };
+  }
+}
+
 async function ffmpegBytes(args: string[]): Promise<Uint8Array> {
   const cmd = new Deno.Command("ffmpeg", {
     args: ["-loglevel", "error", "-nostdin", ...args],
@@ -236,7 +261,7 @@ const objectKey = String(first.json.object_key ?? "");
 const postId = String(first.json.post_id ?? "");
 
 if (upload) {
-  const put = await fetch(upload.url, {
+  const put = await tryFetch(upload.url, {
     method: upload.method,
     headers: upload.headers,
     body: photo as unknown as BodyInit,
@@ -244,7 +269,11 @@ if (upload) {
   // MinIO recomputes the signature from the request it receives, including the
   // content-length binding §6's quota depends on. A 403 here is a canonicalisation bug,
   // not a credentials problem — sigv4.ts's header says exactly this.
-  checks.check(put.ok, `MinIO refused the presigned PUT: ${put.status} ${await put.text()}`);
+  //
+  // status 0 means the host did not answer at all, which is what a URL signed for
+  // Cloudflare looks like from a runner with no R2 account. Reported as a failed check
+  // rather than an exception, so check 1 above stays the one that names the cause.
+  checks.check(put.ok, `the presigned PUT did not succeed: ${put.status} ${put.detail}`);
 }
 
 /* ── 3 · complete-upload → the worker → the buckets ─────────── */
@@ -316,7 +345,12 @@ const spoofKey = String(spoof.json.object_key ?? "");
 const spoofPost = String(spoof.json.post_id ?? "");
 
 if (spoofUpload) {
-  await fetch(spoofUpload.url, { method: spoofUpload.method, headers: spoofUpload.headers, body: svg as unknown as BodyInit });
+  const spoofPut = await tryFetch(spoofUpload.url, {
+    method: spoofUpload.method,
+    headers: spoofUpload.headers,
+    body: svg as unknown as BodyInit,
+  });
+  checks.check(spoofPut.ok, `the spoofed-PNG PUT did not succeed: ${spoofPut.status} ${spoofPut.detail}`);
   await completeUpload(member.jwt, spoofKey);
   const row = await settle(spoofPost);
   checks.check(
