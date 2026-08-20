@@ -80,6 +80,24 @@ flip back. Takedown does NOT wait for this (§8).
   diff when the archive passes 1,500 items, the publish rate passes 100 releases/day, or
   `/v/` passes 5 GB; at that point it and release pruning are one piece of work.
 
+- **Amended 20 Aug 2026 — the trigger is the moderation action, not a clock. The cron is
+  deferred, not built.** A change to publishable content dispatches the publisher directly,
+  from inside `public.bump_publish_revision()`; `pg_cron`'s `rma-publish` job is
+  unscheduled. Everything after the trigger is unchanged, and that is the point — **the
+  single-writer lock is still what prevents races, and this amendment does not touch it.**
+  Restoring the clock is one `cron.schedule` line, written out in
+  `supabase/migrations/20260820140000_publish_on_approval.sql`; both extensions stay
+  installed so it stays a line.
+  Two consequences, recorded because neither announces itself:
+  **(a)** only the *content* branch dispatches, so baked like and comment counts now go live
+  with the next content change rather than within §6's one-hour floor — the floor remains a
+  ceiling, never a freshness promise, and restoring the cron restores hourly counters.
+  **(b)** a publish claims the lease and *then* reads the archive, so a change committing in
+  between is not in that release and its own dispatch is refused `held`. With no next tick
+  to collect it, `release_publish_lease` takes the claim-time revision and asks once more if
+  it moved. That follow-up is load-bearing, not an optimisation: without it, per-approval
+  publishing silently loses every change that lands mid-build.
+
 ---
 
 ## 3. Data model

@@ -60,8 +60,16 @@ export class PostgrestDb implements Db, RollbackDb {
     };
   }
 
-  async releaseLease(holder: string): Promise<void> {
-    await this.call("release_publish_lease", { p_holder: holder });
+  async releaseLease(holder: string, claimedContentRevision?: number): Promise<void> {
+    // Omitted rather than sent as null when the caller has no revision to give. 0042's
+    // default is NULL and means "do not follow up", so an absent argument and an explicit
+    // null are the same thing to the database — but sending the key only when it carries a
+    // value keeps the wire honest about whether a follow-up was ever possible.
+    const args: Record<string, unknown> = { p_holder: holder };
+    if (claimedContentRevision !== undefined) {
+      args.p_claimed_content_revision = claimedContentRevision;
+    }
+    await this.call("release_publish_lease", args);
   }
 
   recordRelease(path: string, contentRevision: number, counterRevision: number, holder: string) {

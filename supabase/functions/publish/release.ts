@@ -51,7 +51,20 @@ export interface Db {
     content_revision?: number;
     counter_revision?: number;
   }>;
-  releaseLease(holder: string): Promise<void>;
+  /**
+   * The claim-time revision goes back with the lease, and it is what closes the gap the
+   * cron used to cover.
+   *
+   * publish() claims, then reads. An approval committing between those two moments is not
+   * in this release, and its own dispatch was refused `held` by the lease it collided
+   * with — so with no cron, nothing would ever ask again. 0042 compares this number against
+   * the revision at release time and dispatches once if it moved.
+   *
+   * Passing it only on the paths that got a lease is deliberate: the comparison must mean
+   * "changed while I held it", never "there is work outstanding", or a build that fails
+   * repeatedly would re-dispatch forever.
+   */
+  releaseLease(holder: string, claimedContentRevision?: number): Promise<void>;
   /**
    * Both of these carry the holder, and 0038 refuses them without a live lease held by it.
    *
@@ -260,6 +273,10 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
     // Always. A publisher that threw while holding the lease would otherwise block every
     // subsequent run until the TTL expired — five minutes of a stale archive for what may
     // have been one bad row.
-    await deps.db.releaseLease(holder).catch(() => {});
+    //
+    // The claim-time revision rides along so 0042 can ask for one more publish if content
+    // changed while this build was running. Reached from every exit including the failures,
+    // which is the point of it being here rather than at the end of the happy path.
+    await deps.db.releaseLease(holder, lease.content_revision).catch(() => {});
   }
 }

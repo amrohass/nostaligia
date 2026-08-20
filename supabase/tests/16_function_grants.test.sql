@@ -112,7 +112,9 @@ select set_eq(
     -- RPC every four minutes, which is a denial of service that needs no exploit.
     ('claim_publish_lease(p_holder uuid, p_ttl interval, p_note text) -> service_role'),
     ('renew_publish_lease(p_holder uuid, p_ttl interval) -> service_role'),
-    ('release_publish_lease(p_holder uuid) -> service_role'),
+    -- 0042: the second argument is the revision the lease was claimed at, which is how a
+    -- change that landed mid-build gets a follow-up publish now that the cron is deferred.
+    ('release_publish_lease(p_holder uuid, p_claimed_content_revision bigint) -> service_role'),
     -- 0038: both carry the lease holder now. publish_lease_fault, which does the checking,
     -- appears nowhere in this matrix — its only callers are these two, which are SECURITY
     -- DEFINER and run as its owner, so a grant would widen the surface without enabling

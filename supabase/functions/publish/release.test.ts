@@ -76,6 +76,8 @@ class FakeDb implements Db {
   leaseReason = "granted";
   recordOk = true;
   released: string[] = [];
+  /** The claim-time revision handed back with each release. undefined means none was. */
+  releasedWith: Array<number | undefined> = [];
   activated: string[] = [];
   previousPath: string | null = null;
 
@@ -104,7 +106,12 @@ class FakeDb implements Db {
       counter_revision: this.counterRevision,
     });
   }
-  releaseLease(holder: string) { this.released.push(holder); return Promise.resolve(); }
+  /** Both arguments, because the second is what 0042's follow-up is decided from. */
+  releaseLease(holder: string, claimedContentRevision?: number) {
+    this.released.push(holder);
+    this.releasedWith.push(claimedContentRevision);
+    return Promise.resolve();
+  }
   recordRelease(path: string, content: number, counter: number, holder: string) {
     this.recorded.push({ path, content, counter, holder });
     return Promise.resolve(
@@ -365,4 +372,58 @@ Deno.test("...and the lease is still released, so the next tick is not locked ou
   d.db.activateOk = false;
   await publish(d);
   assertEquals(d.db.released.join(","), "holder-1", "a refused flip left the lease held");
+});
+
+/* ── 8 · The follow-up, which is what the cron used to be (0042) ── */
+
+// With the cron unscheduled, an approval that commits between claimLease() and
+// publishablePosts() has nobody left to notice it: it is not in this release, and its own
+// dispatch was answered `held` by the lease it collided with. 0042 compares the claim-time
+// revision against the revision at release time and asks for one more publish if it moved —
+// so this number has to actually arrive there.
+//
+// FakeDb bumps contentRevision inside publishablePosts(), which is that exact window.
+
+Deno.test("the lease goes back with the revision it was claimed at, not the current one", async () => {
+  const d = deps();
+  d.db.contentRevision = 7;
+
+  await publish(d);
+
+  assertEquals(d.db.releasedWith.length, 1, "released once");
+  assertEquals(
+    d.db.releasedWith[0],
+    7,
+    "sent the post-read revision — a mid-build approval would then never be followed up",
+  );
+  // The counter-test for the line above: 8 is what the database holds by now, and sending
+  // it would make the comparison 8 > 8, false, and the follow-up silently never fire.
+  assertEquals(d.db.contentRevision, 8, "FakeDb did not simulate a mid-build change");
+});
+
+// Every exit, not just the happy one. A build that fails validation is exactly when a
+// mid-build approval most needs the follow-up, because no release was recorded and the
+// watermark did not move.
+Deno.test("...on the failure paths too, since those are where the lease is released early", async () => {
+  for (
+    const [label, brk] of [
+      ["a flip refused for a lapsed lease", (d: ReturnType<typeof deps>) => { d.db.activateOk = false; }],
+      // The full key, prefix included — the same one test "a shard that did not land is
+      // caught before the pointer moves" uses. A bare "feed/page-1.json" matches nothing and
+      // would make this loop assert a SUCCESSFUL publish, which is not the path under test.
+      [
+        "a release that did not fully land",
+        (d: ReturnType<typeof deps>) => {
+          d.sink.vanish.add("v/2026-08-19T12:34:56Z/feed/page-1.json");
+        },
+      ],
+    ] as const
+  ) {
+    const d = deps();
+    d.db.contentRevision = 7;
+    brk(d);
+    const out = await publish(d);
+    assertEquals(out.published, false, `${label}: expected a failure to test`);
+    assertEquals(d.db.releasedWith[0], 7, `${label}: no revision went back with the lease`);
+  }
 });

@@ -181,7 +181,7 @@ $fn$;
 -- ═══ 1–4 · Who may reach any of this ═════════════════════════
 
 select ok(
-  not has_function_privilege('anon', 'public.publish_tick()', 'execute'),
+  not has_function_privilege('anon', 'public.publish_tick(text)', 'execute'),
   'anon cannot run a cron tick');
 
 select ok(
@@ -193,7 +193,7 @@ select ok(
 -- server-side request forgery primitive with a credential slot. pg_cron runs it as the
 -- owner, which needs no grant, so there is nothing here for a leaked token to reach.
 select ok(
-  not has_function_privilege('service_role', 'public.publish_dispatch(text,text)', 'execute'),
+  not has_function_privilege('service_role', 'public.publish_dispatch(text,text,text)', 'execute'),
   'not even service_role may dispatch — an arbitrary-URL POST is not a grantable thing');
 
 -- Supabase grants ALL on new tables in public to authenticated by default. Without 0037's
@@ -364,7 +364,7 @@ select is(
 -- 24 · The dispatch itself, called directly because publish_tick cannot reach it without a
 -- Vault fixture. This is the only assertion in the suite that the bearer header is built at
 -- all — the publisher refuses every request without it.
-select public.publish_dispatch('http://publisher.invalid/publish', 'test-only-not-a-secret');
+select public.publish_dispatch('http://publisher.invalid/publish', 'test-only-not-a-secret', 'test');
 
 select is(
   (select method || ' ' || url || ' ' || (headers ->> 'Authorization')
@@ -375,20 +375,33 @@ select is(
 
 -- ═══ 25–26 · The job ═════════════════════════════════════════
 
+-- 0042 deferred the cron: the publish trigger is now the moderation action, through
+-- bump_publish_revision. The job is UNSCHEDULED rather than the extension removed, so
+-- restoring it is one cron.schedule line and nothing else moves.
+--
+-- Asserted as zero rather than deleted from the file, because "no job" is a decision this
+-- milestone took and a job reappearing would mean two things dispatch the same publisher.
 select is(
-  (select count(*)::integer from cron.job
-    where jobname = 'rma-publish' and active and schedule = '*/2 * * * *'),
-  1,
-  'exactly one active job, every two minutes (§2: "debounced cron (2–5 min)")');
+  (select count(*)::integer from cron.job where jobname = 'rma-publish'),
+  0,
+  'no publish job is scheduled — 0042 made the moderation action the trigger');
 
 -- §6, at the one place in this design where a credential could plausibly get hardcoded.
 -- cron.job.command is a text column in a table, and a migration that wrote the secret into
 -- it would put the secret in the repository too — which gitleaks would catch, but only if
 -- somebody ran it. This catches it either way.
+--
+-- Scanning EVERY job rather than one by name, and stated plainly: with the cron deferred
+-- there are no rows, so this passes over an empty set today. That is a vacuous pass and it
+-- is kept anyway — it costs nothing, and it becomes load-bearing again on the same commit
+-- that restores the schedule, which is exactly when somebody might paste a secret into it.
+-- The assertion above is what stops the emptiness from being a surprise.
 select ok(
-  (select command !~* '(bearer|secret|token|[0-9a-f]{32})'
-     from cron.job where jobname = 'rma-publish'),
-  'the job command carries no credential — the secret lives in Vault, read at tick time');
+  not exists (
+    select 1 from cron.job
+     where command ~* '(bearer|secret|token|[0-9a-f]{32})'
+  ),
+  'no scheduled job carries a credential — the secret lives in Vault, read at dispatch time');
 
 -- ═══ 27 · The binding ════════════════════════════════════════
 --
