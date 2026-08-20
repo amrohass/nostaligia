@@ -53,12 +53,61 @@ export interface Ffmpeg {
   run(bin: "ffmpeg" | "ffprobe", args: string[]): Promise<FfmpegResult>;
 }
 
+/**
+ * Wall-clock ceiling for a WHOLE job, across every ffmpeg invocation it makes.
+ *
+ * ── Why this is not the same thing as JOB_TIMEOUT_MS ─────────
+ *
+ * main.ts arms a fresh watchdog per spawned process, so it bounds ONE wedged decoder and
+ * not the job: a video makes six invocations (four rungs, poster, thumb), so the watchdog
+ * alone permits 6 x 25 = 150 minutes before the last timer fires. Both exist and they
+ * bound different things — the watchdog kills a hung process, this refuses to start more
+ * work once the job as a whole has run too long.
+ *
+ * ── Derivation ───────────────────────────────────────────────
+ *
+ * Measured in CI, the same ladder at two source lengths so fixed and marginal cost come
+ * apart (worker/scripts/ladder-fixture.ts --duration, run at 3840x2160):
+ *
+ *     3s  source -> 8.9s wall        slope     2.267 s wall per s source
+ *     30s source -> 70.1s wall       intercept 2.1 s fixed
+ *
+ * §6's largest legitimate job is a moderator's 20-minute master:
+ *
+ *     1200 x 2.267 + 2.1                        = 45.4 min   measured, extrapolated
+ *     x1.9   4 vCPU runner -> Cloud Run --cpu=2 = 86 min     x264 scales sub-linearly
+ *     x2     testsrc -> real footage            = 172 min    ESTIMATE, NOT MEASURED
+ *     +5 min 4 GB down, ~1.2 GB of renditions up = 177 min
+ *     x1.35  safety                              = 240 min
+ *
+ * **The x2 is a guess and it is the dominant term.** lavfi's testsrc is flat, low-motion
+ * and highly compressible — close to a best case for x264 — while real 4K footage carries
+ * grain and camera motion. CI cannot measure the difference, because committing real 4K
+ * footage is what ladder-fixture.ts's header refuses. A one-off measurement against the
+ * deployed worker with real footage is the only thing that settles it.
+ *
+ * Being generous here is close to free: the cost of too long is that a wedged job burns
+ * longer before it is killed, which is exactly today's behaviour. It is NOT free once
+ * public.reap_stale_ingests exists, because that lease is derived from this number and
+ * every minute here is a minute a stranded upload stays invisible. That is why the lease
+ * is deliberately not written yet.
+ */
+export const JOB_DEADLINE_MS = 240 * 60 * 1000;
+
 export interface PipelineDeps {
   store: ObjectStore;
   reporter: IngestReporter;
   ffmpeg: Ffmpeg;
   /** A directory this job owns. The caller creates it and removes it. */
   workDir: string;
+  /**
+   * Epoch ms after which no NEW work starts. processJob fills this in from
+   * JOB_DEADLINE_MS; tests set it directly. Work already in flight is not interrupted —
+   * that is the per-invocation watchdog's job.
+   */
+  deadlineAt?: number;
+  /** Injectable only so the deadline is testable without waiting four hours. */
+  now?: () => number;
 }
 
 export type Outcome =
@@ -92,13 +141,36 @@ function rungForHeight(height: number): Rendition {
   return hit ? hit.name : "480p";
 }
 
+/**
+ * Refuses to start more work once the job's wall clock is spent.
+ *
+ * A PermanentFailure rather than a transient one, deliberately. A job that has run for
+ * four hours will run for four hours again on the next attempt — it is the file that is
+ * the problem, whether it is pathological or simply larger than this system can serve —
+ * so retrying it twice more would spend twelve hours to reach the same place. The uploader
+ * is told, `ingest_error` names it specifically, and §6's cost ceiling is respected.
+ */
+function checkDeadline(deps: PipelineDeps, what: string): void {
+  const now = deps.now?.() ?? Date.now();
+  if (deps.deadlineAt !== undefined && now >= deps.deadlineAt) {
+    // `what` is a constant from this file, never attacker-derived, so it is safe to put in
+    // an error the uploader will read.
+    throw new PermanentFailure(`job_deadline_exceeded_before_${what}`);
+  }
+}
+
 async function probe(deps: PipelineDeps, path: string) {
+  checkDeadline(deps, "probe");
   const r = await deps.ffmpeg.run("ffprobe", probeArgs(path));
   if (r.code !== 0) throw new PermanentFailure("probe_failed");
   return parseProbe(r.stdout);
 }
 
 async function encode(deps: PipelineDeps, args: string[], what: string): Promise<void> {
+  // Checked before EACH invocation, which is what makes the remaining rungs abort: a
+  // 4-rung ladder that blows its budget on rung two does not go on to encode three and
+  // four before anybody notices.
+  checkDeadline(deps, what);
   const r = await deps.ffmpeg.run("ffmpeg", args);
   if (r.code !== 0) {
     // ffmpeg's stderr is derived from attacker-supplied bytes and never reaches the
@@ -110,8 +182,16 @@ async function encode(deps: PipelineDeps, args: string[], what: string): Promise
 }
 
 export async function processJob(job: Job, deps: PipelineDeps): Promise<Outcome> {
+  // Started HERE rather than in main.ts, so every caller gets the deadline — the fixture
+  // scripts and the tests included — and none of them has to remember to set it. An
+  // explicit deadlineAt from a test wins.
+  const withDeadline: PipelineDeps = {
+    ...deps,
+    deadlineAt: deps.deadlineAt ?? (deps.now?.() ?? Date.now()) + JOB_DEADLINE_MS,
+  };
+
   try {
-    return await run(job, deps);
+    return await run(job, withDeadline);
   } catch (e) {
     if (e instanceof PermanentFailure) {
       try {

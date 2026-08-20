@@ -7,7 +7,13 @@
 //
 //     deno test --allow-read --allow-write --allow-env worker/
 
-import { assertManifest, type Ffmpeg, type FfmpegResult, processJob } from "./pipeline.ts";
+import {
+  assertManifest,
+  type Ffmpeg,
+  type FfmpegResult,
+  JOB_DEADLINE_MS,
+  processJob,
+} from "./pipeline.ts";
 import type { AssetRow, IngestReporter, RpcOutcome } from "./db.ts";
 import type { Bucket, ObjectStore } from "./store.ts";
 import type { Job } from "./job.ts";
@@ -117,12 +123,18 @@ class FakeReporter implements IngestReporter {
 
 class FakeFfmpeg implements Ffmpeg {
   encodeCode = 0;
+  /** Every invocation, so a test can prove work STOPPED rather than merely that it failed. */
+  readonly runs: string[] = [];
   constructor(private readonly probeJson: string) {}
   run(bin: "ffmpeg" | "ffprobe", _args: string[]): Promise<FfmpegResult> {
+    this.runs.push(bin);
     if (bin === "ffprobe") {
       return Promise.resolve({ code: 0, stdout: this.probeJson, stderr: "" });
     }
     return Promise.resolve({ code: this.encodeCode, stdout: "", stderr: "encoder said no" });
+  }
+  get encodes(): number {
+    return this.runs.filter((r) => r === "ffmpeg").length;
   }
 }
 
@@ -368,4 +380,94 @@ Deno.test("assertManifest enforces §6's bucket rules before the database has to
     }
     assert(threw, `${label} must be caught here, before the bytes are already in a bucket`);
   }
+});
+
+/* ── The per-job deadline ───────────────────────────────────────
+ *
+ * JOB_TIMEOUT_MS in main.ts is a per-INVOCATION watchdog: it kills one hung decoder. It
+ * does not bound the job, because a video makes six invocations and each gets a fresh
+ * timer — 6 x 25 minutes before the last one fires. This is the ceiling on the whole job.
+ *
+ * The value is derived in pipeline.ts from a two-point measurement, and one of its terms
+ * (real footage versus lavfi testsrc) is an ESTIMATE. That is recorded at the constant.
+ */
+
+Deno.test("the deadline is the derived four hours, not a round guess", () => {
+  assertEquals(JOB_DEADLINE_MS, 240 * 60 * 1000, "see pipeline.ts for the arithmetic");
+});
+
+Deno.test("a job already past its deadline does no work at all", async () => {
+  await withWorkDir(async (workDir) => {
+    const h = harness(SIGNATURES.webm, PROBE.video);
+    const outcome = await processJob(JOB, {
+      ...h,
+      workDir,
+      now: () => 1_000,
+      deadlineAt: 500, // already spent
+    });
+
+    assertEquals(outcome.kind, "failed", "an over-deadline job must be permanent, not transient");
+    assert(
+      outcome.kind === "failed" && outcome.reason.startsWith("job_deadline_exceeded"),
+      `wrong reason: ${JSON.stringify(outcome)}`,
+    );
+    assertEquals(h.ffmpeg.encodes, 0, "it encoded something despite being out of time");
+    assertEquals(
+      h.reporter.failures[0]?.startsWith("job_deadline_exceeded"),
+      true,
+      "the uploader is not told why the ingest failed",
+    );
+  });
+});
+
+// THE assertion that the remaining rungs actually abort. A ladder that blows its budget on
+// rung two must not go on to encode three and four: the clock advances past the deadline
+// mid-run, and the encode count has to come in under the full ladder.
+//
+// WHAT IT DOES NOT PIN: which of the two call sites does the aborting. checkDeadline is
+// called from encode() and from probe(), and probe() runs once per published asset, so the
+// two interleave all the way down the ladder — measured by mutation, removing EITHER site
+// alone leaves this green while removing both fails it. That redundancy is worth having
+// and is not worth testing away; recorded here so the test is not read as proving more
+// than it does.
+Deno.test("a deadline reached mid-ladder abandons the remaining rungs", async () => {
+  await withWorkDir(async (workDir) => {
+    const h = harness(SIGNATURES.webm, PROBE.video);
+    let t = 0;
+    const outcome = await processJob(JOB, {
+      ...h,
+      workDir,
+      now: () => (t += 30),
+      deadlineAt: 100, // fires on the fourth check
+    });
+
+    assertEquals(outcome.kind, "failed", "the job did not stop");
+    // A 1080p source is three rungs plus poster plus thumb. Fewer than that is the proof.
+    assert(
+      h.ffmpeg.encodes < 5,
+      `all ${h.ffmpeg.encodes} encodes ran — the deadline did not abort the ladder`,
+    );
+  });
+});
+
+// THE COUNTER-TEST. Without it, a checkDeadline that threw unconditionally would pass both
+// assertions above and every video in the archive would fail to ingest.
+Deno.test("...and a deadline that has not arrived changes nothing", async () => {
+  await withWorkDir(async (workDir) => {
+    const h = harness(SIGNATURES.webm, PROBE.video);
+    const outcome = await processJob(JOB, {
+      ...h,
+      workDir,
+      now: () => 1_000,
+      deadlineAt: 9_999_999,
+    });
+
+    assertEquals(outcome.kind, "ready", "a job inside its budget was refused");
+    const assets = h.reporter.completed[0].assets;
+    assertEquals(
+      assets.filter((a) => a.role === "rendition").map((a) => a.rendition).join(","),
+      "1080p,720p,480p",
+      "the full ladder still runs when there is time for it",
+    );
+  });
 });
