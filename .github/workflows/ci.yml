@@ -458,8 +458,19 @@ jobs:
           # This turns each failed check into an annotation, which is the only part of a run
           # readable from the API without a token — so a failure can be diagnosed from the
           # run itself rather than by opening the web UI.
+          # NO PIPELINE HERE, and that is the whole point. This was written as
+          #
+          #     bash scripts/lifecycle.sh 2>&1 | tee lifecycle.out || rc=$?
+          #
+          # which returns `tee`'s exit status, not the script's. rc was therefore always 0
+          # and this job could not fail. It shipped in f7a40d2 and was caught by pushing a
+          # branch with `endpoint: r2Endpoint()` removed at both call sites: the harness
+          # died in two seconds instead of running for six minutes, and the job went green
+          # anyway. `set -o pipefail` would also fix it; no pipeline at all cannot be got
+          # subtly wrong by the next person.
           rc=0
-          bash scripts/lifecycle.sh 2>&1 | tee lifecycle.out || rc=$?
+          bash scripts/lifecycle.sh > lifecycle.out 2>&1 || rc=$?
+          cat lifecycle.out
           if [ "$rc" -ne 0 ]; then
             grep -E '^[[:space:]]*(✗|lifecycle:)' lifecycle.out | while IFS= read -r line; do
               echo "::error title=lifecycle::${line}"
