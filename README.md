@@ -690,7 +690,10 @@ every unit test calls `handleRequest()` directly, below it.
 
 `supabase/config.toml` records the same setting for the local stack. The gate is not what
 protects the endpoint — the function compares the secret in constant time, and behind it a
-lease already refuses a second concurrent publish.
+lease already refuses a second concurrent publish. What the change does cost, stated rather
+than waved away: an unauthenticated request now reaches the function instead of stopping at
+the gateway, so a flood costs invocations. It cannot cost more — nothing is touched before
+the compare — and the Spend Cap is the backstop.
 
 Every other function keeps `verify_jwt = true`.
 

@@ -64,11 +64,17 @@ verify_jwt = true
 # by its own trigger. That would have shipped: nothing else in the repository calls this
 # endpoint, and every unit test calls handleRequest() directly, below the gateway.
 #
-# Turning the gate off does not widen anything. handler.ts compares the secret in constant
-# time and refuses without it, and behind that sits a lease that already refuses a second
-# concurrent publish. The alternative — the service-role key as the bearer, so the gateway
-# is satisfied — would put a key that opens the whole database in a cron row to save a
-# config line, which is the trade §6 exists to refuse.
+# What it changes, stated precisely rather than waved away: an unauthenticated request now
+# REACHES the function instead of being rejected at the gateway, so a flood costs Edge
+# Function invocations where it used to cost nothing. It cannot cost more than that —
+# handler.ts reads one environment variable and does a constant-time compare before it
+# touches a database, a store or the network, and behind that sits a lease that already
+# refuses a second concurrent publish. The Spend Cap (§6) is the backstop for the
+# invocations.
+#
+# The alternative — the service-role key as the bearer, so the gateway is satisfied — would
+# put a key that opens the whole database into a cron row to save a config line, which is
+# the trade §6 exists to refuse.
 [functions.publish]
 verify_jwt = false
 

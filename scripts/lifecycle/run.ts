@@ -49,6 +49,28 @@
  *     answering one request at a time.
  *
  * Nothing in this file may be recorded as a launch gate met.
+ *
+ * ── WHAT IT HAS ACTUALLY CAUGHT ──────────────────────────────
+ *
+ * Kept because the next person will have to decide whether this job is worth its twenty
+ * minutes, and the honest answer is a list rather than an argument. Every one of these was
+ * green in the unit suites, and every one of them is a defect no unit test could reach:
+ *
+ *  · request-upload ignoring R2_ENDPOINT — the mutation this harness was built to catch
+ *    (run 32360434524).
+ *  · MEDIA_WORKER_URL pointed at 127.0.0.1 from inside the edge-runtime container, so
+ *    complete-upload got 502 worker_unreachable (run 32354171082).
+ *  · The publisher unreachable by its own trigger: the gateway parses Authorization as a
+ *    JWT and PUBLISH_SECRET is not one, so it answered 401 before handler.ts ran.
+ *  · takedown deleting nothing, for the same container-loopback reason as the worker — and
+ *    invisible until something made those two functions touch a store.
+ *  · The moderation queue unable to approve ANYTHING: `Prefer: return=representation` with
+ *    no select= is a SELECT of `*`, which migration 0015 revoked. pgTAP asserts the same
+ *    approval in SQL, where there is no representation to select, so it passed.
+ *
+ * The pattern is worth naming: every one is a seam between two components that are each
+ * correct, and four of the five are about WHICH ADDRESS or WHICH CREDENTIAL, which is
+ * exactly what a fake cannot have an opinion about.
  */
 
 import { R2Store } from "../../worker/src/store.ts";
