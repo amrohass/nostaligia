@@ -307,7 +307,18 @@ jobs:
                          | grep -o '[0-9]\+' | awk '{s+=$1} END {print s+0}')
           echo "expecting Files=$expect_files Tests=$expect_tests"
 
-          supabase test db 2>&1 | tee /tmp/tap.out
+          # Redirect, not `| tee`. This one is CORRECT today because `set -euo pipefail` is
+          # on the first line of this step — but 532f32d is what a copy of this line looks
+          # like without it, and there the suite's exit status was eaten by tee and the job
+          # could not fail. Removing the pipeline means the status cannot be lost by
+          # deleting one unrelated-looking `set` line later.
+          rc=0
+          supabase test db > /tmp/tap.out 2>&1 || rc=$?
+          cat /tmp/tap.out
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::pgTAP reported failing assertions"
+            exit "$rc"
+          fi
 
           summary=$(grep -oE 'Files=[0-9]+, Tests=[0-9]+' /tmp/tap.out | tail -1 || true)
           if [ -z "$summary" ]; then
@@ -376,9 +387,15 @@ jobs:
             -e MINIO_ROOT_USER=rmatestkey -e MINIO_ROOT_PASSWORD=rmatestsecret123 \
             --entrypoint sh minio/minio \
             -c "mkdir -p /data/quarantine /data/originals /data/public && minio server /data"
+          # The guard matters: `curl && break || sleep 2` makes `sleep` the loop's last
+          # command, so a service that never starts leaves this step GREEN. Same defect
+          # class as 532f32d — a step that cannot fail — reached by a different route.
+          ok=""
           for i in $(seq 1 40); do
-            curl -sf http://127.0.0.1:9000/minio/health/live && break || sleep 2
+            curl -sf http://127.0.0.1:9000/minio/health/live && ok=1 && break
+            sleep 2
           done
+          [ "$ok" = 1 ] || { echo "::error::MinIO never became healthy"; exit 1; }
 
       # R2_ENDPOINT is what makes this job possible at all: without it request-upload
       # signs for <account>.r2.cloudflarestorage.com and the PUT goes nowhere reachable.
@@ -437,9 +454,15 @@ jobs:
             -e R2_SECRET_ACCESS_KEY=rmatestsecret123 \
             -e PORT=8080 \
             rma-media-worker
+          # Guarded, same reason as the MinIO wait above: without it a worker that never
+          # starts passes this step and surfaces as an unexplained harness failure two
+          # steps later, which is the most expensive place to find it.
+          ok=""
           for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:8080/healthz && break || sleep 2
+            curl -sf http://127.0.0.1:8080/healthz && ok=1 && break
+            sleep 2
           done
+          [ "$ok" = 1 ] || { echo "::error::the worker never answered /healthz"; docker logs rma-lifecycle-worker || true; exit 1; }
 
       - name: The lifecycle
         run: |
