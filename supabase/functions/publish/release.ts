@@ -35,9 +35,11 @@ import {
   buildShards,
   type ContentBlocks,
   contentFile,
+  placesFile,
   profileFile,
   publicPost,
   type ShardFile,
+  type SourcePlace,
   type SourcePost,
   type SourceProfile,
   stableStringify,
@@ -56,6 +58,14 @@ export interface Db {
   contentBlocks(): Promise<ContentBlocks>;
   /** The public projection of every profile the archive names (0044). */
   publishableProfiles(): Promise<SourceProfile[]>;
+  /**
+   * The confirmed gazetteer (0050) — every name M4's map draws.
+   *
+   * Not derived from the posts, unlike the profiles above: the map labels the CITY, not
+   * only the places the archive happens to hold a photograph of. A gazetteer entry with no
+   * items is still the landmark somebody navigates by.
+   */
+  publishablePlaces(): Promise<SourcePlace[]>;
   /**
    * Posts that must NOT have a prerendered page, for the reason in step 9.
    *
@@ -196,6 +206,7 @@ export function releaseFiles(
   path: string,
   content: ContentBlocks = {},
   profiles: SourceProfile[] = [],
+  places: SourcePlace[] = [],
 ): ShardFile[] {
   const files = buildShards(posts);
 
@@ -208,6 +219,11 @@ export function releaseFiles(
   // One per profile the archive names — see publishable_profiles (0044) for why the set is
   // bounded by the archive rather than by the user table.
   for (const profile of profiles) files.push(profileFile(profile, posts));
+
+  // M4's map labels. Written on every release even when empty: a release whose places.json
+  // is missing and one whose gazetteer is empty look identical to a browser, and the second
+  // is a fact about the archive while the first is a broken build.
+  files.push(placesFile(places));
 
   // Written INTO the release as well as at the root. A client that has a release cached for
   // a year and never re-reads the root would otherwise keep rendering a redacted item; this
@@ -235,6 +251,7 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
     const redacted = await deps.db.redactedPostIds();
     const content = await deps.db.contentBlocks();
     const profiles = await deps.db.publishableProfiles();
+    const places = await deps.db.publishablePlaces();
     const unpublishable = await deps.db.unpublishablePostIds();
 
     // §5: "the publisher refuses rows whose hash ≠ approved hash." Refused, and NAMED —
@@ -248,7 +265,7 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
 
     // ── 3 · build ──
     const path = releasePath(deps.now());
-    const files = releaseFiles(posts, redacted, path, content, profiles);
+    const files = releaseFiles(posts, redacted, path, content, profiles, places);
 
     // ── 4 · write everything, while nothing points here ──
     for (const file of files) {

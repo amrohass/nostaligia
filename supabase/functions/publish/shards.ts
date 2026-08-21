@@ -373,6 +373,51 @@ export function contentFile(blocks: ContentBlocks): ShardFile {
   return { path: "content.json", json: stableStringify({ blocks }) };
 }
 
+/* ── places.json ───────────────────────────────────────────── */
+
+/** A confirmed gazetteer entry, as 0050's publishable_places() returns it. */
+export interface SourcePlace {
+  id: string;
+  name_ar: string | null;
+  name_en: string | null;
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Every name the map draws.
+ *
+ * M4's basemap is vector geometry with the label layers deliberately not rendered, so this
+ * file is the map's entire text. That is what makes an Arabic-first map possible: a basemap
+ * extract carries whatever names its renderer baked in, while these are what a moderator
+ * typed, in both languages, edited in the dashboard like every other string §9 routes
+ * through the store.
+ *
+ * One file rather than one per cell, for contentFile's reason: a gazetteer for one city is
+ * tens to low hundreds of entries and the map needs all of them at once to place labels
+ * without them colliding. It is fetched on /map and nowhere else, so it is outside §9's
+ * first-load budget.
+ *
+ * An allowlist like every other shape here, and 0050 already filters to confirmed entries
+ * that have a point — an unconfirmed place has no coordinate to draw at.
+ */
+export function placesFile(places: SourcePlace[]): ShardFile {
+  const items = places
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon))
+    .map((p) => ({
+      id: p.id,
+      name_ar: p.name_ar ?? null,
+      name_en: p.name_en ?? null,
+      lat: p.lat,
+      lon: p.lon,
+    }));
+
+  return {
+    path: "places.json",
+    json: stableStringify({ total: items.length, items }),
+  };
+}
+
 /* ── profile/{handle}.json ─────────────────────────────────── */
 
 /**

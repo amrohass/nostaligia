@@ -27,9 +27,11 @@ import {
   FEED_PAGE_SIZE,
   feedEntry,
   geohash,
+  placesFile,
   profileFile,
   publicPost,
   type SourceAsset,
+  type SourcePlace,
   type SourcePost,
   type SourceProfile,
   stableStringify,
@@ -453,4 +455,64 @@ Deno.test("index.json describes the release it was built from", () => {
   // 'hidden' contributes to no cell, so the cell count differs from the item count — which
   // is what makes the assertion above non-trivial.
   assertEquals(idx.cells.length, 1, "hidden coordinates leaked into the cell list");
+});
+
+/* ── places.json ─────────────────────────────────────────────
+ *
+ * M4. The map's only text: the basemap is rendered from vector geometry with its label
+ * layers deliberately not drawn, so every name on the screen comes from this file.
+ */
+
+function place(over: Partial<SourcePlace> = {}): SourcePlace {
+  return {
+    id: "00000000-0000-0000-0000-0000000000c1",
+    name_ar: "المنارة",
+    name_en: "Al-Manara",
+    lat: 31.8996,
+    lon: 35.2042,
+    ...over,
+  };
+}
+
+Deno.test("places.json carries both names and a point", () => {
+  const file = placesFile([place()]);
+  assertEquals(file.path, "places.json", "wrong path");
+  const out = JSON.parse(file.json);
+  assertEquals(out.total, 1, "wrong total");
+  assertEquals(out.items[0].name_ar, "المنارة", "the Arabic name is missing");
+  assertEquals(out.items[0].name_en, "Al-Manara", "the English name is missing");
+  assertEquals(out.items[0].lat, 31.8996, "wrong latitude");
+});
+
+Deno.test("a place with no usable point is not drawn", () => {
+  // 0050 already filters to confirmed entries WITH a location, so this is the second
+  // layer — and it is the one that catches a null arriving as NaN through a JSON number.
+  const out = JSON.parse(placesFile([
+    place(),
+    place({ id: "00000000-0000-0000-0000-0000000000c2", lat: NaN as unknown as number }),
+    place({ id: "00000000-0000-0000-0000-0000000000c3", lon: null as unknown as number }),
+  ]).json);
+  assertEquals(out.total, 1, "a place with no coordinate reached the map");
+});
+
+Deno.test("an empty gazetteer still produces a file", () => {
+  // A release with no places.json and one with an empty gazetteer look identical to a
+  // browser — 404 either way — and only the first is a broken build.
+  const out = JSON.parse(placesFile([]).json);
+  assertEquals(out.total, 0, "wrong total");
+  assertEquals(out.items.length, 0, "items should be empty");
+});
+
+Deno.test("the gazetteer shard carries no field the map was not given", () => {
+  // The same allowlist rule as every other shape here. A place row gains `geohash` and
+  // `unconfirmed` in the table and neither belongs in a file served to everyone forever.
+  const json = placesFile([{
+    ...place(),
+    unconfirmed: false,
+    geohash: "sv8yz",
+    created_at: "2026-08-21T09:00:00Z",
+  } as unknown as SourcePlace]).json;
+  assert(!json.includes("geohash"), "the shard key leaked into the shard");
+  assert(!json.includes("unconfirmed"), "an internal flag reached the published file");
+  assert(!json.includes("created_at"), "a timestamp reached the published file");
 });

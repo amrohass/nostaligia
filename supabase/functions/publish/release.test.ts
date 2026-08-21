@@ -13,7 +13,7 @@
  */
 
 import { publish, releaseFiles, releasePath, type Db, type Deps, type ObjectSink } from "./release.ts";
-import type { ContentBlocks, SourcePost, SourceProfile } from "./shards.ts";
+import type { ContentBlocks, SourcePlace, SourcePost, SourceProfile } from "./shards.ts";
 import { itemPageKey } from "./prerender.ts";
 
 function assert(cond: boolean, msg: string): void {
@@ -95,10 +95,11 @@ class FakeDb implements Db {
   activateOk = true;
   activateHolder: string | null = null;
 
-  /** M3's three additions to the publisher's read side. */
+  /** M3's three additions to the publisher's read side, and M4's fourth. */
   blocks: ContentBlocks = {};
   profiles: SourceProfile[] = [];
   unpublishable: string[] = [];
+  places: SourcePlace[] = [];
 
   publishablePosts() {
     // Read AFTER the claim, so this is where a mid-build approval would land. Bumping the
@@ -109,6 +110,7 @@ class FakeDb implements Db {
   redactedPostIds() { return Promise.resolve(this.redacted); }
   contentBlocks() { return Promise.resolve(this.blocks); }
   publishableProfiles() { return Promise.resolve(this.profiles); }
+  publishablePlaces() { return Promise.resolve(this.places); }
   unpublishablePostIds() { return Promise.resolve(this.unpublishable); }
   claimLease(_h: string, _t: number, _n: string) {
     return Promise.resolve({
@@ -543,6 +545,31 @@ Deno.test("a release carries the copy, the profiles and its own index", async ()
   // profile shard that outlived its release would describe a different archive.
   assertEquals(d.sink.written.get(`${prefix}content.json`)!.cacheControl,
     "public, max-age=31536000, immutable", "content.json is not immutable");
+});
+
+Deno.test("M4: the gazetteer ships inside the release, whether or not it has entries", async () => {
+  const d = deps();
+  d.db.places = [{
+    id: "00000000-0000-0000-0000-0000000000c1",
+    name_ar: "المنارة", name_en: "Al-Manara", lat: 31.8996, lon: 35.2042,
+  }];
+
+  const out = await publish(d);
+  const prefix = out.release!.slice(1);
+  const written = d.sink.written.get(`${prefix}places.json`);
+  assert(written !== undefined, "places.json is missing from the release");
+  assertEquals(JSON.parse(written!.body).items[0].name_ar, "المنارة", "the label did not survive");
+  // Immutable with the release, like every other shard: the map that a cached release
+  // renders must be the map that release was built with.
+  assertEquals(written!.cacheControl, "public, max-age=31536000, immutable",
+    "places.json is not immutable");
+
+  // And with an empty gazetteer the FILE is still there. A missing places.json and an empty
+  // one are the same 404 to a browser, and only one of them is a broken build.
+  const e = deps();
+  const empty = await publish(e);
+  assert(e.sink.written.has(`${empty.release!.slice(1)}places.json`),
+    "an empty gazetteer produced no shard at all");
 });
 
 Deno.test("the copy that ships is the published half, verbatim", async () => {

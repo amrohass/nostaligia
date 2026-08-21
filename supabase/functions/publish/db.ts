@@ -14,7 +14,7 @@
 import { env, rpc } from "../_shared/http.ts";
 import type { Db } from "./release.ts";
 import type { RollbackDb } from "./rollback.ts";
-import type { ContentBlocks, SourcePost, SourceProfile } from "./shards.ts";
+import type { ContentBlocks, SourcePlace, SourcePost, SourceProfile } from "./shards.ts";
 
 export class PostgrestDb implements Db, RollbackDb {
   private readonly key = env("SUPABASE_SERVICE_ROLE_KEY");
@@ -43,6 +43,10 @@ export class PostgrestDb implements Db, RollbackDb {
 
   publishableProfiles(): Promise<SourceProfile[]> {
     return this.call("publishable_profiles");
+  }
+
+  publishablePlaces(): Promise<SourcePlace[]> {
+    return this.call("publishable_places");
   }
 
   unpublishablePostIds(): Promise<string[]> {
