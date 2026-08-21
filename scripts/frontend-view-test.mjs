@@ -386,6 +386,127 @@ const FILES = {
   ok(win.ARCHIVE.rendition([], false) === null, 'and an empty ladder is null, not a guess');
 }
 
+
+/* ── 5 · the shells' modules actually evaluate ────────────────────────────── */
+
+console.log('# the shells — every module loads against the globals before it');
+
+{
+  /* THE check a rewritten file needs and no unit test provides.
+   *
+   * public.js and admin.js are IIFEs that reach for bare globals — `UI`, `I18N`, `DATA`,
+   * `DB`, `ARCHIVE` — set by the modules loaded before them. Delete a global that one of
+   * them still names and nothing anywhere complains: `deno check` does not see these files,
+   * `node --check` parses without resolving identifiers, and every other test here calls
+   * exported functions rather than executing the file. The symptom is a blank page and one
+   * ReferenceError in a console the visitor does not have open.
+   *
+   * M3 rewrote both files and deleted `Store`, most of `DATA`, and `ICONS`' string form, so
+   * this is precisely the milestone in which that mistake was available.
+   *
+   * The globals are passed as PARAMETERS rather than assigned to a stub `window`, because
+   * `new Function('window', src)` gives the module a `window` object whose properties are
+   * not bare identifiers — the browser's are, and the difference is the whole point.
+   */
+  const noop = () => {};
+  const el = () => ({
+    className: '', dataset: {}, textContent: '', value: '', firstChild: null,
+    style: { setProperty: noop, removeProperty: noop },
+    setAttribute: noop, getAttribute: () => null, hasAttribute: () => false,
+    addEventListener: noop, removeEventListener: noop,
+    appendChild: noop, removeChild: noop, replaceChild: noop, replaceChildren: noop,
+    querySelector: () => null, querySelectorAll: () => [], remove: noop, focus: noop,
+    offsetParent: null,
+  });
+
+  function stubWindow(pathname, hash) {
+    return {
+      document: {
+        createElement: el, createElementNS: el, createTextNode: () => ({}),
+        querySelector: () => el(), querySelectorAll: () => [],
+        body: el(), documentElement: { setAttribute: noop }, activeElement: null,
+        addEventListener: noop, title: '',
+      },
+      location: { pathname, hash, search: '', href: 'https://x.test' + pathname },
+      history: { pushState: noop, replaceState: noop },
+      localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+      sessionStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+      addEventListener: noop, removeEventListener: noop, dispatchEvent: noop,
+      setTimeout: noop, clearTimeout: noop, setInterval: noop, clearInterval: noop,
+      scrollTo: noop, innerWidth: 1200, pageYOffset: 0,
+      CustomEvent: class {},
+      // Never answers. Every module must survive its own first request failing, which is
+      // also what a visitor in a tunnel gets.
+      fetch: () => Promise.reject(new Error('no network in this probe')),
+      CONFIG: {
+        origins: { supabase: 'https://s.test', cdn: 'https://cdn.test', site: 'https://x.test' },
+        supabase: { anonKey: 'anon' },
+        turnstile: { siteKey: '0xTEST' },
+        archiveBase: 'https://cdn.test',
+        csp: '',
+      },
+    };
+  }
+
+  /** Loads one module the way its shell does, then hands the next its globals by name. */
+  function loadInto(win, rel) {
+    const names = Object.keys(win).filter((k) => /^[A-Z][A-Z0-9_]*$/.test(k));
+    const args = names.map((n) => win[n]);
+    new Function('window', ...names, read(rel))(win, ...args);
+    return win;
+  }
+
+  /* The order comes from the shell itself rather than from a list here — the same argument
+     the budget script makes. A module the shell loads and this does not would be a module
+     nobody ever executes in a test. */
+  function shellScripts(file) {
+    return [...read(file).matchAll(/<script src="(\/assets\/js\/[^"]+)"/g)].map((m) => `site${m[1]}`);
+  }
+
+  const publicOrder = shellScripts('site/index.html');
+  ok(publicOrder.length >= 8 && publicOrder[publicOrder.length - 1].endsWith('public.js'),
+     `CONTROL: index.html loads ${publicOrder.length} modules, ending with public.js`);
+
+  let threw = null;
+  try {
+    const win = stubWindow('/', '');
+    for (const rel of publicOrder) loadInto(win, rel);
+  } catch (e) {
+    threw = e;
+  }
+  ok(threw === null,
+     `every module the public shell loads evaluates in order${threw ? ` — ${threw.message}` : ''}`);
+
+  // The dashboard, which admin-boot.js injects after the role check. Its own shell loads
+  // the modules before it; admin.js is the one that was rewritten.
+  const adminOrder = shellScripts('site/admin.html')
+    .filter((rel) => !rel.endsWith('admin-boot.js'))
+    .concat(['site/assets/js/admin.js']);
+
+  let adminThrew = null;
+  try {
+    const win = stubWindow('/admin.html', '#/overview');
+    for (const rel of adminOrder) loadInto(win, rel);
+  } catch (e) {
+    adminThrew = e;
+  }
+  ok(adminThrew === null,
+     `admin.js evaluates against the globals admin.html provides${adminThrew ? ` — ${adminThrew.message}` : ''}`);
+
+  // CONTROL. The two assertions above are "nothing threw", which is exactly what a probe
+  // that never executed anything would report. A module naming a global that does not
+  // exist must actually throw here.
+  let controlThrew = null;
+  try {
+    const win = stubWindow('/', '');
+    new Function('window', 'MISSING_GLOBAL.doSomething();')(win);
+  } catch (e) {
+    controlThrew = e;
+  }
+  ok(controlThrew !== null && /is not defined/.test(controlThrew.message),
+     'CONTROL: a module reaching for a global that is gone DOES throw here');
+}
+
 console.log(`\n1..${passed + failed}`);
 if (failed) {
   console.error(`\n${failed} assertion(s) failed.`);
