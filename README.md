@@ -22,9 +22,57 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | **built, 9/9 pieces** — every exit criterion met against a local stack; two of them wait on a deployment to be met for real (see below) |
 | M2 | Sharding · versioned releases · single-writer lock · takedown | **built** — all six pieces, with the publish trigger moved from the clock to the moderation action (CLAUDE.md §2, 20 Aug) |
 | M3 | Front end on shards · History API · prerendered item pages · `content_blocks` · profiles · XSS/bidi sweep | **built** — all eight pieces; the WhatsApp preview is generated and asserted but not yet crawlable (see below) |
-| M4 | PostGIS geo · decade slider · PMTiles basemap | not started |
+| M4 | PostGIS geo · decade slider · place autocomplete and pin · PMTiles basemap | **built** — all five pieces; the basemap draws once an extract is uploaded (see below) |
 | M5 | Fuzzing · consent/licence · seed importer · export · tested restore | not started |
 | M6 | Font subsetting · RTL pass · monitoring · Lighthouse | not started |
+
+### M4 progress
+
+| # | Piece | State |
+|---|---|---|
+| 1 | PostGIS-backed geo — `places_search` (name + alias autocomplete, distance-ordered when there is a pin) and `places_near` (ST_DWithin on geography, the resolution step) | **done**, 18 pgTAP assertions |
+| 2 | The decade slider, filtering the map and the list without a re-render | **done** |
+| 3 | Place-name autocomplete → gazetteer resolution → drag-to-confirm pin, in the share sheet; the gazetteer becomes writable in the dashboard | **done**, 17 pgTAP assertions |
+| 4 | The PMTiles basemap — a v3 reader over Range requests, an MVT geometry decoder, and a canvas renderer, all loaded on demand | **done**, 45 assertions against archives the test builds byte by byte |
+| 5 | Tile-failure fallback to list view | **done** — and it is the same list the map is always rendered above |
+| — | R1's other half, carried from M0: a moderator can now CORRECT a location, not only see it flagged | **done** |
+
+**The map draws no text.** Every name on it comes from `places.json` — the confirmed
+gazetteer, published into each release — rather than from the tiles' own label layers,
+which are deliberately not rendered. That is what makes an Arabic-first map possible: an
+extract carries whatever names its renderer baked in, usually Latin, and no amount of
+styling turns them into Arabic. It also removes a glyph atlas and an Arabic shaping engine
+from the work, since the browser's own text engine shapes and joins correctly for free.
+
+**Vector rather than raster**, decided 21 Aug 2026 and recorded in CLAUDE.md §2. Raster
+would have been ~150 lines of client code instead of ~900. It was refused because no
+ready-made raster extract of Palestine exists — the maintainer would have to run a
+rendering toolchain — and because a raster tile's labels are baked into the pixels in one
+language, which here is the wrong one.
+
+**M4's exit criteria.** "No external tile dependency" is met and enforced: the basemap is
+one object in the R2 `public` bucket, the CSP admits no tile host, and the origin ratchet
+fails the build if one appears. "Usable on a mid-range Android with the full seed archive"
+is **not measured**, and cannot be yet — there is no seed archive until M5 and no extract
+until one is built. What exists is the work that decides it: the device pixel ratio is
+capped at 2, unwanted tile layers are named but never decoded, geometry is flat arrays
+rather than point objects, decoded tiles are cached and evicted, and the canvas redraws on
+a frame rather than per event. Lighthouse on a throttled mid-tier device is M6's, and that
+is where the number will come from.
+
+### Two things to provision, neither of them code
+
+Both are recorded in CLAUDE.md §2 beside the `/item/*` route M3 left:
+
+1. **The extract.** One `pmtiles extract` against the public Protomaps planet build,
+   bounded to Palestine, uploaded to the `public` bucket, and its path set in
+   `config/site.json` under `basemap.path`. Until then the field is empty, `/map` renders
+   as the list, and that is a configuration state rather than a failure — the front end
+   does not fetch the map module at all.
+2. **Range requests.** The CDN in front of R2 must pass `Range` through and allow the
+   header in CORS. `pmtiles.js` refuses a `200` where it asked for a `206` rather than
+   slicing it: quietly downloading a multi-megabyte archive on a phone to read 127 bytes is
+   the exact failure the format exists to avoid, and it must not be the thing that "works".
 
 ### M3 progress
 
@@ -312,7 +360,7 @@ shrinks is a green tick over nothing.
 | job | what it runs |
 |---|---|
 | `secrets` | gitleaks over the **full history** (`fetch-depth: 0`), the forbidden-path guard, and a rule self-test with controls |
-| `frontend` | the generated `_headers`/`_redirects`/`config.js` match `config/site.json`; CSP survivability and the external-origin ratchet; auth, upload refusals and the anon-key guard; the read path, the XSS sweep and the two duplicated asset lists; §9's brotli budget |
+| `frontend` | the generated `_headers`/`_redirects`/`config.js` match `config/site.json`; CSP survivability and the external-origin ratchet; auth, upload refusals and the anon-key guard; the read path, the XSS sweep and the two duplicated asset lists; the PMTiles reader and the tile decoder; §9's brotli budget |
 | `functions` | the Edge Functions' gate-1 refusals; the shard builder and the prerendered page; the presigner verified against a real S3 implementation |
 | `worker` | worker units; the image builds and type-checks; `R2Store` against MinIO; a real 3840×2160 ladder **inside the deployed image**; throughput at two source lengths; §11 gate 2 (GPS EXIF) |
 | `database` | every migration on a fresh database, then again (determinism), the harness probe, the pgTAP suite gated on counts, and two publishers contending for one lease |
@@ -351,6 +399,8 @@ parsing, never a psql exit code: **psql exits 0 even when a pgTAP assertion fail
 | `25_bidi` | §6's eight override characters never reach storage, the three MARKS survive, and the strip runs before every other trigger on `posts` |
 | `26_shard_sources` | comment bodies in shards without their author's id; profile visibility applied at publish time; the bound on which posts must lose a prerendered page |
 | `27_upload_decade` | a decade expands into §3's EDTF-lite range, a bad one is refused rather than rounded, and no refusal charges the quota |
+| `28_gazetteer` | autocomplete that finds المنارة from منارة, distance ordering applied *before* the limit, a member refused by the policy rather than by the function, and §4's trail appearing for writes nobody asked to log |
+| `29_upload_location` | a gazetteer place publishes the curated point and a pin publishes snapped to a block; a coordinate sent beside a place id is ignored; every refusal lands before the quota charge |
 
 [supabase/harness_probe.sql](supabase/harness_probe.sql) is run by CI *before* the suite
 and is not part of it — it contains a deliberate failure. It proves the harness can
@@ -364,7 +414,7 @@ a harness that stops early records zero failures and looks identical to one that
 everything; and `worker/scripts/exif-gate.ts` re-runs its own inspection against a file it
 knows is dirty.
 
-Four Node scripts cover the front end, none of which needs a browser — they evaluate each
+Five Node scripts cover the front end, none of which needs a browser — they evaluate each
 module against a stub `window` and then poke it, because §9's no-build-step rule applies to
 the tests too or the tests become the build step:
 
@@ -373,6 +423,7 @@ the tests too or the tests become the build step:
 | `frontend-csp-test.mjs` | `el()` writes styles through CSSOM, not the style attribute; the set of third-party origins is **exactly** the one `config/site.json` declares, in both directions |
 | `frontend-auth-test.mjs` | the access token never reaches storage; every Edge Function refusal has a message; a `PATCH` with no `select=` is refused before the network |
 | `frontend-view-test.mjs` | every message key resolves in **both** languages; nothing in the served tree parses a string as HTML; the SPA's script and stylesheet lists match the prerendered pages'; the redaction filter filters |
+| `frontend-map-test.mjs` | the PMTiles v3 reader and the MVT decoder, against an archive and a tile the test **encodes byte by byte** — a checked-in fixture would make every assertion a comparison between two files nobody can read. Plus the projection, and that the map modules stay out of the shell |
 | `frontend-budget.mjs` | §9's 150 KB brotli ceiling, measured per file and failed on |
 
 ### Requirements carried into later milestones
@@ -441,7 +492,8 @@ scripts/
   build-site-config.mjs    config/site.json -> _headers + config.js; --check gates CI
   frontend-csp-test.mjs    14 assertions: CSSOM styling + the external-origin ratchet
   verify-deployed-headers.mjs  fetches a live deployment; proves headers are SERVED
-  frontend-auth-test.mjs   33 assertions: session storage, refusal coverage, anon-key guard
+  frontend-auth-test.mjs   36 assertions: session storage, refusal coverage, anon-key guard
+  frontend-map-test.mjs    45 assertions: PMTiles and MVT, decoded from files it encodes
   sigv4-roundtrip.ts       the presigner, verified by a real S3 server rather than by itself
   publish-race.sh          two psql backends contending for one publish lease
   lifecycle.sh             the write path end to end; owns the environment contract
@@ -450,8 +502,9 @@ scripts/
 
 supabase/
   config.toml              CLI config + access-token hook (local stack only)
-  migrations/              42 files, applied in filename order. M0 is …0811…; M1 adds the
-                           upload and ingest path, M2 the publish path
+  migrations/              50 files, applied in filename order. M0 is …0811…; M1 adds the
+                           upload and ingest path, M2 the publish path, M3 the shards a
+                           front end reads, M4 the gazetteer and the location on a post
     …090100_extensions     PostGIS into `extensions`
     …090200_helpers        touch_updated_at, visibility + handle validation
     …090300_enums          13 types
@@ -483,7 +536,7 @@ supabase/
     publish/               the shard builder, the publisher, the pointer flip, rollback
     takedown/              §8 — bytes first, shards afterwards
     _shared/               magic bytes, SigV4, the R2 client, secret handling, http
-  tests/                   24 files, run by `npx supabase test db`; CI derives the counts
+  tests/                   30 files, run by `npx supabase test db`; CI derives the counts
   harness_probe.sql        NOT in tests/ — contains a deliberate failure, by design
   stage0_incremental.ps1   proves 0014–0015 apply forward-only onto a populated database
 
@@ -502,15 +555,18 @@ assets/css/tokens.css      palette, type, radii, shadows
 assets/css/atlas.css       public components
 assets/css/admin.css       back-office components
 assets/js/i18n.js          AR/EN strings, numerals, direction
-assets/js/data.js          seed content (pre-backend) — M3 replaces what still reads it
-assets/js/store.js         content store — the seam a backend replaces
-assets/js/ui.js            DOM helpers, icon set, toast, focus trap
+assets/js/data.js          the two vocabularies still shared by views (decades, tones)
+assets/js/archive.js       the read path: manifest -> release -> shards, and the redactions
+assets/js/ui.js            DOM helpers, icon set, toast, focus trap, the on-demand loader
 assets/js/auth.js          sessions. The access token is never written to storage (§7)
 assets/js/turnstile.js     explicit render; the handle carries reset(), because it is single-use
 assets/js/db.js            PostgREST calls, and DB.mediaUrl — §6's bucket rule as code
 assets/js/upload.js        the three-call contribution path; enforces nothing, by design
 assets/js/config.js        GENERATED — window.CONFIG
 assets/js/public.js        public app
+assets/js/pmtiles.js       PMTiles v3 over Range requests — NOT in the shell's script list
+assets/js/mvt.js           vector tiles, geometry only; the map's text comes from the shards
+assets/js/map.js           the canvas renderer, the pin, and the pan/zoom
 assets/js/admin-boot.js    signs in, asks authz_role() — the DATABASE, not the JWT claim
 assets/js/admin.js         back-office app; dynamically imported for moderators only
 ```
@@ -814,9 +870,10 @@ they are listed so nobody mistakes them for the intended design.
 | ~~Member emails in seed and admin UI~~ | `data.js`, `admin.js` | §7 emails are never published | **done in M3** — the seed is deleted and `profiles` has no email column to show |
 | ~~Client-authoritative unmoderated writes~~ | `store.js` | §5 unapproved content unreadable at the policy level | **done in M3** — `store.js` is deleted; a comment lands `pending` because 0014 stamps it |
 
-**Still departures, and now scheduled elsewhere.** The dashboard's places screen is
-read-only and says so: editing the gazetteer, place-name autocomplete and the drag-to-confirm
-pin are M4's. The members screen is read-only for a structural reason rather than an
+**Still departures, and now scheduled elsewhere.** ~~The dashboard's places screen is
+read-only~~ — **done in M4**: a moderator creates and corrects gazetteer entries, sets the
+coordinate with the same pin control a contributor uses, and every write leaves §4's two
+audit rows by trigger. The members screen is read-only for a structural reason rather than an
 unfinished one — `user_roles` is revoked from every browser role twice over, so "manage
 users / roles" (§4) is not reachable from a page and would need an RPC with its own audit
 path and denial tests that no milestone has specified. And §6's explicit download of the

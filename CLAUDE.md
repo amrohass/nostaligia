@@ -69,6 +69,17 @@ after first paint. Client filters against a short-TTL `redactions.json`.
   among the things that read from shards and 0015 grants `anon` nothing — a comment a
   visitor cannot get from a shard is a comment they cannot read.
 
+- **Amended 21 Aug 2026 — M4 adds one shard and one object beside the tree.** The shard is
+  `places.json`, the confirmed gazetteer, immutable inside `/v/{ts}/` like the rest. It
+  exists because the basemap below is rendered WITHOUT its label layers, so every name on
+  the map is a row a moderator typed rather than whatever an extract's renderer baked in —
+  which is the only way an Arabic-first archive gets an Arabic-first map, and it puts the
+  map's text through §9's "all content comes from the store" like every other string.
+  The object is the basemap itself: one `.pmtiles` archive in the `public` bucket, named by
+  `basemap.path` in `config/site.json` and read with HTTP **Range** requests. It is not part
+  of a release and does not move with one — it changes when somebody rebuilds the extract,
+  which is a deliberate act a year apart, not a publish.
+
 - **Amended 21 Aug 2026 — the prerendered item pages are the one thing written outside a
   release.** §9's `item/{id}/index.html` is written at the ROOT of the public bucket, not
   under `/v/{ts}/`, and the reason is the feature: it is the URL somebody pasted into a
@@ -86,6 +97,27 @@ after first paint. Client filters against a short-TTL `redactions.json`.
   A **rollback does not undo them**, and that is accepted rather than hidden: there is no
   per-release copy to flip back to, the content on them is approved either way, and the
   next successful publish rewrites every one.
+
+- **Amended 21 Aug 2026 — M4's basemap: vector, ours to draw, and two things to provision.**
+  §2 fixes PMTiles on R2 and voids MapLibre; §9 forbids a build step. So the renderer is
+  three files in this repository and no dependency: `pmtiles.js` (header, directories, one
+  tile, over Range requests), `mvt.js` (geometry only), `map.js` (a canvas). All three are
+  loaded on demand, so they are outside §9's first-load budget by construction.
+  **Vector rather than raster, decided 21 Aug 2026.** Raster would be ~150 lines of client
+  code instead of ~900, and it was refused for two reasons: no ready-made raster extract of
+  Palestine exists, so the maintainer would have to run a rendering toolchain; and a raster
+  tile has its labels baked into the pixels in one language, which for this archive is the
+  wrong language. Vector tiles are geometry, and the names come from `places.json`.
+  Two things must be provisioned and neither is code:
+  **(a)** the extract — one `pmtiles extract` against the public Protomaps planet build,
+  bounded to Palestine, uploaded to `public/`, and its path set in `config/site.json`. Until
+  then `basemap.path` is empty and `/map` renders as the list, which is M4's own stated
+  fallback rather than a broken state;
+  **(b)** the CDN in front of R2 must pass **Range** requests through and allow the `Range`
+  header in CORS. A server that answers a range request with the whole file is refused by
+  `pmtiles.js` rather than sliced — quietly downloading a multi-megabyte archive on a phone
+  to read 127 bytes is the failure the whole format exists to avoid, and it must not be the
+  thing that "works".
 
 - **Amended 21 Aug 2026 — one deployment requirement, not yet provisionable.** The site
   origin must route `/item/*` to the R2 `public` bucket, or a shared link falls through
@@ -359,6 +391,14 @@ is a de-anonymization vector.
 - **Provenance and consent captured at upload**, including the right to withdraw and a
   per-item license. Ask "where did this come from" — a contributor granting a license they
   do not hold is how heritage archives acquire liability.
+- **Amended 21 Aug 2026 — the precision a contribution lands with follows the SOURCE of the
+  coordinate** (M4, `claim_upload_slot` in migration 0049): a place chosen from the
+  gazetteer publishes `exact`, a dropped pin publishes `street`. Not symmetry — a gazetteer
+  point is already public in `places.json`, so snapping it protects nobody while moving the
+  item off the landmark it is a photograph of, whereas a pin is a coordinate nobody curated
+  and most plausibly a home. Saying nothing still means `hidden`, so "fuzzing is default-on"
+  is unchanged. **M5 still owns the contributor-facing precision control**; this is only
+  what happens before anyone has said otherwise, and a moderator can change either.
 - Do not store IPs, or truncate and expire them.
 - Voice notes are the most identifying medium here — a voice is biometric. Treat voice
   contributions with the same care as faces.
@@ -405,7 +445,17 @@ A named human owns the takedown path with a stated response time. This is a laun
 - **The sign-in gate always preserves intent** — the pending action and its item survive the
   auth round-trip and the user returns exactly where they were.
 - Reuse `tokens.css`. Never hardcode a color.
-- **Amended 21 Aug 2026 — Leaflet and the public OSM tile endpoint are gone, and `/map` is
+- **Amended 21 Aug 2026 (M4) — `/map` is the map, and the list under it is not a lesser
+  view.** It is three things at once: §10's stated tile-failure fallback, the accessible
+  equivalent of a canvas no screen reader can read, and what a visitor sees while tiles are
+  still arriving. It is always rendered. The decade bar became the slider §9 asks for, and
+  the **RTL slider direction is still M6's** — a range input follows the document's `dir`
+  and nothing here overrides it either way.
+  Three ways the map does not draw, and only two of them say so on the screen: an
+  unreadable archive and a module that would not load are reported; a basemap that was
+  never provisioned is not, because it has nothing to apologise for.
+
+- **Amended 21 Aug 2026 — Leaflet and the public OSM tile endpoint are gone, and `/map` was
   a list until M4.** §2 forbids that endpoint outright and the CSP has blocked `unpkg`
   since M0, so the map rendered a blank panel on every deployment that actually served the
   policy. M3 removed both, deleted their two `known_violations` entries, and pointed
