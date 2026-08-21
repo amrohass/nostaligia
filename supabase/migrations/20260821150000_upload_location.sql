@@ -276,6 +276,19 @@ grant execute on function public.claim_upload_slot(bigint, text, public.post_kin
 -- a post with a place_id and a stale coordinate is the state that reads as correct in the
 -- queue and is wrong on the map.
 --
+-- ── A member can reach this, and it grants them nothing ──────
+--
+-- 0018's posts_update policy admits the AUTHOR of a pending post as well as a moderator,
+-- so a member can call this on their own submission — including with an explicit
+-- p_precision. That is not a hole this function opens: 0015 already grants `authenticated`
+-- UPDATE on location, location_precision, location_source and place_id, so the same member
+-- can write the same columns through PostgREST directly. §5 again — the boundary is the
+-- policy and the column grants, and this is a convenience over them rather than beside them.
+--
+-- What it means in practice is that a member may set 'exact' on their own item before a
+-- moderator sees it. R1's flag is the control for exactly that, and it fires on the value
+-- rather than on who set it.
+--
 -- ── This can un-approve the post, and that is the point ──────
 --
 -- location, location_precision, place_id and location_public are all in 0012's content hash,
@@ -327,7 +340,15 @@ begin
   update public.posts
      set location           = v_location,
          location_precision = v_precision,
-         location_source    = case when v_location is null then null else 'admin'::public.location_source end,
+         -- Derived from WHO is calling, not from the fact that an RPC was used. 0018 lets a
+         -- member update their own pending post, so this function is reachable by one — and
+         -- recording their correction as 'admin' would put a false attribution in a column
+         -- whose only job is attribution.
+         location_source    = case
+                                when v_location is null then null
+                                when public.is_moderator() then 'admin'::public.location_source
+                                else 'user'::public.location_source
+                              end,
          place_id           = p_place_id
    where id = p_post_id
   returning status into v_status;

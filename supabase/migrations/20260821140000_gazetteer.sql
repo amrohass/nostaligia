@@ -234,7 +234,7 @@ as $$
              extensions.st_makepoint(p_lon, p_lat), 4326)::extensions.geography as origin,
            least(greatest(coalesce(p_radius_m, 400), 1), 5000) as radius,
            least(greatest(coalesce(p_limit, 6), 1), 25)        as lim
-  )
+  ),
   ranked as (
     select public.place_public(pl) || jsonb_build_object(
              'distance_m', round((pl.location <-> q.origin)::numeric, 1)) as hit,
