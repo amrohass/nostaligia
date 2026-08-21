@@ -136,6 +136,44 @@ console.log('# i18n — a key that misses renders as itself');
      `and in English${missingEn.length ? ' — missing: ' + missingEn.join(', ') : ''}`);
 }
 
+/* -- 1b · no source file carries a control character ---------------------- */
+
+console.log('# the escaping defect that cannot be seen');
+
+{
+  /* M4's colour scan shipped with a word-boundary escape in its regex, written through a
+   * layer of escaping that ate the backslash and left the raw 0x08 byte in the pattern
+   * instead. The pattern then matched nothing, and the assertion passed over a file that
+   * violated the rule it claimed to enforce — an assertion that could not fail, which is
+   * worse than no assertion at all because it reads as coverage.
+   *
+   * Nothing legitimate here needs a C0 control character in source. Tab, newline and
+   * carriage return are excluded; everything else is a mistake a diff renders as an empty
+   * space and a review cannot see.
+   *
+   * Written with charCodeAt rather than a regex, and that is the point rather than a style
+   * choice: a character class for this needs backslash escapes, and a backslash escape is
+   * exactly what went wrong. This check must not be able to fail the way it exists to catch.
+   */
+  const hasControl = (text) => {
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (code < 32 && code !== 9 && code !== 10 && code !== 13) return true;
+    }
+    return false;
+  };
+
+  const scanned = [...jsFiles, ...readdirSync(join(root, 'scripts'))
+    .filter((f) => f.endsWith('.mjs')).map((f) => `scripts/${f}`)];
+
+  const dirty = scanned.filter((rel) => hasControl(read(rel)));
+  ok(dirty.length === 0,
+     `no source file carries a control character${dirty.length ? ' — ' + dirty.join(', ') : ''}`);
+  ok(scanned.length > 10, `CONTROL: the scan covered ${scanned.length} files`);
+  ok(hasControl('x' + String.fromCharCode(8) + 'y'),
+     'CONTROL: the check does catch a literal backspace');
+}
+
 /* ── 2 · the XSS sweep ────────────────────────────────────────────────────── */
 
 console.log('# §6 — no string becomes markup');

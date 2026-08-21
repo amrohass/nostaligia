@@ -547,6 +547,45 @@ if (exhausted) {
 // server. R2Sink had no R2_ENDPOINT seam at all, so this could not have been run even if
 // somebody had wanted to — adding it is what makes the section below possible.
 //
+/** M4: a gazetteer entry, created exactly as the dashboard creates one.
+ *
+ * Through the RPC rather than through a table INSERT, because that is what admin.js does
+ * and because `location` is a geography: 0048 exists so no browser ever assembles an EWKT
+ * literal. SECURITY INVOKER, so this call is refused unless 0017's policy really does admit
+ * this moderator — a member's token would land on a policy violation here, and that is the
+ * boundary rather than anything inside the function.
+ */
+async function savePlace(
+  jwt: string,
+  name: string,
+): Promise<{ ok: boolean; detail: string }> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/save_place`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: ANON_KEY,
+      Authorization: `Bearer ${jwt}`,
+    },
+    // p_id and p_aliases are omitted so the function's own defaults apply — the same shape
+    // the dashboard sends when it is creating rather than correcting.
+    body: JSON.stringify({
+      p_name_ar: name,
+      p_name_en: name,
+      p_lat: 31.8996,
+      p_lon: 35.2042,
+      p_unconfirmed: false,
+    }),
+  });
+  const text = await res.text();
+  // Matched with a pattern rather than a literal: this is jsonb rendered by Postgres and
+  // relayed by PostgREST, and neither promises the spacing. A test that depended on it
+  // would fail on an upgrade and look like a permissions problem.
+  return {
+    ok: res.ok && /"saved":\s*true/.test(text),
+    detail: `${res.status} ${text.slice(0, 300)}`,
+  };
+}
+
 // WHAT IS STILL NOT PROVED HERE, and it is the same list as the top of this file: MinIO is
 // not R2, there is no CDN, and "the pointer flipped" is asserted by reading the object back
 // out of the bucket rather than by watching a browser follow it.
@@ -566,6 +605,13 @@ ck(
   approved.rows === 1,
   `the moderator's approval changed no row: ${approved.status} ${approved.detail}`,
 );
+
+// M4. Created before the publish below so the release has a gazetteer to carry, and named
+// with the run stamp so the shard assertion in §7a is about THIS entry rather than about
+// the file being non-empty for some other reason.
+const placeName = `harness-place-${stamp}`;
+const placeSaved = await savePlace(modSession.jwt, placeName);
+ck(placeSaved.ok, `a moderator could not create a gazetteer entry: ${placeSaved.detail}`);
 
 // 0042: approving dispatches the publisher. That POST goes nowhere in this harness — no
 // Vault secret is set, so publish_tick answers not_configured — which is deliberate. The
@@ -598,6 +644,26 @@ ck(feed !== null && feed.includes(postId), "the published feed does not contain 
 // names as the aggregate that de-anonymises a contributor.
 ck(feed === null || !feed.includes(GPS_CAPTION), "the published feed carries the master's EXIF caption");
 ck(feed === null || !feed.includes(member.sub), "the published feed carries the uploader's user id (§7)");
+
+/* ── 7a · M4's gazetteer shard ──────────────────────────────
+ *
+ * The map draws no text of its own — every name on it comes from this file — so a release
+ * that reached the bucket without it is a map of a city with no names on it, which reads as
+ * a styling choice rather than as a missing shard.
+ *
+ * Asserted here rather than only in release.test.ts because this is the first time
+ * publishable_places (0050) is actually CALLED: the unit tests hand the publisher a fake
+ * database, so a wrong RPC name or a missing service_role grant would look identical to an
+ * empty gazetteer right up until a deployment. The entry looked for is the one this harness
+ * created above, so an empty shard fails as loudly as a missing one.
+ */
+
+const placesShard = release ? await publicObject(`${release.slice(1)}places.json`) : null;
+ck(placesShard !== null, `the release carries no places.json: ${release}places.json is not there`);
+ck(
+  placesShard !== null && placesShard.includes(placeName),
+  "places.json does not carry the gazetteer entry a moderator just created",
+);
 
 /* ── 7b · §9's prerendered page, in the bucket ──────────────
  *

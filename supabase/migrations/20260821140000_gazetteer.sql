@@ -151,6 +151,18 @@ create trigger places_write_audit
 -- KNN one and it uses places_location_gix; the fallback ordering is name, so a search
 -- without a pin is deterministic rather than whatever the heap returns.
 --
+-- The operator is written OPERATOR(extensions.<->) and it HAS to be. Every function here
+-- pins `set search_path = ''` — the escalation rule 00_structure asserts — PostGIS lives in
+-- `extensions`, and an unqualified OPERATOR resolves through the search path exactly like an
+-- unqualified function name. The bare form does not parse:
+--
+--     operator does not exist: extensions.geography <-> extensions.geography
+--
+-- and because these two are `language sql`, the body is validated at CREATE time, so the
+-- migration itself fails rather than the first call. Qualifying a function call is the
+-- familiar half of that rule; an operator looks like syntax rather than like a name, which
+-- is why this half took a CI run to find.
+--
 -- Unconfirmed entries sort last in both orderings. They are offered — a place we have a
 -- name for and no coordinate is still the right label — but they are never the first answer.
 --
@@ -190,7 +202,7 @@ as $$
     select public.place_public(pl)          as hit,
            pl.unconfirmed                   as un,
            case when q.origin is null or pl.location is null then null
-                else pl.location <-> q.origin end as dist,
+                else pl.location OPERATOR(extensions.<->) q.origin end as dist,
            coalesce(pl.name_ar, pl.name_en) as nm
     from public.places pl, q
     where q.term is null
@@ -237,8 +249,8 @@ as $$
   ),
   ranked as (
     select public.place_public(pl) || jsonb_build_object(
-             'distance_m', round((pl.location <-> q.origin)::numeric, 1)) as hit,
-           pl.location <-> q.origin                                       as dist
+             'distance_m', round((pl.location OPERATOR(extensions.<->) q.origin)::numeric, 1)) as hit,
+           pl.location OPERATOR(extensions.<->) q.origin                  as dist
     from public.places pl, q
     where p_lat is not null and p_lon is not null
       and pl.location is not null
