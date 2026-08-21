@@ -765,61 +765,16 @@ html[lang="en"] .place__name { font: 500 13px/1.5 var(--font-en); }
 }
 html[lang="en"] .place__count { font: 600 11px var(--font-en); }
 
-.merge-prompt {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 13px 20px;
-  background: var(--gold-a12);
-  border-bottom: 1px solid rgba(62, 74, 46, .08);
-  font: 400 11.5px/1.7 var(--font-ar);
-  color: var(--gold-ink-deep);
-}
-html[lang="en"] .merge-prompt { font: 400 11.5px/1.6 var(--font-en); }
-.merge-prompt span { flex: 1; }
-.merge-prompt button {
-  font: 600 11px var(--font-ar);
-  color: var(--paper);
-  background: var(--gold-ink-deep);
-  padding: 5px 12px;
-  border-radius: var(--r-pill);
-  flex: none;
-}
-html[lang="en"] .merge-prompt button { font: 600 11px var(--font-en); }
+/* The gazetteer map's rules lived here: .merge-prompt, .gazetteer-map, .place-legend and
+   the .place-footer group. All of them styled a Leaflet panel fed by the public OSM tile
+   endpoint, which CLAUDE.md section 2 forbids and which the CSP has blocked since M0 — so
+   they styled something that rendered blank on any deployment serving the policy.
 
-.gazetteer-map { flex: 1; position: relative; min-height: 0; }
-.gazetteer-map .leaflet-container { background: #E7E2CE; }
-.place-legend {
-  position: absolute;
-  bottom: 14px;
-  inset-inline-start: 14px;
-  z-index: 1000;
-  background: rgba(247, 244, 236, .94);
-  border-radius: var(--r-md);
-  padding: 9px 13px;
-  font: 400 11px/1.8 var(--font-ar);
-  color: var(--ink-70);
-  max-width: 80%;
-}
-html[lang="en"] .place-legend { font: 400 11px/1.7 var(--font-en); }
-.place-legend b { color: var(--gold-ink-deep); }
+   M3 made the places screen a read-only table of the real `places` rows; editing them,
+   the drag-to-confirm pin and the PMTiles basemap are M4's, and will want their own
+   rules rather than these. .places / .place / .place__name / .place__coords stay, because
+   the table uses them. */
 
-.place-footer {
-  flex: none;
-  background: var(--paper);
-  border-top: 1px solid var(--olive-a14);
-  padding: 16px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-.place-footer__name { font: 700 15px/1.6 var(--font-ar); }
-html[lang="en"] .place-footer__name { font: 700 14.5px/1.5 var(--font-en); }
-.place-footer__meta { font: 400 11.5px/1.7 var(--font-ar); color: var(--ink-65); }
-html[lang="en"] .place-footer__meta { font: 400 11.5px/1.6 var(--font-en); }
-.place-footer__coords { font: 400 11px var(--font-en); color: var(--ink-55); }
 
 /* ─────────────────────────── Reports ─────────────────────────── */
 
@@ -1031,7 +986,6 @@ html[dir="rtl"] .toast { transform: translateX(50%); }
   .settings-nav { width: 100%; flex-direction: row; overflow-x: auto; border-inline-end: 0; border-bottom: 1px solid var(--olive-a12); }
   .table { overflow-x: auto; }
   .table__row { min-width: 720px; }
-  .place-legend { position: static; margin: 10px; max-width: none; }
 }
 
 /* ── The gate (M1 piece 5) ───────────────────────────────────

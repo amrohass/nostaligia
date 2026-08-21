@@ -553,3 +553,35 @@ Deno.test("the copy that ships is the published half, verbatim", async () => {
   assertEquals(body.blocks["page.about.body"].ar, "نصّ عربي", "the Arabic side did not survive");
   assertEquals(body.blocks["page.about.body"].en, "English text", "the English side did not survive");
 });
+
+/* ── R2 · the publish-time day-precision path ───────────────── */
+
+/* The requirement M0 carried forward, discharged here.
+ *
+ * README's R2: `stage0_incremental.ps1` asserts day precision on the GENERATED column,
+ * where Postgres already forces it — `created_at::date` depends on the session TimeZone
+ * and would be rejected at DDL time, so 0018 pins UTC explicitly and the constraint could
+ * not be violated if someone tried. The place a local-time bug can actually happen is the
+ * publisher, which formats a date in TypeScript with no such guard.
+ *
+ * The clock below is 23:30 UTC. Ramallah is UTC+2 or +3, so any formatter that used the
+ * local calendar — toLocaleDateString, getFullYear/getMonth/getDate — would produce the
+ * NEXT day, and every reader would be told the archive was generated a day later than it
+ * was. §7's rule is day precision, which is only a privacy property if the day is right.
+ */
+
+Deno.test("R2 — the manifest's generated_on is the UTC day, not the local one", async () => {
+  const lateEvening = new Date("2026-08-19T23:30:00.000Z");
+  const d = deps();
+  d.now = () => lateEvening;
+
+  await publish(d);
+  const manifest = JSON.parse(d.sink.written.get("manifest.json")!.body);
+
+  assertEquals(manifest.generated_on, "2026-08-19",
+    "generated_on rolled to the next day — the publisher is formatting in local time");
+  // Day precision, not a truncated timestamp: §7 says "never expose exact submission times
+  // publicly", and a string that still carries a T is a string somebody will parse back.
+  assert(/^\d{4}-\d{2}-\d{2}$/.test(manifest.generated_on),
+    `generated_on is not a bare date: ${manifest.generated_on}`);
+});

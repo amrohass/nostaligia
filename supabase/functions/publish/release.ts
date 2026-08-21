@@ -347,9 +347,17 @@ export async function publish(deps: Deps): Promise<PublishOutcome> {
     //     build is never visible" is about the archive the manifest names, and these are not
     //     in it.
     //   · deletions come first. Removing a page is never harmful and a post that stopped
-    //     being publishable — withdrawn, rejected after approval, edited past its approval
-    //     hash — must not keep serving its full text at a root URL. Takedown does not wait
-    //     for this (§8): it deletes the page itself, in the same request as the bytes.
+    //     being publishable — withdrawn, rejected after approval — must not keep serving
+    //     its full text at a root URL. Takedown does not wait for this (§8): it deletes
+    //     the page itself, in the same request as the bytes.
+    //
+    //     One case is NOT in that list and is worth naming: a row §5's hash check refused.
+    //     It is still `status = 'approved'`, so unpublishable_post_ids does not return it,
+    //     and its page survives from the last release that did include it. That page shows
+    //     the content as APPROVED, not the altered version — the alteration is exactly why
+    //     the row was refused — so it is stale rather than a disclosure. It is also
+    //     reported: `rejectedHashes` names every such row in the outcome, because §5's
+    //     point is that somebody hears about it rather than being quietly protected.
     //   · a failure here does NOT fail the release. The archive is correct without a
     //     prerendered page; the SPA renders the same item from the same shard. Holding the
     //     pointer hostage to a preview card would be the wrong thing to be strict about.

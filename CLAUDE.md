@@ -90,7 +90,9 @@ after first paint. Client filters against a short-TTL `redactions.json`.
 - **Amended 21 Aug 2026 — one deployment requirement, not yet provisionable.** The site
   origin must route `/item/*` to the R2 `public` bucket, or a shared link falls through
   `site/_redirects` to the SPA shell and renders correctly for a browser while carrying no
-  OG tags for a crawler. That is a Cloudflare route, not a code change, and it cannot be
+  OG tags for a crawler. Once that route exists, a link to an item the archive no longer
+  has answers 404 from R2 rather than reaching the SPA — which is the correct answer for a
+  takedown and is why the page is deleted rather than replaced with a tombstone. That is a Cloudflare route, not a code change, and it cannot be
   made until the production host exists. The publisher also needs `SITE_ORIGIN` in its
   environment — `env("SITE_ORIGIN")` throws rather than defaulting, because a preview card
   that resolves to the wrong host is worse than one that fails loudly. It lives in

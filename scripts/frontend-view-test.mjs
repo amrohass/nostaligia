@@ -178,8 +178,18 @@ console.log('# §6 — no string becomes markup');
   const ui = read('site/assets/js/ui.js');
   ok(/function bdi\(/.test(ui) && /createElement\('bdi'\)/.test(ui),
      'ui.js builds a real <bdi> element (§6, the render half of the bidi rule)');
+  /* A FLOOR on call sites, and it is a smell detector rather than a proof — said plainly,
+     because an assertion that reads like a guarantee and is not one is worse than none.
+     What it catches is wrapping removed wholesale in a refactor; what it cannot catch is
+     one title that quietly stopped being wrapped.
+
+     Proving the second needs a rendered DOM, and public.js is an IIFE with nothing
+     exported to render from. Adding an export purely for a test would put a seam in the
+     shipped file to make the test easier, which is the wrong trade. The behavioural half
+     is the assertion above: bdi() really does build a <bdi> element. */
   const bdiUses = [...read('site/assets/js/public.js').matchAll(/\bbdi\(/g)].length;
-  ok(bdiUses >= 15, `public.js renders user strings through bdi() in ${bdiUses} places`);
+  ok(bdiUses >= 15,
+     `public.js routes user strings through bdi() in ${bdiUses} places (a floor, not a proof)`);
 }
 
 /* ── 3 · the shell and the prerendered page load the same modules ─────────── */

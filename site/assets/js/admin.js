@@ -515,9 +515,13 @@
                   // Latin digits: the SLA chip is set in Inter and reads left-to-right.
                   el('span.sla' + slaClass(item.hoursLeft), { text: item.hoursLeft + 'h' })
                 ]),
+                /* `pick(item.by)` sat between these two and mapRow has never had a value
+                   for it — 0015 does not grant `created_by` on posts to any browser role,
+                   so the queue query cannot ask who submitted an item. The result was a
+                   double separator around nothing. Dropped rather than filled: the honest
+                   fix needs posts_full(), which is a change to M1's screen. */
                 el('div.queue-item__sub', {
-                  text: t('kind.' + item.kind) + ' · ' + pick(item.by) +
-                        ' · ' + t('time.ago', { n: num(item.arrivedHours) })
+                  text: t('kind.' + item.kind) + ' · ' + t('time.ago', { n: num(item.arrivedHours) })
                 })
               ]);
             })
@@ -588,16 +592,28 @@
               }).concat([el('button.tag.tag--add', { type: 'button', text: t('q.addTag') })]))
             ])
           ]),
+          /* This block used to show a contributor: an avatar, a name, and
+             "Member since {year} · {n} published". None of those values has ever existed.
+             mapRow leaves `by`, `byInitial`, `memberSince` and `published` unset — they
+             were prototype fields, and 0015 grants no browser role `created_by` on posts,
+             so the queue query cannot learn who submitted an item at all. What rendered
+             was an empty name over the literal text "Member since undefined · undefined
+             published", on the screen a moderator uses to decide.
+
+             What replaces it is the two fields §7 actually says a reviewer has to read,
+             which mapRow has been extracting since M1 and nothing displayed: "a
+             contributor granting a license they do not hold is how heritage archives
+             acquire liability". The publish button already refuses without them
+             (posts_approved_has_rights); this is what lets a moderator judge whether the
+             ones that ARE there mean anything. */
           el('div.contributor', null, [
-            el('div.contributor__row', null, [
-              el('div.contributor__avatar', { style: '--p1:#A98D66', text: pick(item.byInitial) }),
-              el('div', null, [
-                el('div.contributor__name', { text: pick(item.by) }),
-                el('div.contributor__meta', {
-                  text: (I18N.lang === 'ar' ? 'عضو منذ ' : 'Member since ') + I18N.year(item.memberSince) +
-                        ' · ' + num(item.published) + (I18N.lang === 'ar' ? ' مساهمات منشورة' : ' published')
-                })
-              ])
+            el('div.detail__field', null, [
+              el('span.detail__key', { text: t('share.fLicense') }),
+              el('span.detail__value', { text: item.license || t('q.rightsMissing') })
+            ]),
+            el('div.detail__field', null, [
+              el('span.detail__key', { text: t('share.fProvenance') }),
+              el('span.detail__value', null, bdi(item.provenance || t('q.rightsMissing')))
             ]),
             el('div.contributor__consent', { text: t('q.consent') })
           ]),

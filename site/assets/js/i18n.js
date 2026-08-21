@@ -277,8 +277,14 @@
     'decade.1970': { ar: 'السبعينيات', en: '1970s' },
     'decade.1980': { ar: 'الثمانينيات', en: '1980s' },
     'decade.1990': { ar: 'التسعينيات', en: '1990s' },
-    'decade.2000': { ar: 'الألفان',     en: '2000s' },
-    'decade.2010': { ar: 'العشرينيات',  en: '2010s' },
+    'decade.2000': { ar: 'الألفان',        en: '2000s' },
+    /* ٢٠١٠–٢٠١٩ rather than a name, and this is the honest answer rather than a
+       placeholder. Arabic has settled names for the decades of a century — الخمسينيات
+       through التسعينيات — and none for the first two of a new one: العشرينيات is the
+       TWENTIES, which is 2020, and this key carried it until M3. A wrong label on a slider
+       that filters an archive by era files a photograph under the wrong decade in the
+       reader's head, which is the one error an archive cannot correct later. */
+    'decade.2010': { ar: '٢٠١٠–٢٠١٩',      en: '2010s' },
 
     // ── Admin: rail & shared ────────────────────────────────
     'admin.overview': { ar: 'نظرة عامة',       en: 'Overview' },
@@ -528,7 +534,7 @@
     'map.precision.hidden':  { ar: 'الموقع مخفيّ', en: 'Location hidden' },
 
     'events.empty': { ar: 'لا فعاليات منشورة بعد.', en: 'No events published yet.' },
-    'decade.2020':  { ar: 'العشرينيات', en: '2020s' },
+    'decade.2020':  { ar: 'العشرينيات', en: '2020s' },   // and THIS is the twenties
 
     // ── Admin: overview (M3) ────────────────────────────────
     'ov.decadesCovered': { ar: 'العقود المغطّاة', en: 'Decades covered' },

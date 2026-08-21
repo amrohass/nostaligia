@@ -22,8 +22,8 @@
 begin;
 create extension if not exists pgtap;
 
--- 4 comments in shards · 4 profiles · 3 item pages · 3 the signal
-select plan(14);
+-- 4 comments in shards · 5 profiles · 3 item pages · 3 the signal
+select plan(15);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-0000000000e1', 'shard-author@t.local'),
@@ -40,7 +40,13 @@ insert into public.profiles (id, handle, display_name, bio, visibility) values
   -- Everything gated. §7: "owner sees all on their own profile; others see only what is
   -- marked public" — and a shard is served to others, always.
   ('00000000-0000-0000-0000-0000000000e3', 'quiethandle', 'Quiet Author', 'a private bio',
-   '{"bio":"private","personalInfo":"private","contributions":"private","comments":"private"}');
+   '{"bio":"private","personalInfo":"private","contributions":"private","comments":"private"}'),
+  -- A profile that contributes NOTHING, and it is the whole reason assertion 8 means
+  -- anything. With only the two above, "only profiles the archive names get a shard" and
+  -- "every profile gets a shard" both produce 2, and the assertion would pass against a
+  -- function that ignored its WHERE clause entirely.
+  ('00000000-0000-0000-0000-0000000000e2', 'silenthandle', 'Silent Moderator', null,
+   '{"bio":"public","personalInfo":"public","contributions":"public","comments":"public"}');
 
 create function pg_temp.content_rev() returns bigint
 language sql stable as $fn$
@@ -140,10 +146,18 @@ select is(
 -- The set is bounded by the ARCHIVE, not by the user table: one shard per profile for tens
 -- of thousands of accounts would be tens of thousands of objects rewritten on every
 -- release, and §2's incremental diff is deferred.
+--
+-- Three profiles exist and two of them contributed, so a function that returned every row
+-- would answer 3. That difference is the assertion.
 select is(
   (select count(*)::int from jsonb_array_elements(public.publishable_profiles())),
   2,
-  'only profiles the archive actually names get a shard');
+  'only profiles the archive actually names get a shard — the silent one has none');
+
+select is(
+  pg_temp.profile('silenthandle'),
+  null,
+  '...and it is the contributor-less one that is absent, not an arbitrary two of three');
 
 -- ═══ 9–11 · The pages a release must take away ═══════════════
 

@@ -1401,7 +1401,7 @@
      simply does not contain what was hidden. The owner's own view comes from
      profile_view(), with their own token, and is the only place the private side exists. */
 
-  var profileCache = { key: null, data: null, own: null, mine: null };
+  var profileCache = { key: null, loaded: false, data: null, own: null, mine: null };
 
   function renderProfile() {
     var own = isOwnProfileRoute();
@@ -1410,8 +1410,14 @@
 
     var data = profileCache.data;
     if (!data) {
+      /* Three states again, and they are not interchangeable: nothing asked yet, asked and
+         still waiting, asked and there is no such profile. `key` is null before a request
+         starts — including while /me waits for its own handle — and `loaded` distinguishes
+         the last two. Showing "not found" during a fetch tells a member their profile does
+         not exist, which for their own profile is alarming and wrong. */
+      var pending = profileCache.key === null || !profileCache.loaded;
       return el('div.page-head', null, [
-        el('h1.page-head__title', { text: t(profileCache.key === null ? 'q.loading' : 'profile.notFound') }),
+        el('h1.page-head__title', { text: t(pending ? 'q.loading' : 'profile.notFound') }),
         el('p.page-head__blurb', null, el('a', { href: '/', text: t('viewer.back') }))
       ]);
     }
@@ -1567,10 +1573,29 @@
   function loadProfile() {
     var own = isOwnProfileRoute();
     var handle = own ? (state.account && state.account.handle) : routedHandle();
+
+    /* /me needs a handle to ask for, and the handle is not in the JWT — §7 keeps it in
+       `profiles`, so it arrives from a request that AUTH.restore() starts and that the
+       first paint does not wait for. Landing on /me directly therefore reaches here with
+       `handle` null.
+
+       Without this branch that produced a permanent wrong answer rather than a slow right
+       one: profile_view('') matches nobody, the page renders "profile not found", and
+       profileCache.key has already been written, so nothing ever asks again. The member
+       sees their own profile missing until they reload.
+
+       So: fetch the handle, re-render, and DO NOT cache anything in the meantime. */
+    if (own && !handle) {
+      loadOwnHandle().then(function () {
+        if (isOwnProfileRoute() && state.account && state.account.handle) render();
+      });
+      return Promise.resolve();
+    }
+
     var key = own ? 'me:' + (state.account ? state.account.id : '') : 'u:' + handle;
     if (profileCache.key === key) return Promise.resolve();
 
-    profileCache = { key: key, data: null, own: null, mine: null };
+    profileCache = { key: key, loaded: false, data: null, own: null, mine: null };
 
     /* Two sources, and the split is §7's. The shard is the public projection everybody
        gets; profile_view() is the owner's (and a moderator's) view of the private half. A
@@ -1584,10 +1609,11 @@
 
     return ownRow.then(function (row) {
       profileCache.own = row;
-      var realHandle = handle || (row && row.handle);
-      if (!realHandle) return null;
-      profileCache.key = own ? key : 'u:' + realHandle;
-      return ARCHIVE.profile(realHandle);
+      /* `handle` is non-null by here — the /me branch above returned early without one —
+         so this only falls back for a /u/ route with no segment, which resolves to no
+         profile and renders "not found". */
+      if (!handle) return null;
+      return ARCHIVE.profile(handle);
     }).then(function (shard) {
       profileCache.data = shard || fallbackProfile(profileCache.own);
       if (!own || !state.signedIn) return null;
@@ -1597,7 +1623,13 @@
           return state.account && r.created_by === state.account.id;
         });
       }, function () { profileCache.mine = []; });
-    }).then(function () { render(); }, function () { render(); });
+    }).then(function () {
+      profileCache.loaded = true;
+      render();
+    }, function () {
+      profileCache.loaded = true;
+      render();
+    });
   }
 
   /* A profile with nothing published has no shard — publishable_profiles() is bounded by

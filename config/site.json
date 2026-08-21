@@ -100,7 +100,13 @@
     "it is what site/_headers already writes cache rules for. Either way it is ONE token here",
     "rather than a hostname in the front end.",
     "",
-    "connect-src must admit whatever this resolves to. @cdn is already in the list."
+    "connect-src must admit whatever this resolves to. @cdn is already in the list.",
+    "",
+    "IF YOU SET THIS TO `self`, the release tree has to be IN the Pages output directory.",
+    "site/_redirects ends with `/*  /index.html  200`, and Pages serves a real file before it",
+    "consults that rule -- so a manifest.json that is not there comes back as the SPA shell",
+    "with a 200, and archive.js reports a malformed archive rather than a missing one. The",
+    "publisher writes to R2, so `self` means something has to sync it across."
   ],
   "read_path": {
     "base": "@cdn"

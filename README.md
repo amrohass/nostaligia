@@ -21,10 +21,41 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | **M0** | Pages + CSP/HSTS · Supabase EU · schema + PostGIS + EDTF · RLS · denial matrix in CI · gitleaks | **complete** — 8/8 items, exit criteria met, CSP/HSTS verified live |
 | M1 | Auth · `request-upload` · processing · approval lifecycle · moderation queue | **built, 9/9 pieces** — every exit criterion met against a local stack; two of them wait on a deployment to be met for real (see below) |
 | M2 | Sharding · versioned releases · single-writer lock · takedown | **built** — all six pieces, with the publish trigger moved from the clock to the moderation action (CLAUDE.md §2, 20 Aug) |
-| M3 | Front end on shards · History API · prerendered item pages · XSS/bidi sweep | not started |
+| M3 | Front end on shards · History API · prerendered item pages · `content_blocks` · profiles · XSS/bidi sweep | **built** — all eight pieces; the WhatsApp preview is generated and asserted but not yet crawlable (see below) |
 | M4 | PostGIS geo · decade slider · PMTiles basemap | not started |
 | M5 | Fuzzing · consent/licence · seed importer · export · tested restore | not started |
 | M6 | Font subsetting · RTL pass · monitoring · Lighthouse | not started |
+
+### M3 progress
+
+| # | Piece | State |
+|---|---|---|
+| 1 | The read path — `manifest.json` → release → feed, item, decade, geo, profile, content, index; zero database reads for a signed-out visitor | **done**, `archive.js` + 22 assertions in `frontend-view-test.mjs` |
+| 2 | History API routing — real per-item URLs, `_redirects`, and a one-time translation of links already shared as `#/m/{id}` | **done** |
+| 3 | Prerendered `item/{id}/index.html` with OG and Twitter tags, deleted by takedown and by the next publish when a post stops being publishable | **done**, 14 unit tests + 8 in the lifecycle harness |
+| 4 | `content_blocks` drive every editorial string, with an admin-only editor and a draft/publish split | **done**, 13 pgTAP assertions |
+| 5 | Profiles + visibility — the public projection in a shard, the owner's own view through `profile_view()` | **done**, 4 pgTAP + 4 shard-builder assertions |
+| 6 | Engagement writes — likes, saves, comments and reports through PostgREST under 0019/0020, `store.js` deleted | **done** |
+| 7 | XSS + bidi sweep — `el()` has no `html:` prop, the icon set returns SVG nodes, user strings render in `<bdi>`, and 0045 strips the override controls on ingest | **done**, 14 pgTAP + a sweep over the served tree |
+| 8 | A member can see what happened to their own upload | **done** — the state, deliberately not the timing (§6 holds `expect_by`) |
+
+**M3's exit criteria.** "Zero `innerHTML` on user content" is asserted over the whole
+served tree, with a control proving the patterns fire. "Budget met" is measured on every
+push — 72.3 KiB brotli against §9's 150 KB, with the fonts M6 owns excluded and the script
+saying so. "An item URL pastes into WhatsApp with a real preview" is the one that is
+**generated and asserted rather than met**: the page is built, carries the tags, and lands
+in the bucket (the lifecycle harness checks all three against MinIO), but a crawler has to
+fetch it from a real domain, and the production host does not exist yet. It additionally
+needs one routing rule — `/item/*` on the site origin served from the R2 `public` bucket —
+which is a Cloudflare route rather than a code change and is recorded in CLAUDE.md §2.
+
+**What M3 removed.** Leaflet and the public OpenStreetMap tile endpoint, which §2 forbids
+outright and which the CSP has blocked since M0 — so the map rendered a blank panel on any
+deployment that actually served the policy. `/map` now reads the geo shards, filtered by
+decade, which is M4's own stated fallback; M4 adds the PMTiles basemap on top of it. Two
+`known_violations` entries went with them. `store.js` and every invented figure in the
+dashboard went too: a screen that tells a moderator "142 new members" is not a placeholder,
+it is a screen lying to the person using it to make decisions.
 
 ### M2 progress
 
@@ -281,11 +312,11 @@ shrinks is a green tick over nothing.
 | job | what it runs |
 |---|---|
 | `secrets` | gitleaks over the **full history** (`fetch-depth: 0`), the forbidden-path guard, and a rule self-test with controls |
-| `frontend` | the generated `_headers`/`config.js` match `config/site.json`; CSP survivability and the external-origin ratchet; auth, upload refusals and the anon-key guard |
-| `functions` | the Edge Functions' gate-1 refusals; the presigner verified against a real S3 implementation |
+| `frontend` | the generated `_headers`/`_redirects`/`config.js` match `config/site.json`; CSP survivability and the external-origin ratchet; auth, upload refusals and the anon-key guard; the read path, the XSS sweep and the two duplicated asset lists; §9's brotli budget |
+| `functions` | the Edge Functions' gate-1 refusals; the shard builder and the prerendered page; the presigner verified against a real S3 implementation |
 | `worker` | worker units; the image builds and type-checks; `R2Store` against MinIO; a real 3840×2160 ladder **inside the deployed image**; throughput at two source lengths; §11 gate 2 (GPS EXIF) |
 | `database` | every migration on a fresh database, then again (determinism), the harness probe, the pgTAP suite gated on counts, and two publishers contending for one lease |
-| `lifecycle` | the write path end to end against a real S3 server and the worker container, then a real publish and a real takedown against the same store — the only thing that executes `endpoint: r2Endpoint()` at any of its four call sites |
+| `lifecycle` | the write path end to end against a real S3 server and the worker container, then a real publish and a real takedown against the same store, including the prerendered item page landing and not surviving the takedown — the only thing that executes `endpoint: r2Endpoint()` at any of its four call sites |
 
 `npx supabase test db` runs the database suite locally. CI gates on `pg_prove`'s TAP
 parsing, never a psql exit code: **psql exits 0 even when a pgTAP assertion fails.**
@@ -316,6 +347,10 @@ parsing, never a psql exit code: **psql exits 0 even when a pgTAP assertion fail
 | `21_publish_rollback` | rollback, and the hold that outlives the next tick |
 | `22_rpc_ownership` | no definer function left executable by `PUBLIC` |
 | `23_publish_on_approval` | the moderation action dispatches a publish, once per transaction, and a change landing mid-build is followed up rather than stranded |
+| `24_content_blocks` | only `published` reaches a shard; publishing moves the content revision and drafting does not; site copy stays admin-only |
+| `25_bidi` | §6's eight override characters never reach storage, the three MARKS survive, and the strip runs before every other trigger on `posts` |
+| `26_shard_sources` | comment bodies in shards without their author's id; profile visibility applied at publish time; the bound on which posts must lose a prerendered page |
+| `27_upload_decade` | a decade expands into §3's EDTF-lite range, a bad one is refused rather than rounded, and no refusal charges the quota |
 
 [supabase/harness_probe.sql](supabase/harness_probe.sql) is run by CI *before* the suite
 and is not part of it — it contains a deliberate failure. It proves the harness can
@@ -329,6 +364,17 @@ a harness that stops early records zero failures and looks identical to one that
 everything; and `worker/scripts/exif-gate.ts` re-runs its own inspection against a file it
 knows is dirty.
 
+Four Node scripts cover the front end, none of which needs a browser — they evaluate each
+module against a stub `window` and then poke it, because §9's no-build-step rule applies to
+the tests too or the tests become the build step:
+
+| script | what it pins |
+|---|---|
+| `frontend-csp-test.mjs` | `el()` writes styles through CSSOM, not the style attribute; the set of third-party origins is **exactly** the one `config/site.json` declares, in both directions |
+| `frontend-auth-test.mjs` | the access token never reaches storage; every Edge Function refusal has a message; a `PATCH` with no `select=` is refused before the network |
+| `frontend-view-test.mjs` | every message key resolves in **both** languages; nothing in the served tree parses a string as HTML; the SPA's script and stylesheet lists match the prerendered pages'; the redaction filter filters |
+| `frontend-budget.mjs` | §9's 150 KB brotli ceiling, measured per file and failed on |
+
 ### Requirements carried into later milestones
 
 Decisions taken during M0 that must be honoured elsewhere. Recorded here because the
@@ -337,7 +383,7 @@ reasoning is M0's and the implementation is not.
 | # | Requirement | Milestone |
 |---|---|---|
 | R1 | **The moderation queue must visually flag any submission with `location_precision = 'exact'`**, so publishing a precise coordinate is reviewed as a decision rather than accepted as a default. The schema deliberately does *not* gate this — `exact` is legitimate for a public landmark — so the control is editorial, not structural. | **done in M1** — a labelled chip on the queue row *and* the precision spelled out in the inspector; `15_moderation_queue` pins the data contract and the premise that `exact` publishes the true point unfuzzed |
-| R2 | The day-precision timestamp assertion in `stage0_incremental.ps1` covers the generated column only. Postgres already forces that case (`created_at::date` is STABLE and would be rejected at DDL time). The place a local-time bug can actually occur is the **publish-time** day-precision path, which has no such guard — re-point the assertion there. | M2/M3 |
+| R2 | The day-precision timestamp assertion in `stage0_incremental.ps1` covers the generated column only. Postgres already forces that case (`created_at::date` is STABLE and would be rejected at DDL time). The place a local-time bug can actually occur is the **publish-time** day-precision path, which has no such guard — re-point the assertion there. | **done in M3** — `release.test.ts` publishes with the clock at 23:30 UTC, which is the next day in Ramallah, and asserts `manifest.generated_on` is still the 19th. A formatter reading the local calendar fails it; the old assertion could not. |
 | R3 | CI must gate on `pg_prove`'s TAP parsing, never on a psql exit code: psql exits 0 even when a pgTAP assertion fails. | M0 item 5 |
 
 **Unapplied** means the SQL is written and reviewed but has not been run against any
@@ -717,14 +763,24 @@ npx serve site
 
 ## The front end
 
-Vanilla JS, three globals loaded in order: `I18N` → `DATA` → `Store` → `UI` → app. Two
-shells rather than 23 pages — the design's screens are the same chrome with different
-content.
+Vanilla JS, loaded in order: `CONFIG` → `I18N` → `DATA` → `ARCHIVE` → `UI` → `AUTH` →
+`DB` → `ENGAGE` → app. Two shells rather than 23 pages — the design's screens are the same
+chrome with different content.
 
-`assets/js/store.js` is the seam. It copies `data.js` on first run, keeps the working set
-in `localStorage`, and hands every view the same records the dashboard edits. Attaching
-the real backend means reimplementing that API and nothing else; no view touches `DATA` or
-`localStorage` directly.
+`assets/js/archive.js` is the read path and the only place that knows where the archive
+lives: `manifest.json`, then the release it names, then feed pages, item shards, decade and
+geo shards, profile projections, `content.json` and `index.json`. A signed-out visitor
+browsing the whole archive makes no database call at all (CLAUDE.md §2), which is a privacy
+property as much as a cost one — a read path with no queries has no query log to correlate
+(§7).
+
+What still talks to the database, and only for someone already signed in: `engage.js` (the
+member's own likes, saves and pending comments), `profile_view()` on their own profile, and
+`db.js` for the dashboard. All of it is engagement, which §1 gates behind sign-in anyway.
+
+`store.js` is gone. It kept memories, comments, users and page copy in `localStorage` and
+let any view write to them; §5 is unambiguous that unapproved content must be unreadable at
+the **policy** level rather than filtered by a browser that has already been handed it.
 
 ### Bilingual
 
@@ -747,16 +803,26 @@ they are listed so nobody mistakes them for the intended design.
 
 | What | Where | CLAUDE.md | Fixed in |
 |---|---|---|---|
-| Hash routing (`#/archive`, `#/m/<id>`) | `public.js`, `admin.js` | §2 History API, real per-item URLs | M3 |
-| Public OSM tile endpoint | `public.js`, `admin.js` | §2 PMTiles on R2, never OSM | M4 |
-| Leaflet + Google Fonts from CDNs | both shells | §9 self-hosted subset fonts | M6 |
+| Google Fonts from a CDN | both shells, `prerender.ts` | §9 self-hosted subset fonts | M6 — the last `known_violations` entry |
+| ~~Hash routing (`#/archive`, `#/m/<id>`)~~ | `public.js` | §2 History API, real per-item URLs | **done in M3** — `admin.js` keeps hash routing on purpose; nothing there is shared or crawled, and the reason the rule exists does not apply |
+| ~~Public OSM tile endpoint~~ | `public.js`, `admin.js` | §2 PMTiles on R2, never OSM | **removed in M3**, with Leaflet — earlier than M4, because §2 forbids it outright and the CSP already blocked it |
 | ~~Google / Apple sign-in buttons~~ | `public.js` | §2 email + password only | **removed in M1** — the marks are gone from `ui.js` too, not merely hidden |
-| `html:` prop → `innerHTML` on records | `ui.js` and 3 admin call sites | §6 every one is a defect | M3 |
+| ~~`html:` prop → `innerHTML` on records~~ | `ui.js` and 3 admin call sites | §6 every one is a defect | **done in M3** — the prop is gone from `el()` rather than left unused, and the icon set returns SVG nodes |
 | Inline `style` attributes (48 sites) | `ui.js` `el()` | §6 CSP without `unsafe-inline` | M0 item 7 |
-| Role vocabulary (contributor/editor/partner/narrator) | `data.js`, `i18n.js` | §4 exactly three roles | M3 |
-| No `handle`; "Full name" field | `store.js`, `i18n.js` | §3 handle is mandatory, not a legal name | M1 |
-| Member emails in seed and admin UI | `data.js`, `admin.js` | §7 emails are never published | M1 |
-| Client-authoritative unmoderated writes | `store.js` | §5 unapproved content unreadable at the policy level | M3 |
+| ~~Role vocabulary (contributor/editor/partner/narrator)~~ | `data.js`, `i18n.js` | §4 exactly three roles | **done in M3** — and the test derives the three from migration 0003 rather than from a list |
+| ~~No `handle`; "Full name" field~~ | `store.js`, `i18n.js` | §3 handle is mandatory, not a legal name | **done in M3** — sign-up asks for a handle and writes the profile row |
+| ~~Member emails in seed and admin UI~~ | `data.js`, `admin.js` | §7 emails are never published | **done in M3** — the seed is deleted and `profiles` has no email column to show |
+| ~~Client-authoritative unmoderated writes~~ | `store.js` | §5 unapproved content unreadable at the policy level | **done in M3** — `store.js` is deleted; a comment lands `pending` because 0014 stamps it |
+
+**Still departures, and now scheduled elsewhere.** The dashboard's places screen is
+read-only and says so: editing the gazetteer, place-name autocomplete and the drag-to-confirm
+pin are M4's. The members screen is read-only for a structural reason rather than an
+unfinished one — `user_roles` is revoked from every browser role twice over, so "manage
+users / roles" (§4) is not reachable from a page and would need an RPC with its own audit
+path and denial tests that no milestone has specified. And §6's explicit download of the
+archival master is not built: it needs a signed, rate-limited endpoint, and the button that
+used to sit in the viewer was wired to a toast, so it was removed rather than left looking
+live.
 
 ### Accepted, not scheduled
 
@@ -773,9 +839,11 @@ select * from public.audit_log where action = 'post.status.approved.self';
 is the review query. This is an acceptance, not an oversight, and not something a later
 milestone removes.
 
-Two smaller notes: `i18n.js` labels `decade.2010` as `العشرينيات` ("the twenties"), which
-is the 2020s; and the whole front end carries a single `decade` integer where the schema
-carries an EDTF-lite range.
+One smaller note survives: the front end carries a single `decade` integer where the schema
+carries an EDTF-lite range. That is now a display simplification rather than a data one —
+migration 0047 expands a contributor's chosen decade into `date_earliest`/`date_latest` with
+`date_precision = 'decade'`, so the range exists in the database and the shards carry
+`date_precision` beside the decade. Rendering "circa" and partial dates is a later pass.
 
 ### Notes on the original design doc
 
