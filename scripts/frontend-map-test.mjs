@@ -283,11 +283,14 @@ const TILE = vectorTile([
   }),
   layer({
     name: 'roads',
+    // Two values, and the feature points at the SECOND, so the key index (0) and the value
+    // index (1) differ. With one of each, `values[tags[i]]` and `values[tags[i + 1]]` are
+    // the same lookup and a decoder that confused them would pass.
     keys: ['kind'],
-    values: ['major_road'],
+    values: ['minor_road', 'major_road'],
     features: [feature({
       type: 2,
-      tags: [0, 0],
+      tags: [0, 1],
       geometry: [command(1, 1), zig(5), zig(5), command(2, 1), zig(20), zig(0)]
     })]
   }),
@@ -316,7 +319,18 @@ const TILE = vectorTile([
   ok(tile instanceof Uint8Array, 'a tile comes back as bytes');
   ok(tile.length === TILE.length, 'and it is the tile that was written, decompressed');
 
+  // A tile the archive does not hold answers null AND fetches nothing. The second half is
+  // the discriminating one: an entry covers a RUN of consecutive ids, and a lookup that
+  // returned the nearest entry without checking the run would range-request the neighbour's
+  // bytes and hand them back — a tile of the wrong place, drawn confidently.
+  const before = win._requests.length;
   eq(await archive.tile(14, 9702, 6300), null, 'a tile the archive does not hold is null, not an error');
+  eq(win._requests.length, before, '...and asks the network for nothing');
+
+  // Out of the archive's zoom range. This pins the OUTCOME only: the min/max check in
+  // tile() is an optimisation, and deleting it lands here anyway because tile ids are
+  // unique per zoom and the directory has no entry to find. Said plainly rather than left
+  // as an assertion that reads like it covers the guard.
   eq(await archive.tile(2, 1, 1), null, 'a zoom outside the archive is null');
 }
 
@@ -363,6 +377,11 @@ console.log('# pmtiles.js — the failures that must not look like an empty city
 {
   // brotli for the directories. Legal in the spec, undecodable in a browser, and the reason
   // map.js has a fallback at all — so it must be a NAMED refusal rather than a hang.
+  //
+  // What this pins is the OUTCOME, and deliberately not the branch that produces it:
+  // deleting the compression check entirely still ends here, because gunzip on brotli bytes
+  // fails and that failure carries the same key. The branch that would NOT end here is one
+  // that returned the bytes undecoded, and this catches that.
   const bytes = buildArchive({ '14/9700/6300': TILE }, { internalCompression: 3 });
   const win = mapWindow(bytes);
   const archive = win.PMTILES.archive('https://cdn.test/basemap.pmtiles');
@@ -473,7 +492,7 @@ console.log('# the map is loaded on demand, and the budget depends on that');
   const map = read('site/assets/js/map.js');
   const defaults = /var defaults = \{([\s\S]*?)\};/.exec(map);
   ok(defaults !== null, 'CONTROL: palette()’s defaults block is where this test thinks it is');
-  const outside = map.replace(defaults ? defaults[0] : '', '').match(/#[0-9A-Fa-f]{6}/g) || [];
+  const outside = map.replace(defaults ? defaults[0] : '', '').match(/#[0-9A-Fa-f]{6}/g) || [];
   ok(outside.length === 0,
      `no colour is hardcoded outside palette()’s fallbacks${outside.length ? ' — ' + outside.join(', ') : ''}`);
   // ...and the fallbacks must name every token the style asks for, or a document without a

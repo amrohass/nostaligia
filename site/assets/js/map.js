@@ -221,7 +221,15 @@
       tiles[key] = value;
       while (order.length > TILE_CACHE) {
         var oldest = order.shift();
-        if (tiles[oldest] !== 'pending') delete tiles[oldest];
+        if (tiles[oldest] === 'pending') {
+          // Moved to the back rather than dropped. Dropping it would leave the entry in
+          // `tiles` and out of `order` — never evicted, and never re-added when it
+          // resolved, because remember() only pushes a key it has not seen. A slow leak of
+          // whole decoded tiles, on the device least able to afford it.
+          order.push(oldest);
+          break;
+        }
+        delete tiles[oldest];
       }
     }
 
@@ -457,6 +465,11 @@
     var last = null;
     var pinchStart = null;
     var moved = 0;
+    /* Whether this gesture was ever a pinch. `moved` cannot answer that: the two-pointer
+       branch returns before touching it, so a pinch-zoom ends with moved at 0 and would
+       read as a clean tap — which in 'pick' mode moves the pin to wherever the last finger
+       happened to be. */
+    var pinched = false;
 
     function localPoint(event) {
       var rect = canvas.getBoundingClientRect();
@@ -475,11 +488,13 @@
       moved = 0;
 
       var ids = Object.keys(pointers);
+      if (ids.length === 1) pinched = false;
       if (ids.length === 2) {
         pinchStart = {
           distance: pointerDistance(ids),
           zoom: view.zoom
         };
+        pinched = true;
         dragging = null;
         return;
       }
@@ -529,12 +544,21 @@
 
     function endPointer(event) {
       delete pointers[event.pointerId];
-      if (Object.keys(pointers).length < 2) pinchStart = null;
-      if (Object.keys(pointers).length === 0) {
+      var left = Object.keys(pointers);
+      if (left.length < 2) pinchStart = null;
+      if (left.length === 1) {
+        // One finger of a pinch lifted. Without this the remaining finger controls nothing
+        // until it is lifted too — `dragging` was cleared when the pinch began — so the map
+        // goes dead under a hand that is still on it.
+        last = pointers[left[0]];
+        dragging = 'map';
+      }
+      if (left.length === 0) {
         // A tap, not a drag. The threshold is in CSS pixels and generous, because a finger
         // moves a few of them on every tap and a map that answers only perfectly still taps
         // feels broken rather than precise.
-        if (moved < 8) tap(localPoint(event));
+        if (moved < 8 && !pinched) tap(localPoint(event));
+        pinched = false;
         dragging = null;
         last = null;
       }

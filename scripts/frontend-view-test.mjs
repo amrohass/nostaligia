@@ -310,6 +310,13 @@ const FILES = {
                                           'page.donate.title': { ar: 'ادعم', en: 'Support' },
                                           'page.donate.body': { ar: 'نصّ', en: 'text' } } },
   [`${RELEASE}index.json`]: { pages: 2, total: 3, decades: [1960, 1990], cells: ['sv8yz'] },
+  [`${RELEASE}places.json`]: {
+    total: 2,
+    items: [
+      { id: 'p-1', name_ar: 'المنارة', name_en: 'Al-Manara', lat: 31.8996, lon: 35.2042 },
+      { id: 'p-2', name_ar: 'البلدة القديمة', name_en: 'Old Town', lat: 31.902, lon: 35.201 }
+    ]
+  },
   [`${RELEASE}profile/nour.json`]: {
     handle: 'nour', display_name: 'Nour', label: 'member', bio: null, member_since: 2025,
     contributions: [{ id: 'keep-1' }, { id: 'gone-1' }],
@@ -413,6 +420,32 @@ const FILES = {
   ok(win.ARCHIVE.rendition([], false) === null, 'and an empty ladder is null, not a guess');
 }
 
+
+/* ── M4 · the gazetteer the map draws its text from ───────────────────────── */
+
+{
+  const win = archiveWindow(FILES);
+  const A = win.ARCHIVE;
+  await A.ready();
+
+  const places = await A.places();
+  ok(places.length === 2 && places[0].name_ar === 'المنارة',
+     'places.json comes back with both names and a point');
+
+  // M4's basemap is rendered with its label layers deliberately not drawn, so this shard is
+  // the map's ENTIRE text. An empty answer here is a map of a city with no names on it,
+  // which reads as a styling choice rather than as a fetch that failed.
+  ok(typeof places[0].lat === 'number' && typeof places[0].lon === 'number',
+     '...and coordinates as numbers, which is what the projection takes');
+
+  // A release built before the gazetteer existed simply has none, and an empty map is the
+  // correct rendering of that — not an error that takes /map down to the list.
+  const empty = archiveWindow(Object.fromEntries(
+    Object.entries(FILES).filter(([k]) => !k.endsWith('places.json'))));
+  await empty.ARCHIVE.ready();
+  ok((await empty.ARCHIVE.places()).length === 0,
+     'a release with no places.json is an empty gazetteer, not a failure');
+}
 
 /* ── 5 · the shells' modules actually evaluate ────────────────────────────── */
 
