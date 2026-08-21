@@ -57,6 +57,11 @@ values
    'CC BY-SA 4.0','album','00000000-0000-0000-0000-0000000000a2',now(),
    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
 
+-- 0043 SEEDS this table with the archive's real copy — including hero.line — so a fixture
+-- that shares a key with it collides on insert, and a fixture that merely READS one makes
+-- the assertion depend on prose an editor may change. Cleared first, inside the
+-- transaction, so this file describes a state it built itself.
+delete from public.content_blocks;
 insert into public.content_blocks (key, locale, draft, published) values
   ('hero.line','ar','مسودة غير منشورة','هنا تُروى رام الله');
 

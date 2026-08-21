@@ -277,7 +277,7 @@ for (const [rel, content] of outputs) {
 }
 
 if (check && drifted) process.exit(1);
-if (check) console.log('\nboth generated files match config/site.json');
+if (check) console.log(`\nall ${outputs.length} generated files match config/site.json`);
 
 // Not a generated file, so not drift-checkable: the hosted secret is outside this
 // repository and nothing here can read it back. Printing it on every run is the whole

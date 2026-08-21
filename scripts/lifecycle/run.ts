@@ -67,6 +67,12 @@
  *  · The moderation queue unable to approve ANYTHING: `Prefer: return=representation` with
  *    no select= is a SELECT of `*`, which migration 0015 revoked. pgTAP asserts the same
  *    approval in SQL, where there is no representation to select, so it passed.
+ *  · M3's prerendered item page surviving a takedown. request_takedown returns media_assets
+ *    rows and knows nothing about item/{id}/index.html, so the derivatives and the archival
+ *    master were deleted and the whole item stayed legible — as HTML, at the exact URL
+ *    people had been sharing. Every unit test on both sides passed: takedown.test.ts used a
+ *    fake sink that was never given a page to hold, and release.test.ts wrote pages into a
+ *    fake that takedown never saw.
  *
  * The pattern is worth naming: every one is a seam between two components that are each
  * correct, and four of the five are about WHICH ADDRESS or WHICH CREDENTIAL, which is
@@ -95,6 +101,11 @@ const R2_SECRET_ACCESS_KEY = env("R2_SECRET_ACCESS_KEY");
 /* The publisher's own door (M2). Not the service key — see publish/handler.ts: this opens
    exactly one endpoint, behind a lease that already refuses a second concurrent publish. */
 const PUBLISH_SECRET = env("PUBLISH_SECRET");
+/* What the publisher was told the site is. It writes this into every prerendered page as
+   og:url and as the canonical link, so the harness has to be told the same thing — and
+   telling it here rather than hardcoding the string is what makes a mismatch between the
+   function environment and this run a legible failure instead of a puzzling one. */
+const SITE_ORIGIN = env("SITE_ORIGIN", "https://lifecycle.test");
 
 const checks = new Checks();
 
@@ -276,6 +287,12 @@ async function publicObject(key: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** True when the object is in the public bucket. Cheaper than reading it, and the only
+    question the page assertions below need answered after a takedown. */
+async function publicExists(key: string): Promise<boolean> {
+  return (await publicObject(key)) !== null;
 }
 
 /** Waits for the worker to finish. Bounded — a hang must fail, not stall the run. */
@@ -582,6 +599,57 @@ ck(feed !== null && feed.includes(postId), "the published feed does not contain 
 ck(feed === null || !feed.includes(GPS_CAPTION), "the published feed carries the master's EXIF caption");
 ck(feed === null || !feed.includes(member.sub), "the published feed carries the uploader's user id (§7)");
 
+/* ── 7b · §9's prerendered page, in the bucket ──────────────
+ *
+ * THE seam this section exists for, and it has the same shape as every other one this
+ * harness has caught: two components that are each correct on their own.
+ *
+ * release.ts writes item/{id}/index.html at the ROOT of the bucket rather than inside
+ * /v/{ts}/ — a permalink cannot require resolving a pointer first — and prerender.test.ts
+ * proves the bytes are right. What no unit test can reach is whether an S3 server accepts
+ * an object with that key and that content type, at a path with a slash in the middle,
+ * from the same signer everything else uses.
+ *
+ * NOT §10's M3 exit criterion. "An item URL pastes into WhatsApp with a real preview" needs
+ * a crawler fetching a real domain; this is MinIO on a docker network with no DNS name and
+ * no route from the public internet. What is asserted here is that the page is generated,
+ * that it lands, and that it carries the tags — which is the part that can be got wrong
+ * silently.
+ */
+
+const pageKey = `item/${postId}/index.html`;
+const pageBody = await publicObject(pageKey);
+ck(pageBody !== null, `no prerendered page at ${pageKey} — a shared link would 404`);
+
+if (pageBody !== null) {
+  // The card itself. og:url absolute, because a crawler resolves nothing: it fetches the
+  // URL it was given and reads the tags verbatim.
+  ck(
+    pageBody.includes(`property="og:url" content="${SITE_ORIGIN}/item/${postId}"`),
+    "the page carries no absolute og:url — the preview would resolve to no host",
+  );
+  ck(pageBody.includes('property="og:title"'), "the page carries no og:title");
+  ck(
+    pageBody.includes("<!DOCTYPE html>") && pageBody.includes('<main id="view">'),
+    "the page is not the SPA shell — a reader with JavaScript would get nothing to hydrate",
+  );
+
+  // §7, on these bytes as well as on the shard. The prerenderer takes publicPost()'s output
+  // so it CANNOT reach a withheld field — this asserts that the gate is actually in the
+  // path rather than that the fields happen to be unused.
+  ck(!pageBody.includes(GPS_CAPTION), "the prerendered page carries the master's EXIF caption");
+  ck(!pageBody.includes(member.sub), "the prerendered page carries the uploader's user id (§7)");
+
+  // CDN_ORIGIN is deliberately unset in this environment, so there is no absolute image URL
+  // to emit. The honest degradation is a small card, and asserting it here is what stops a
+  // future change guessing an image host and publishing thousands of cached pages pointing
+  // at a URL that has never existed.
+  ck(
+    !pageBody.includes("og:image") && pageBody.includes('content="summary"'),
+    "with no CDN configured the card must step down to summary rather than claim an image",
+  );
+}
+
 // §8: "delete/rename the object in R2 immediately … the next scheduled publish removes it
 // from the shards as a formality — the bytes are already gone." Asserted as bytes.
 const thumb = (await mediaAssets(postId)).find((a) => a.role === "thumb");
@@ -610,6 +678,15 @@ ck(
 );
 ck(await publicObject(thumbPath) === null, "the derivative is STILL in the bucket after a takedown (§8)");
 
+// The page, and this is the assertion the section header names. Before takedown.ts deleted
+// it, everything above this line passed while the item's title, story, byline and
+// photograph stayed readable at a root URL — which is the one place a stranger who was sent
+// a link actually goes.
+ck(
+  !(await publicExists(pageKey)),
+  `the prerendered page is STILL served after a takedown: ${pageKey}`,
+);
+
 // §8 step 3. The list is what a client filters against between the takedown and the next
 // release, so it is the only thing standing between a cached shard and a card for content
 // that is gone.
@@ -619,8 +696,8 @@ ck(redactions !== null && redactions.includes(postId), "redactions.json does not
 
 // Printed BEFORE report(), which exits. CI gates on this number: a run that stops early
 // has zero failures and looks identical to a run that verified everything, which is the
-// hole a count closes. 20 sites, two of them inside the per-derivative loop, so the real
-// figure is 18 plus twice the derivative count.
+// hole a count closes. M3 added seven page assertions and one after the takedown, so the
+// figure is now 26 fixed sites plus twice the derivative count.
 console.log(`\nLIFECYCLE checks=${executed} failures=${checks.failures.length}`);
 
 checks.report(

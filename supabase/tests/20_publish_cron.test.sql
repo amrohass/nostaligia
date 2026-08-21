@@ -412,6 +412,12 @@ select ok(
 --
 -- So the set is derived from the function bodies rather than written down. Adding a table
 -- to the publisher's read side fails here, by name, until it gets a trigger.
+--
+-- The FUNCTION list below is the part that has to be maintained by hand, and M3 extended it:
+-- published_content_blocks (0043) and publishable_profiles (0044) build shard CONTENT and
+-- belong here. unpublishable_post_ids (0046) deliberately does NOT — it drives deletions of
+-- prerendered pages and nothing it returns is written anywhere, and it reads `posts`, which
+-- already has triggers for every transition that lands a row in it.
 
 select set_eq(
   $q$
@@ -428,7 +434,8 @@ select set_eq(
     join pg_class c on c.relname = m[1] and c.relkind = 'r'
     join pg_namespace cn on cn.oid = c.relnamespace and cn.nspname = 'public'
     where n.nspname = 'public'
-      and p.proname in ('publishable_posts', 'redacted_post_ids')
+      and p.proname in ('publishable_posts', 'redacted_post_ids',
+                        'published_content_blocks', 'publishable_profiles')
   $q$,
   'every table the publisher reads has a trigger that says when it changed'
 );

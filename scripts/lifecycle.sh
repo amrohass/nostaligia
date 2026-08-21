@@ -25,6 +25,12 @@
 #   MEDIA_WORKER_URL            default http://127.0.0.1:8080   (checked, not started)
 #   PUBLISH_SECRET              required — the publisher's own door, and it must match the
 #                               value the Edge Functions were started with
+#   SITE_ORIGIN                 default https://lifecycle.test — and it must ALSO match the
+#                               value the Edge Functions were started with. The publisher
+#                               writes it into every prerendered item page as og:url, and
+#                               the harness asserts that URL, so a mismatch fails as "the
+#                               page carries no absolute og:url" rather than as anything
+#                               resembling its real cause.
 #
 # The Edge Functions must be served with R2_ENDPOINT set to the same value, or check 1
 # fails and says so by name. That is deliberate: a harness that silently signed for
@@ -119,6 +125,8 @@ echo
 export SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY
 export R2_ENDPOINT R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
 export PUBLISH_SECRET
+SITE_ORIGIN="${SITE_ORIGIN:-https://lifecycle.test}"
+export SITE_ORIGIN
 
 exec deno run \
   --allow-net --allow-env --allow-read --allow-write --allow-run \

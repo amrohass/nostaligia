@@ -985,48 +985,171 @@ html[lang="en"] .review-note { font: 400 11px/1.7 var(--font-en); }
 .dialog__actions { display: flex; gap: 10px; align-items: center; }
 .dialog__actions .btn { flex: 1; }
 
-/* ─────────────────────────── Map ─────────────────────────── */
+/* --------------------------- Real media ---------------------------
 
-.map-page {
-  position: relative;
-  height: calc(100vh - 69px);
-  min-height: 480px;
-  background: var(--map-canvas);
-  overflow: hidden;
+   Until M3 every media well was the hatched .plate placeholder, because the archive
+   had nothing digitised in it. The shards carry derivative paths now, so a card
+   shows the thumb and the viewer shows a rendition (CLAUDE.md section 6's ladder,
+   picked by viewport in archive.js).
+
+   The plate has NOT gone: it is what a card falls back to when a derivative is
+   missing -- an item published before its thumb landed, or one whose bytes a
+   takedown removed from a release still sitting in somebody's cache. A broken
+   <img> would read as a site fault rather than as missing material. */
+
+.memory__img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--r-md);
 }
-#map { position: absolute; inset: 0; }
-.leaflet-container { background: #E4E0CF; font-family: var(--font-ar); }
-/* Tints the OSM raster to the archive palette without shipping a custom tile set. */
-.leaflet-tile-pane { filter: sepia(.55) saturate(.5) hue-rotate(-8deg) brightness(1.05) contrast(.92); }
-.leaflet-div-icon { background: none; border: none; }
 
-.map-count {
-  position: absolute;
-  top: 14px;
-  inset-inline-start: 14px;
-  z-index: 1100;
-  background: rgba(247, 244, 236, .95);
-  border: 1px solid rgba(62, 74, 46, .2);
-  border-radius: var(--r-pill);
-  padding: 7px 15px;
-  box-shadow: 0 4px 14px rgba(38, 40, 31, .14);
-  font: 600 12px var(--font-ar);
+/* Reserves the row before the image decodes, so a feed of lazy images does not
+   shift the masonry under a reader's finger as each one lands. */
+.memory__plate:has(> .memory__img) { display: block; min-height: 0; }
+
+.viewer__media-wrap {
+  width: 100%;
+  max-width: 720px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer__media {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--r-lg);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .35);
+  background: rgba(0, 0, 0, .25);
+}
+/* An <audio> element sizes itself to its controls; without this it collapses to a
+   sliver inside a flex column that is trying to give it the whole stage. */
+audio.viewer__media { width: 100%; max-width: 520px; height: 44px; box-shadow: none; }
+
+.viewer__audio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+}
+.viewer__audio-art { max-width: 320px; border-radius: var(--r-lg); }
+
+/* --------------------------- Writing a comment ---------------------------
+
+   Section 1: everything user-submitted is reviewed before it is public. The form
+   says so under the button rather than after the fact, and the member's own pending
+   comment appears in the thread with a flag -- a comment that vanished on submit
+   reads as a comment that was lost. */
+
+.comment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 12px;
+}
+.comment-form__input {
+  width: 100%;
+  resize: vertical;
+  min-height: 56px;
+}
+.comment-form__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.comment-form__actions .review-note { margin: 0; flex: 1; }
+.comment-form .btn { flex: none; }
+
+/* A button that reads as a link. Used where an <a href="#"> used to sit purely to
+   carry an onclick -- a dead href is a link that breaks middle-click and confuses a
+   screen reader about where it goes. */
+.linklike {
+  font: inherit;
   color: var(--olive);
+  text-decoration: underline;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
-html[lang="en"] .map-count { font: 600 11.5px var(--font-en); }
 
+/* --------------------------- Your own submissions ---------------------------
+
+   The surface the ingest path never had: a member whose upload the worker refused
+   had nothing anywhere telling them so. Deliberately says which STATE a submission
+   is in and nothing about when -- section 6 holds `expect_by` until a timing probe
+   against the deployed worker lands, and a guessed figure published to a
+   contributor is worse than none. */
+
+.mine {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mine__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: var(--paper-raised);
+  border: 1px solid var(--olive-a12);
+  border-radius: var(--r-md);
+}
+.mine__title { font: 600 13.5px var(--font-ar); color: var(--ink); min-width: 0; }
+html[lang="en"] .mine__title { font: 600 13px var(--font-en); }
+.mine__meta { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.mine__error { font: 400 11.5px var(--font-ar); color: var(--terracotta); }
+html[lang="en"] .mine__error { font: 400 11.5px var(--font-en); }
+
+/* --------------------------- Located memories ---------------------------
+
+   The Leaflet map lived here: .map-page, .leaflet-*, .map-pin, .map-card and the
+   sepia tile filter. All of it went with M3, for the reason index.html records --
+   CLAUDE.md section 2 forbids the public OSM tile endpoint outright, and the CSP
+   has blocked unpkg since M0, so those rules styled a panel that rendered blank on
+   any deployment that actually served the policy.
+
+   What is here instead is M4's own stated fallback: the geo shards as a list,
+   filtered by decade. The decade bar is REUSED rather than rewritten -- it is the
+   control M4's slider becomes -- but it sits in the flow here instead of floating
+   over a map, so its positioning is overridden rather than duplicated. */
+
+.located { padding-bottom: 40px; }
+
+.located .decade-bar {
+  position: static;
+  justify-content: flex-start;
+  padding: 0 26px 18px;
+  pointer-events: auto;
+}
+.located .decade-bar__inner { box-shadow: var(--sh-card); }
+
+/* Where the item is, in the words section 7 uses -- an exact coordinate and a
+   fuzzed area are different promises to the contributor and must not read alike. */
+.located__where {
+  padding: 0 12px 12px;
+  font: 500 11px var(--font-ar);
+  color: var(--ink-50);
+}
+html[lang="en"] .located__where { font: 500 10.5px var(--font-en); }
+
+/* The decade bar's own rules, kept from the map block because M4 needs them. */
 .decade-bar {
-  position: absolute;
-  bottom: 18px;
-  inset-inline: 0;
   display: flex;
   justify-content: center;
-  z-index: 1100;
-  pointer-events: none;
   padding: 0 12px;
 }
 .decade-bar__inner {
-  pointer-events: auto;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1034,7 +1157,6 @@ html[lang="en"] .map-count { font: 600 11.5px var(--font-en); }
   border: 1px solid rgba(62, 74, 46, .2);
   border-radius: var(--r-pill);
   padding: 7px 12px;
-  box-shadow: var(--sh-float);
   max-width: 100%;
   overflow-x: auto;
 }
@@ -1050,8 +1172,8 @@ html[lang="en"] .decade-bar__label {
   text-transform: uppercase;
 }
 .decade {
-  font: 600 11.5px var(--font-ar);
-  padding: 6px 12px;
+  font: 600 12px var(--font-ar);
+  padding: 6px 13px;
   border-radius: var(--r-pill);
   color: var(--olive);
   white-space: nowrap;
@@ -1060,112 +1182,6 @@ html[lang="en"] .decade-bar__label {
 html[lang="en"] .decade { font: 600 11px var(--font-en); }
 .decade:hover { background: var(--olive-a08); }
 .decade[aria-pressed="true"] { background: var(--olive); color: var(--paper); }
-
-/* The marker element is exactly the dot, so Leaflet anchors it on the coordinate;
-   the name hangs below it, centred, without widening the click target. */
-.map-pin {
-  position: relative;
-  display: block;
-  width: 22px;
-  height: 22px;
-  cursor: pointer;
-}
-.map-pin__dot {
-  width: 22px;
-  height: 22px;
-  border-radius: var(--r-pill);
-  background: var(--terracotta);
-  border: 3px solid var(--paper);
-  box-shadow: 0 2px 6px rgba(38, 40, 31, .3);
-  color: var(--paper);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font: 700 9.5px var(--font-en);
-}
-.map-pin__label {
-  position: absolute;
-  top: 26px;
-  left: 50%;
-  transform: translateX(-50%);
-  font: 600 10.5px var(--font-ar);
-  background: var(--paper);
-  padding: 3px 9px;
-  border-radius: var(--r-pill);
-  color: var(--olive);
-  white-space: nowrap;
-  box-shadow: 0 1px 4px rgba(38, 40, 31, .2);
-}
-html[lang="en"] .map-pin__label { font: 600 10px var(--font-en); }
-
-.map-card {
-  width: 860px;
-  max-width: 94%;
-  max-height: 100%;
-  background: var(--paper);
-  border-radius: var(--r-xl);
-  overflow: hidden;
-  display: flex;
-  box-shadow: var(--sh-modal-lg);
-}
-.map-card__plate {
-  flex: 1.15;
-  min-height: 420px;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--ink-55);
-}
-.map-card__body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  padding: 20px 24px 18px;
-  min-width: 0;
-  overflow-y: auto;
-}
-.map-card__back {
-  align-self: flex-start;
-  font: 500 12px var(--font-ar);
-  color: var(--olive);
-  background: var(--olive-a08);
-  padding: 6px 14px;
-  border-radius: var(--r-pill);
-}
-html[lang="en"] .map-card__back { font: 500 12px var(--font-en); }
-.map-card__title { font: 600 18px/1.7 var(--font-ar); margin: 14px 0 0; }
-html[lang="en"] .map-card__title { font: 600 17px/1.5 var(--font-en); }
-.map-card__meta { display: flex; align-items: center; gap: 9px; margin-top: 10px; flex-wrap: wrap; }
-.map-card__divider { height: 1px; background: var(--olive-a14); margin: 14px 0 12px; }
-.map-card__comments-head { font: 600 12.5px var(--font-ar); color: var(--olive); }
-html[lang="en"] .map-card__comments-head { font: 600 12px var(--font-en); }
-.map-card__comments-head b { color: var(--gold-ink); font-weight: 600; }
-.map-card__comments {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-  min-height: 80px;
-}
-.map-card__comments .comment__avatar { width: 26px; height: 26px; font-size: 11px; }
-.map-card__comments .comment__name { color: var(--ink); font-size: 11.5px; }
-.map-card__comments .comment__when { color: var(--ink-40); font-size: 9.5px; }
-.map-card__comments .comment__body { color: rgba(38, 40, 31, .75); font-size: 12px; }
-.map-card .locked-prompt {
-  margin: 10px 0 0;
-  width: 100%;
-  color: var(--ink-60);
-  border-color: var(--gold-a45);
-  background: rgba(217, 164, 65, .07);
-  padding: 10px 13px;
-  font-size: 11.5px;
-}
-.map-card .locked-prompt__lock { width: 17px; height: 17px; }
 
 /* ─────────────────────────── Events ─────────────────────────── */
 
@@ -1528,6 +1544,60 @@ html[lang="en"] .donate-contact__label { font: 600 11px var(--font-en); letter-s
 .donate-contact__note { font: 400 11.5px/1.9 var(--font-ar); color: var(--ink-55); margin: 12px 0 0; }
 html[lang="en"] .donate-contact__note { font: 400 11.5px/1.7 var(--font-en); }
 
+/* --------------------------- Prerendered item page ---------------------------
+
+   What the publisher writes to item/{id}/index.html, and what a reader sees before
+   the bundle runs -- or instead of it, if the connection dropped or the reader is a
+   crawler (CLAUDE.md section 9).
+
+   Styled from the same stylesheet as the SPA rather than with inline rules, because
+   `style-src 'self'` with no unsafe-inline blocks a style attribute whoever wrote it
+   (see ui.js's applyStyle). The SPA replaces this markup on hydration, so these
+   rules are only ever seen for the moment before that -- which on a slow connection
+   is the whole visit. */
+
+.prerender {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 34px 22px 60px;
+}
+.prerender__title { font: 600 24px/1.7 var(--font-ar); margin: 0 0 4px; color: var(--ink); }
+html[lang="en"] .prerender__title { font: 600 23px/1.4 var(--font-en); }
+.prerender__gloss { font: 400 13px/1.7 var(--font-en); color: var(--ink-55); margin: 0 0 18px; }
+html[lang="en"] .prerender__gloss { font: 400 13.5px/1.9 var(--font-ar); }
+.prerender__figure { margin: 0 0 18px; }
+.prerender__figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+}
+.prerender__facts {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font: 500 12px var(--font-ar);
+  color: var(--ink-60);
+}
+html[lang="en"] .prerender__facts { font: 500 12px var(--font-en); }
+.prerender__para { font: 400 14.5px/2 var(--font-ar); color: rgba(38, 40, 31, .82); margin: 0 0 14px; }
+html[lang="en"] .prerender__para { font: 400 14px/1.85 var(--font-en); }
+.prerender__rights {
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--olive-a14);
+  font: 400 11.5px/1.9 var(--font-ar);
+  color: var(--ink-50);
+}
+html[lang="en"] .prerender__rights { font: 400 11.5px/1.8 var(--font-en); }
+.prerender__home { margin: 22px 0 0; font: 600 12.5px var(--font-ar); }
+html[lang="en"] .prerender__home { font: 600 12px var(--font-en); }
+
 /* ─────────────────────────── Responsive ───────────────────────────
    The mobile pass follows 2c/2e/2i: two-column grid, terracotta masthead,
    decade rail as a swipeable chip row, viewer comments as a bottom bar. */
@@ -1599,12 +1669,7 @@ html[lang="en"] .donate-contact__note { font: 400 11.5px/1.7 var(--font-en); }
   }
   .viewer__comments .locked-prompt span:not(.locked-prompt__lock) { display: none; }
 
-  .map-page { height: calc(100vh - 61px); }
-  .decade-bar {
-    bottom: 0;
-    padding: 10px 12px 14px;
-    background: linear-gradient(rgba(238, 241, 230, 0), rgba(238, 241, 230, .94) 40%);
-  }
+  .located .decade-bar { padding: 0 16px 14px; }
   .decade-bar__inner {
     background: none;
     border: 0;
@@ -1620,9 +1685,6 @@ html[lang="en"] .donate-contact__note { font: 400 11.5px/1.7 var(--font-en); }
     border: 1px solid var(--olive-a22);
     padding: 7px 13px;
   }
-
-  .map-card { flex-direction: column; max-height: 88vh; }
-  .map-card__plate { min-height: 180px; flex: none; height: 180px; }
 
   .dialog { padding: 24px 20px 20px; }
   .dialog--form,

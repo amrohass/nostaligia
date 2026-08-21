@@ -53,6 +53,10 @@ insert into public.comments (id,post_id,body,status,created_by) values
 -- masquerading as an authorization result.
 insert into public.likes (user_id,post_id) values ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000b2');
 insert into public.saves (user_id,post_id) values ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000b2');
+-- 0043 seeds this table with the archive's real copy, so the fixture below would collide
+-- on hero.line and the matrix's `select` cell would count seeded rows rather than this
+-- one. Cleared inside the transaction.
+delete from public.content_blocks;
 insert into public.content_blocks (key,locale,draft,published) values ('hero.line','ar','د','ن');
 insert into public.reports (id,target_type,target_id,reason,reported_by,status) values
  ('00000000-0000-0000-0000-0000000000f1','post','00000000-0000-0000-0000-0000000000b1','سبب','00000000-0000-0000-0000-0000000000a1','open');

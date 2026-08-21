@@ -20,6 +20,13 @@ function assertEquals(actual: unknown, expected: unknown, msg: string): void {
 
 const POST = "00000000-0000-0000-0000-0000000000b1";
 
+/* Four objects come out of a takedown, not three. request_takedown returns media_assets
+   rows; the fourth is the prerendered item page, which is not a media asset and which
+   takedown.ts adds itself. It is counted here because it is the one object with a HUMAN
+   audience — the media is reachable only by someone who already has a direct URL, and
+   §9's page is reachable by anyone who has the link that was shared. */
+const PAGE_KEY = `item/${POST}/index.html`;
+
 const OBJECTS: TakedownObject[] = [
   { bucket: "public", path: `${POST}/thumb.webp`, role: "thumb" },
   { bucket: "public", path: `${POST}/1080p.mp4`, role: "rendition" },
@@ -88,9 +95,41 @@ Deno.test("a takedown removes every object, purges, and rewrites the redaction l
   const out = await takeDown(POST, "DMCA request", d);
 
   assertEquals(out.ok, true, out.reason);
-  assertEquals(out.removed?.length, 3, "not everything was removed");
+  assertEquals(out.removed?.length, 4, "not everything was removed");
   assert(d.cdn.purged.length === 1, "the CDN was not purged");
   assert(d.pub.written.has("redactions.json"), "the redaction list was not rewritten");
+});
+
+/* THE M3 addition, and it is the failure the sharing feature created.
+ *
+ * §9's item/{id}/index.html carries the title, the story, the byline and the picture, as
+ * HTML, at a root URL. request_takedown knows nothing about it — it returns media_assets
+ * rows — so before this, a takedown deleted every derivative and the archival master and
+ * left the whole item legible at the exact URL people had been sharing. */
+Deno.test("the prerendered page goes too — the URL people actually shared", async () => {
+  const d = deps();
+  await takeDown(POST, null, d);
+  assert(d.pub.removed.includes(PAGE_KEY),
+    `the item page survived the takedown: removed ${d.pub.removed.join(", ")}`);
+});
+
+Deno.test("the page is purged from the CDN as well as deleted", async () => {
+  // max-age=300 rather than a year, so the window is small — but a takedown is measured in
+  // the first moment, not the fifth minute, and every edge holding it is a live copy.
+  const d = deps();
+  await takeDown(POST, null, d);
+  assert(d.cdn.purged[0].includes(PAGE_KEY), "the item page was not purged");
+});
+
+Deno.test("a page that will not delete makes the takedown NOT ok", async () => {
+  // The same rule as any other surviving object, applied to the one a stranger can reach.
+  const d = deps();
+  d.pub.failRemove = "index.html";
+  const out = await takeDown(POST, null, d);
+
+  assertEquals(out.ok, false, "a takedown leaving the page live reported success");
+  assertEquals(out.reason, "objects_remain", "wrong reason");
+  assert((out.failed ?? []).some((f) => f.includes("index.html")), "the page was not named");
 });
 
 // §6 calls originals/ the preservation copy — right up until someone asks for the material
@@ -107,7 +146,8 @@ Deno.test("the archival master is deleted too, not just the derivatives", async 
 Deno.test("only CDN-fronted paths are purged", async () => {
   const d = deps();
   await takeDown(POST, null, d);
-  assertEquals(d.cdn.purged[0].length, 2, "the originals path was sent to the purge API");
+  // Two derivatives plus the item page. The master is not here.
+  assertEquals(d.cdn.purged[0].length, 3, "the originals path was sent to the purge API");
   assert(!d.cdn.purged[0].some((p) => p.includes("uploader-uuid")), "an originals path was purged");
 });
 
@@ -151,7 +191,7 @@ Deno.test("an object that will not delete makes the whole takedown NOT ok", asyn
   assertEquals(out.reason, "objects_remain", "wrong reason");
   assertEquals(out.failed?.length, 1, "the surviving object was not named");
   assert(out.failed![0].includes("1080p"), "the wrong object was named");
-  assertEquals(out.removed?.length, 2, "the others should still have been removed");
+  assertEquals(out.removed?.length, 3, "the others should still have been removed");
 });
 
 // Deleting from R2 evicts nothing the CDN already holds, and derivatives carry a
@@ -164,7 +204,7 @@ Deno.test("an unpurged CDN makes the takedown NOT ok, even with every byte delet
   assertEquals(out.ok, false, "a takedown with a live CDN copy reported success");
   assertEquals(out.reason, "cdn_not_purged", "wrong reason");
   assertEquals(out.cdn_reason, "not_configured", "the operator is not told why");
-  assertEquals(out.removed?.length, 3, "the bytes should still be gone from the origin");
+  assertEquals(out.removed?.length, 4, "the bytes should still be gone from the origin");
 });
 
 Deno.test("a redaction list that cannot be written makes the takedown NOT ok", async () => {
@@ -185,7 +225,7 @@ Deno.test("a retry after a partial failure still gets the object list", async ()
   const out = await takeDown(POST, null, d);
 
   assertEquals(out.ok, true, out.reason);
-  assertEquals(out.removed?.length, 3, "a retry could not reach the objects");
+  assertEquals(out.removed?.length, 4, "a retry could not reach the objects");
 });
 
 Deno.test("a post with no media still marks, purges nothing, and succeeds", async () => {
@@ -194,7 +234,12 @@ Deno.test("a post with no media still marks, purges nothing, and succeeds", asyn
   const out = await takeDown(POST, null, d);
 
   assertEquals(out.ok, true, out.reason);
-  assertEquals(d.cdn.purged.length, 0, "an empty purge was sent");
+  // NOT zero any more, and that is the point: a post with no media still has a page, and
+  // the page is the thing a reader can reach. The nothing_cdn_fronted branch in takedown.ts
+  // is now only reachable for a post with no page at all.
+  assertEquals(d.cdn.purged.length, 1, "the item page was not purged");
+  assertEquals(d.cdn.purged[0].join(","), PAGE_KEY, "something other than the page was purged");
+  assert(d.pub.removed.includes(PAGE_KEY), "a post with no media still has a page to delete");
   assert(d.pub.written.has("redactions.json"), "the redaction list must still be rewritten");
 });
 

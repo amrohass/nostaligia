@@ -122,6 +122,22 @@ jobs:
       - name: auth, upload refusals and the anon-key guard
         run: node scripts/frontend-auth-test.mjs
 
+      # M3. Three things that fail silently and that nothing else can see: a message key
+      # that resolves in one language and not the other (I18N.t returns the KEY, so an
+      # Arabic reader gets "mine.state.failed" printed where a sentence belongs); a string
+      # finding its way back into the DOM as markup, which section 6 calls a defect
+      # whatever the call site; and the SPA's module list drifting from the prerendered
+      # pages' copy of it, which leaves every shared link hydrating into a half-built page.
+      - name: the read path, the XSS sweep, and the lists that must not drift
+        run: node scripts/frontend-view-test.mjs
+
+      # §9's budget: "< 150 KB brotli for HTML + CSS + JS + first feed page", and M3's exit
+      # criterion says "budget met". Run on every push rather than measured once, because
+      # the way a budget is broken is one module at a time by people who each added a small
+      # one. Prints the per-file table only when it is over, or with --verbose.
+      - name: §9's performance budget
+        run: node scripts/frontend-budget.mjs
+
   # Gate 1 of request-upload: the refusals that happen before the function touches the
   # network, reads an environment variable or learns who is asking. They need no
   # deployment and no credential, so there is no excuse for them to be untested -- and
@@ -138,8 +154,12 @@ jobs:
         with:
           deno-version: v2.x
 
+      # --allow-read is new in M3 and is not laziness: prerender.ts carries a DUPLICATE of
+      # site/index.html's script and stylesheet lists (a prerendered page is served at
+      # /item/{id}, where a relative asset path resolves under the route and 404s), and the
+      # only thing that can catch the two drifting is a test that reads the shell.
       - name: gate 1, the role floor and the presigner
-        run: deno test --allow-env supabase/functions/
+        run: deno test --allow-env --allow-read supabase/functions/
 
       # The unit tests above prove the signature is deterministic and varies with
       # content-length. They cannot prove it is CORRECT -- the only thing to compare
@@ -491,6 +511,13 @@ jobs:
           # then reports cdn_reason=not_configured, which is the branch the harness asserts
           # — the bytes are deleted and the operator is told a cached copy may survive.
           echo "PUBLISH_SECRET=lifecycle-publish-secret" >> supabase/functions/.env
+          # M3. The publisher writes og:url and the canonical link into every prerendered
+          # item page, and env("SITE_ORIGIN") THROWS when it is unset — a page whose
+          # preview card does not resolve is the failure section 9 calls a growth failure,
+          # so there is no default to fall back to. CDN_ORIGIN stays unset, so the pages
+          # carry no og:image: that is the honest degradation, and the harness asserts the
+          # small-card branch rather than a guessed image host.
+          echo "SITE_ORIGIN=https://lifecycle.test" >> supabase/functions/.env
           cat supabase/functions/.env
 
       # The ONLY difference from the database job's invocation: edge-runtime is not in the
@@ -603,13 +630,13 @@ jobs:
           # failures and is indistinguishable from a run that verified everything. Exactly
           # the argument the database job makes about an empty pgTAP suite.
           #
-          # Raised from 20 to 35 when the M2 section landed — 33 fixed assertions plus two
-          # per derivative. The floor has to move with the harness or it stops being a
-          # floor: the whole publish and takedown section could be deleted and a gate of 20
-          # would still be green.
+          # Raised from 20 to 35 when the M2 section landed, and from 35 to 43 when M3's
+          # prerendered pages did — 41 fixed assertions plus two per derivative. The floor
+          # has to move with the harness or it stops being a floor: the whole publish and
+          # takedown section could be deleted and a gate of 20 would still be green.
           ran=$(grep -oE 'LIFECYCLE checks=[0-9]+' lifecycle.out | grep -oE '[0-9]+' || true)
           echo "::notice title=lifecycle::assertions executed: ${ran:-none}"
-          if [ "$rc" -eq 0 ] && { [ -z "$ran" ] || [ "$ran" -lt 35 ]; }; then
+          if [ "$rc" -eq 0 ] && { [ -z "$ran" ] || [ "$ran" -lt 43 ]; }; then
             echo "::error::lifecycle passed having run only ${ran:-0} assertions — it stopped early"
             rc=1
           fi

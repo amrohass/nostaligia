@@ -13,7 +13,8 @@
  */
 
 import { publish, releaseFiles, releasePath, type Db, type Deps, type ObjectSink } from "./release.ts";
-import type { SourcePost } from "./shards.ts";
+import type { ContentBlocks, SourcePost, SourceProfile } from "./shards.ts";
+import { itemPageKey } from "./prerender.ts";
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
@@ -39,12 +40,15 @@ function post(over: Partial<SourcePost> = {}): SourcePost & { hash_matches?: boo
     license: "CC-BY-SA-4.0", provenance: "family album",
     author_label: "member", author_handle: "abu_ramallah",
     author_display_name: null, author_avatar_path: null,
-    like_count: 0, comment_count: 0,
+    like_count: 0, comment_count: 0, comments: [],
     created_on: "2026-08-19",
     media: [],
     ...over,
   };
 }
+
+const SITE = "https://atlas.test";
+const CDN = "https://cdn.test";
 
 /** A sink that records everything, and can be told to break at a given key. */
 class FakeSink implements ObjectSink {
@@ -91,6 +95,11 @@ class FakeDb implements Db {
   activateOk = true;
   activateHolder: string | null = null;
 
+  /** M3's three additions to the publisher's read side. */
+  blocks: ContentBlocks = {};
+  profiles: SourceProfile[] = [];
+  unpublishable: string[] = [];
+
   publishablePosts() {
     // Read AFTER the claim, so this is where a mid-build approval would land. Bumping the
     // revision here reproduces exactly that: the archive moved on between the two calls.
@@ -98,6 +107,9 @@ class FakeDb implements Db {
     return Promise.resolve(this.posts);
   }
   redactedPostIds() { return Promise.resolve(this.redacted); }
+  contentBlocks() { return Promise.resolve(this.blocks); }
+  publishableProfiles() { return Promise.resolve(this.profiles); }
+  unpublishablePostIds() { return Promise.resolve(this.unpublishable); }
   claimLease(_h: string, _t: number, _n: string) {
     return Promise.resolve({
       acquired: this.leaseGranted,
@@ -132,7 +144,7 @@ class FakeDb implements Db {
 }
 
 function deps(db = new FakeDb(), sink = new FakeSink()): Deps & { db: FakeDb; sink: FakeSink } {
-  return { db, sink, now: () => NOW, newHolder: () => "holder-1" };
+  return { db, sink, now: () => NOW, newHolder: () => "holder-1", siteOrigin: SITE, cdnOrigin: CDN };
 }
 
 /* ── 1 · The happy path ────────────────────────────────────── */
@@ -426,4 +438,118 @@ Deno.test("...on the failure paths too, since those are where the lease is relea
     assertEquals(out.published, false, `${label}: expected a failure to test`);
     assertEquals(d.db.releasedWith[0], 7, `${label}: no revision went back with the lease`);
   }
+});
+
+/* ── M3: the prerendered item pages ────────────────────────── */
+
+Deno.test("item pages are written at the ROOT, outside the release directory", async () => {
+  const d = deps();
+  const out = await publish(d);
+
+  const key = itemPageKey(d.db.posts[0].id);
+  assert(d.sink.written.has(key), `no page at ${key}`);
+  assertEquals(out.pages, 1, "the outcome does not report the page");
+
+  // The structural decision, asserted rather than commented: a permalink cannot live under
+  // /v/{ts}/ because resolving it would need the manifest read first — a request in front
+  // of every link anyone has ever shared, and a redirect a crawler may not follow.
+  assert(!key.startsWith("v/"), "an item page is inside a release directory");
+  for (const written of d.sink.written.keys()) {
+    if (written.endsWith("/index.html")) {
+      assert(!written.startsWith("v/"), `a page was written under a release: ${written}`);
+    }
+  }
+});
+
+Deno.test("an item page is HTML with a short TTL, not an immutable shard", async () => {
+  const d = deps();
+  await publish(d);
+  const entry = d.sink.written.get(itemPageKey(d.db.posts[0].id))!;
+
+  assert(entry.body.startsWith("<!DOCTYPE html>"), "the page is not a document");
+  assert(entry.body.includes('property="og:url" content="https://atlas.test/item/'),
+    "the page does not carry an absolute og:url");
+
+  // It is rewritten in place on every publish, so it CANNOT be immutable — a year-cached
+  // page would keep a corrected title out of every preview card forever.
+  assert(!entry.cacheControl.includes("immutable"),
+    `an item page must not be immutable: ${entry.cacheControl}`);
+  assert(/max-age=\d+/.test(entry.cacheControl) && entry.cacheControl.includes("must-revalidate"),
+    `unexpected cache header: ${entry.cacheControl}`);
+});
+
+Deno.test("the pages are written AFTER the flip, so a killed build leaves the old ones", async () => {
+  const d = deps();
+  // The flip fails: the lease lapsed between recording and activating.
+  d.db.activateOk = false;
+  const out = await publish(d);
+
+  assertEquals(out.published, false, "a failed flip must not report a publish");
+  assert(!d.sink.written.has(itemPageKey(d.db.posts[0].id)),
+    "an item page was written for a release that never went live");
+});
+
+Deno.test("a post that stopped being publishable loses its page", async () => {
+  const d = deps();
+  // Withdrawn, rejected after approval, edited past its approval hash — the quiet exits.
+  // Takedown does not use this path; §8 deletes the page in the same request as the bytes.
+  d.db.unpublishable = ["00000000-0000-0000-0000-00000000dead"];
+  const removed: string[] = [];
+  const realRemove = d.sink.remove.bind(d.sink);
+  d.sink.remove = (key: string) => { removed.push(key); return realRemove(key); };
+
+  await publish(d);
+  assertEquals(removed.join(","), itemPageKey("00000000-0000-0000-0000-00000000dead"),
+    "the withdrawn post's page was not deleted");
+});
+
+Deno.test("a page that cannot be written does NOT fail the release", async () => {
+  // The archive is correct without a prerendered page — the SPA renders the same item from
+  // the same shard. Holding the pointer hostage to a preview card would be the wrong thing
+  // to be strict about, and it would mean one bad object blocks every approval.
+  const d = deps();
+  const realPut = d.sink.put.bind(d.sink);
+  d.sink.put = (key: string, body: string, ct: string, cc: string) =>
+    key.endsWith("/index.html")
+      ? Promise.reject(new Error("R2 said no"))
+      : realPut(key, body, ct, cc);
+
+  const out = await publish(d);
+  assertEquals(out.published, true, "a failed page must not fail the release");
+  assertEquals(out.pages, 0, "no page was written");
+  assertEquals((out.pagesFailed ?? []).length, 1, "the failure is not reported");
+  // ...and the archive itself is intact and pointed at.
+  assert(d.sink.written.has("manifest.json"), "the pointer is missing");
+});
+
+/* ── M3: content, profiles and the index in a release ───────── */
+
+Deno.test("a release carries the copy, the profiles and its own index", async () => {
+  const d = deps();
+  d.db.blocks = { "hero.line": { ar: "هنا", en: "Here" } };
+  d.db.profiles = [{
+    handle: "abu_ramallah", display_name: null, avatar_path: null, label: "member",
+    bio: null, member_since: 2025, show_contributions: true, show_comments: true,
+  }];
+
+  const out = await publish(d);
+  const prefix = out.release!.slice(1);
+
+  assert(d.sink.written.has(`${prefix}content.json`), "content.json is missing");
+  assert(d.sink.written.has(`${prefix}profile/abu_ramallah.json`), "the profile shard is missing");
+  assert(d.sink.written.has(`${prefix}index.json`), "index.json is missing");
+
+  // Inside the release, so they are immutable with it — unlike the item pages above. A
+  // profile shard that outlived its release would describe a different archive.
+  assertEquals(d.sink.written.get(`${prefix}content.json`)!.cacheControl,
+    "public, max-age=31536000, immutable", "content.json is not immutable");
+});
+
+Deno.test("the copy that ships is the published half, verbatim", async () => {
+  const d = deps();
+  d.db.blocks = { "page.about.body": { ar: "نصّ عربي", en: "English text" } };
+  const out = await publish(d);
+  const body = JSON.parse(d.sink.written.get(`${out.release!.slice(1)}content.json`)!.body);
+  assertEquals(body.blocks["page.about.body"].ar, "نصّ عربي", "the Arabic side did not survive");
+  assertEquals(body.blocks["page.about.body"].en, "English text", "the English side did not survive");
 });

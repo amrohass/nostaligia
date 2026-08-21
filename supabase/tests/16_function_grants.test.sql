@@ -129,6 +129,18 @@ select set_eq(
     ('publishable_posts() -> service_role'),
     ('redacted_post_ids() -> service_role'),
 
+    -- M3's additions to that same read side. Same posture and the same argument: none of
+    -- them is secret, and every one of them returns in a single call something §2 says a
+    -- visitor should be getting from a static file.
+    --
+    -- unpublishable_post_ids is the odd one and belongs here rather than beside the shard
+    -- builders: it returns the posts that must LOSE their prerendered page (0046). It reads
+    -- audit_log, which 0015 leaves readable to `authenticated` — a grant here would hand a
+    -- browser an aggregate over the moderation history.
+    ('published_content_blocks() -> service_role'),
+    ('publishable_profiles() -> service_role'),
+    ('unpublishable_post_ids() -> service_role'),
+
     -- The debounce (0037). publish_pending is the only part of piece 5 anything may call:
     -- it answers "is a publish due" in two integers and a release path, which the publisher
     -- can use to skip a pointless build and M6's publish-age monitor needs outright.
@@ -151,11 +163,6 @@ select set_eq(
     ('request_takedown(p_post_id uuid, p_note text) -> authenticated'),
     ('request_takedown(p_post_id uuid, p_note text) -> service_role'),
 
-    -- Takedown (0036). `authenticated` may CALL it — the role check is is_moderator()
-    -- inside the function, so a member gets a named refusal instead of a silent nothing,
-    -- and the audit row names them rather than the service key.
-    ('request_takedown(p_post_id uuid, p_note text) -> authenticated'),
-    ('request_takedown(p_post_id uuid, p_note text) -> service_role'),
 
     -- ── Still on the PUBLIC default, each for a reason ────────
     --
@@ -172,6 +179,16 @@ select set_eq(
     -- as the querying role. Revoking from anon would make every policy that mentions one
     -- raise 42501 instead of returning false — the table would stop being readable rather
     -- than start being protected. They report the caller's own role and nothing else.
+    -- strip_bidi: pure, IMMUTABLE and free of I/O (0045). It removes eight formatting
+    -- controls from a string; a caller can already compute the same answer themselves, and
+    -- the protection it provides comes from being attached to a BEFORE trigger rather than
+    -- from being hard to call.
+    ('strip_bidi(t text) -> anon'),
+    ('strip_bidi(t text) -> authenticated'),
+    ('strip_bidi(t text) -> media_worker'),
+    ('strip_bidi(t text) -> service_role'),
+    ('strip_bidi(t text) -> supabase_auth_admin'),
+
     ('is_admin() -> anon'),
     ('is_admin() -> authenticated'),
     ('is_admin() -> media_worker'),
@@ -283,8 +300,8 @@ select set_eq(
   $q$,
   $q$ values ('authz_role'), ('fuzz_location'), ('is_admin'), ('is_allowed_handle'),
              ('is_moderator'), ('is_valid_visibility'), ('jsonb_keys_allowed'),
-             ('normalized_handle') $q$,
-  'exactly eight functions keep PostgreSQL''s PUBLIC default, and each is argued for above'
+             ('normalized_handle'), ('strip_bidi') $q$,
+  'exactly nine functions keep PostgreSQL''s PUBLIC default, and each is argued for above'
 );
 
 -- ═══ 6–7 · 0033 revoked a helper; the audit still writes ═════

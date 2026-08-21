@@ -58,6 +58,45 @@ Browser → CDN → `manifest.json` (TTL 30–60 s) → active release → `feed
 → media from R2 via CDN. Per-item pages are prerendered HTML with OG tags; the SPA hydrates
 after first paint. Client filters against a short-TTL `redactions.json`.
 
+- **Amended 21 Aug 2026 — what a release contains, as built in M3.** Three shard kinds
+  join the four above, all inside `/v/{ts}/` and immutable with it: `content.json` (the
+  published half of `content_blocks`, §9's single source of truth for copy),
+  `profile/{handle}.json` (the PUBLIC projection of a profile — §7's visibility map is
+  applied at publish time, so a hidden list is an empty list in the file rather than data
+  the browser is asked to be discreet about), and `index.json` (which decades and geo cells
+  this release actually has, so the front end carries no hardcoded list of either).
+  Published comment BODIES now travel inside `item/{id}.json`, because §9 names comments
+  among the things that read from shards and 0015 grants `anon` nothing — a comment a
+  visitor cannot get from a shard is a comment they cannot read.
+
+- **Amended 21 Aug 2026 — the prerendered item pages are the one thing written outside a
+  release.** §9's `item/{id}/index.html` is written at the ROOT of the public bucket, not
+  under `/v/{ts}/`, and the reason is the feature: it is the URL somebody pasted into a
+  group chat, and resolving it must not require reading `manifest.json` first. Three
+  consequences, all deliberate:
+  **(a)** they are rewritten in place on every publish, so they carry `max-age=300,
+  must-revalidate` rather than the release tree's year;
+  **(b)** they are written AFTER the pointer flip and a failure among them does not fail
+  the release — the archive is correct without a preview card, and holding the pointer
+  hostage to one would be the wrong thing to be strict about;
+  **(c)** nothing about the next release removes a stale one, so `unpublishable_post_ids()`
+  (0046) names the posts that must LOSE a page — withdrawn, rejected after approval, edited
+  past their approval hash. Takedown does not wait for that: §8's path deletes the page
+  itself, in the same request as the bytes.
+  A **rollback does not undo them**, and that is accepted rather than hidden: there is no
+  per-release copy to flip back to, the content on them is approved either way, and the
+  next successful publish rewrites every one.
+
+- **Amended 21 Aug 2026 — one deployment requirement, not yet provisionable.** The site
+  origin must route `/item/*` to the R2 `public` bucket, or a shared link falls through
+  `site/_redirects` to the SPA shell and renders correctly for a browser while carrying no
+  OG tags for a crawler. That is a Cloudflare route, not a code change, and it cannot be
+  made until the production host exists. The publisher also needs `SITE_ORIGIN` in its
+  environment — `env("SITE_ORIGIN")` throws rather than defaulting, because a preview card
+  that resolves to the wrong host is worse than one that fails loudly. It lives in
+  `config/site.json` under `function_env`; the generator prints the `supabase secrets set`
+  line.
+
 ### Write path
 Signed-in user → `request-upload` Edge Function (auth + daily quota + declared type/size +
 Turnstile) → signed URL → `quarantine/` → processing function (magic-byte validation, reject
@@ -79,6 +118,12 @@ flip back. Takedown does NOT wait for this (§8).
   §6's one-hour counter floor exists to bound what that costs until it is. Reinstate the
   diff when the archive passes 1,500 items, the publish rate passes 100 releases/day, or
   `/v/` passes 5 GB; at that point it and release pruning are one piece of work.
+  **Updated 21 Aug 2026:** M3 roughly doubles that object count. Every release now also
+  writes one prerendered HTML page per publishable post at the bucket root, plus one
+  profile shard per contributor, `content.json` and `index.json` — so ~325 objects at 300
+  items becomes ~660, and a publish additionally issues one DELETE per post that was once
+  approved and no longer is. The thresholds above are unchanged and are still the trigger;
+  what changed is how quickly they arrive.
 
 - **Amended 20 Aug 2026 — the trigger is the moderation action, not a clock. The cron is
   deferred, not built.** A change to publishable content dispatches the publisher directly,
@@ -327,6 +372,15 @@ On takedown: (1) delete/rename the object in R2 immediately, (2) purge the CDN p
 audit row. The next scheduled publish removes it from the shards as a formality — the bytes
 are already gone.
 
+- **Amended 21 Aug 2026 — step 1 includes the prerendered page.** `request_takedown`
+  returns `media_assets` rows and knows nothing about §9's `item/{id}/index.html`, so until
+  M3 a takedown deleted every derivative and the archival master and left the whole item
+  legible — as HTML, at the exact URL people had been sharing. It is deleted first now,
+  before the media, because it is the one object with a human audience: the derivatives are
+  reachable only by someone who already has a direct URL. It is purged and counted like any
+  other object, so a page that will not delete makes the takedown report `objects_remain`
+  rather than success.
+
 A named human owns the takedown path with a stated response time. This is a launch gate.
 
 ---
@@ -349,12 +403,32 @@ A named human owns the takedown path with a stated response time. This is a laun
 - **The sign-in gate always preserves intent** — the pending action and its item survive the
   auth round-trip and the user returns exactly where they were.
 - Reuse `tokens.css`. Never hardcode a color.
+- **Amended 21 Aug 2026 — Leaflet and the public OSM tile endpoint are gone, and `/map` is
+  a list until M4.** §2 forbids that endpoint outright and the CSP has blocked `unpkg`
+  since M0, so the map rendered a blank panel on every deployment that actually served the
+  policy. M3 removed both, deleted their two `known_violations` entries, and pointed
+  `/map` at the `geo/{cell}.json` shards §2 already defines, filtered by decade — which is
+  M4's own stated fallback ("tile-failure fallback to list view"). M4 adds the PMTiles
+  basemap on top of it rather than replacing it, and the decade bar is the control M4's
+  slider becomes. The RTL slider direction is still M6's.
 - Performance budget: **< 150 KB brotli** for HTML + CSS + JS + first feed page. Arabic font
   subset with `unicode-range` split, WOFF2, `font-display: swap` — and **verify shaping after
   subsetting**.
 - Accessibility: viewer needs focus trap, `aria-modal`, Escape, focus restore. Required
   description field on upload (frame it as archival metadata). Respect
   `prefers-reduced-motion`.
+- **Added 21 Aug 2026 — a member can see what happened to their own upload.** Until M3
+  there was no surface anywhere telling a contributor that the worker had refused their
+  file: the item simply never appeared, which is indistinguishable from a moderator
+  rejecting it in silence. `/me` now lists the member's own submissions from
+  `posts_full()`, with the state derived from `status` and `ingest_state` together and the
+  worker's own failure reason where there is one (0009 grants a member their own
+  `ingest_error` for exactly this).
+  It says which state, and deliberately says **nothing about when**. §6 holds `expect_by`
+  until a one-off probe against the deployed worker replaces the estimated factor in
+  `JOB_DEADLINE_MS`, and says that number ships once at the real figure rather than being
+  published and corrected — so the screen was built without it and gains the line when the
+  probe lands.
 
 ---
 
