@@ -375,6 +375,10 @@
     refreshRedactions: fetchRedactions,
     isRedacted: isRedacted,
     index: index,
+    /* The cached index, or null. A synchronous reader for the one caller that needs the
+       decade list mid-render and cannot await — reaching into _state for it would make a
+       view depend on this module's internals, which is what _state exists NOT to be. */
+    indexNow: function () { return state.index; },
     feedPage: feedPage,
     item: item,
     decade: decade,

@@ -34,7 +34,7 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | 2 | History API routing — real per-item URLs, `_redirects`, and a one-time translation of links already shared as `#/m/{id}` | **done** |
 | 3 | Prerendered `item/{id}/index.html` with OG and Twitter tags, deleted by takedown and by the next publish when a post stops being publishable | **done**, 14 unit tests + 8 in the lifecycle harness |
 | 4 | `content_blocks` drive every editorial string, with an admin-only editor and a draft/publish split | **done**, 13 pgTAP assertions |
-| 5 | Profiles + visibility — the public projection in a shard, the owner's own view through `profile_view()` | **done**, 4 pgTAP + 4 shard-builder assertions |
+| 5 | Profiles + visibility — the public projection in a shard, the owner's own view through `profile_view()` | **done**, 5 pgTAP + 4 shard-builder assertions |
 | 6 | Engagement writes — likes, saves, comments and reports through PostgREST under 0019/0020, `store.js` deleted | **done** |
 | 7 | XSS + bidi sweep — `el()` has no `html:` prop, the icon set returns SVG nodes, user strings render in `<bdi>`, and 0045 strips the override controls on ingest | **done**, 14 pgTAP + a sweep over the served tree |
 | 8 | A member can see what happened to their own upload | **done** — the state, deliberately not the timing (§6 holds `expect_by`) |

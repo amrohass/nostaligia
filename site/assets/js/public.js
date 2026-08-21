@@ -46,7 +46,6 @@
   /* ── State ───────────────────────────────────────────────── */
 
   var state = {
-    ready: false,
     error: null,          // an i18n key, when the archive could not be read
 
     feed: [],             // accumulated feed entries, newest first
@@ -1865,7 +1864,7 @@
 
   /** The decades that actually hold items, from index.json; DATA.DECADES until it loads. */
   function knownDecades() {
-    var idx = ARCHIVE._state.index;
+    var idx = ARCHIVE.indexNow();
     return idx && idx.decades.length ? idx.decades : DATA.DECADES;
   }
 
