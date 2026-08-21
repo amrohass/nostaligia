@@ -193,15 +193,34 @@ console.log('# upload.js — the refusal map');
   // which the first version of this regex missed, reporting three live refusals as stale.
   for (const m of sources.matchAll(/\b(?:fail|abandon)\(\s*"([a-z_]+)"/g)) emitted.add(m[1]);
   for (const m of sources.matchAll(/reason === "([a-z_]+)"/g)) emitted.add(m[1]);
-  // Refusals that originate in the database and are passed through by name.
-  for (const name of ['quota_exceeded', 'title_required', 'description_required',
+  /* Refusals that originate in the DATABASE and are passed through by name.
+   *
+   * claim_upload_slot's are read out of the migration that currently defines it, for the
+   * reason the comment above gives about hand-maintained lists — that function has been
+   * redefined four times, each time adding refusals (rights in 0032, the decade in 0047,
+   * the place in 0049), and each time this list would have gone quietly stale. Reading the
+   * file means a fifth definition is covered before anyone remembers this test exists.
+   *
+   * The rest are still named here because they come from several functions across several
+   * migrations, and a scan wide enough to find them would also collect the publish lease's
+   * refusals — which no browser ever sees, and every one of which would be reported as an
+   * unmapped message the upload path is missing. */
+  const migrationText = readFileSync(
+    join(root, 'supabase/migrations/20260821150000_upload_location.sql'), 'utf8');
+  // Sliced to claim_upload_slot's own body. The same migration also defines
+  // set_post_location, whose refusals are a moderator's and reach this map through nothing
+  // — scanning the whole file reports them as messages the upload path forgot.
+  const claimSlot = migrationText.slice(
+    migrationText.indexOf('create or replace function public.claim_upload_slot'),
+    migrationText.indexOf('comment on function public.claim_upload_slot'));
+  const fromSlot = [...claimSlot.matchAll(/'reason',\s*'([a-z_]+)'/g)].map(m => m[1]);
+  ok(fromSlot.length > 8,
+     `CONTROL: claim_upload_slot's own refusals were found in its migration (${fromSlot.length})`);
+  for (const name of fromSlot) emitted.add(name);
+
+  for (const name of ['quota_exceeded',
                       'duplicate_object_key', 'invalid_object_key', 'unknown_object',
-                      'terminal_state', 'too_many_attempts', 'unauthenticated',
-                      // §7's rights capture — claim_upload_slot, migration 0032.
-                      'license_required', 'invalid_license', 'provenance_required',
-                      'consent_required',
-                      // §3's decade — claim_upload_slot, migration 0047.
-                      'invalid_decade']) {
+                      'terminal_state', 'too_many_attempts', 'unauthenticated']) {
     emitted.add(name);
   }
 

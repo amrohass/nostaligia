@@ -93,6 +93,33 @@ console.log('# i18n — a key that misses renders as itself');
   for (const s of ['processing', 'incomplete', 'failed', 'inReview', 'rejected', 'withdrawn']) {
     keys.add('mine.state.' + s);
   }
+  /* M4's two refusal families. Both are rendered as `t('pl.err.' + out.reason)` and
+     `t('q.locationErr.' + out.reason)`, so a reason the database can return and the table
+     has no line for reaches a moderator as the literal string "pl.err.unknown_place" — in
+     a dialog, at the moment they are trying to fix something.
+
+     Derived from the migrations that emit them rather than listed, for the reason the
+     roles above are: a list written here goes stale in the silent direction. The two
+     functions live in different files and each is sliced to its own body, because a scan
+     of either whole file collects the other function's vocabulary too. */
+  const sliceOf = (text, from, to) => text.slice(text.indexOf(from), text.indexOf(to));
+  const gazetteer = read('supabase/migrations/20260821140000_gazetteer.sql');
+  const location = read('supabase/migrations/20260821150000_upload_location.sql');
+  const reasonsIn = (text) => [...text.matchAll(/'reason',\s*'([a-z_]+)'/g)].map((m) => m[1]);
+
+  const placeReasons = reasonsIn(sliceOf(gazetteer,
+    'create or replace function public.save_place',
+    'comment on function public.save_place'));
+  const fixReasons = reasonsIn(sliceOf(location,
+    'create or replace function public.set_post_location',
+    'comment on function public.set_post_location'));
+  ok(placeReasons.length >= 4 && fixReasons.length >= 3,
+     `CONTROL: the two RPCs' refusals were found in their migrations (${placeReasons.length}, ${fixReasons.length})`);
+  // 'generic' is the client's own fallback for a transport failure, which no migration
+  // emits and every branch can reach.
+  for (const r of placeReasons.concat(['generic'])) keys.add('pl.err.' + r);
+  for (const r of fixReasons.concat(['generic'])) keys.add('q.locationErr.' + r);
+
   // The decades DATA offers in the share sheet — every one must have a label or a
   // contributor is offered an option spelled "decade.1940".
   const winD = {};

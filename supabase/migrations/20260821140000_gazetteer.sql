@@ -153,6 +153,17 @@ create trigger places_write_audit
 --
 -- Unconfirmed entries sort last in both orderings. They are offered — a place we have a
 -- name for and no coordinate is still the right label — but they are never the first answer.
+--
+-- ── An empty term is the whole gazetteer ─────────────────────
+--
+-- The dashboard's places screen and the share sheet's autocomplete are the same question
+-- with and without a filter, so they are the same function rather than a second one that
+-- would have its own grant, its own row shape and its own way of drifting. The sheet does
+-- not call it under two characters; the dashboard calls it with no term and a high limit.
+--
+-- p_limit is capped at 200, which is a size bound rather than a permission: 0017 already
+-- grants every signed-in user SELECT on this table, so the cap stops a careless caller from
+-- pulling a whole gazetteer into an autocomplete list, not from seeing it.
 create or replace function public.places_search(
   p_q     text,
   p_lat   double precision default null,
@@ -170,7 +181,7 @@ as $$
                 else extensions.st_setsrid(
                        extensions.st_makepoint(p_lon, p_lat), 4326)::extensions.geography
            end as origin,
-           least(greatest(coalesce(p_limit, 8), 1), 25) as lim
+           least(greatest(coalesce(p_limit, 8), 1), 200) as lim
   ),
   -- The ordering is INSIDE the limit and repeated outside it. A LIMIT applied to an
   -- unordered set takes an arbitrary N and sorting those afterwards produces a neatly
@@ -182,12 +193,10 @@ as $$
                 else pl.location <-> q.origin end as dist,
            coalesce(pl.name_ar, pl.name_en) as nm
     from public.places pl, q
-    where q.term is not null
-      and (
-        pl.name_ar ilike '%' || q.term || '%'
-        or pl.name_en ilike '%' || q.term || '%'
-        or exists (select 1 from unnest(pl.aliases) a where a ilike '%' || q.term || '%')
-      )
+    where q.term is null
+       or pl.name_ar ilike '%' || q.term || '%'
+       or pl.name_en ilike '%' || q.term || '%'
+       or exists (select 1 from unnest(pl.aliases) a where a ilike '%' || q.term || '%')
     order by un, dist nulls last, nm
     limit (select lim from q)
   )

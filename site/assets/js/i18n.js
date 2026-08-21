@@ -563,6 +563,10 @@
     'share.pinNoMap':       { ar: 'الخريطة غير متاحة الآن. اكتب اسم المكان بدل ذلك.',
                               en: 'The map is unavailable. Type the place name instead.' },
     'up.err.decade':        { ar: 'العقد المُرسل غير صالح.', en: 'That decade is not valid.' },
+    'up.err.place':         { ar: 'المكان المُرسل غير موجود في الفهرس.',
+                              en: 'That place is not in the gazetteer.' },
+    'up.err.coordinates':   { ar: 'الإحداثيات المُرسلة غير صالحة.',
+                              en: 'Those coordinates are not valid.' },
 
     // ── Located memories (M4) ───────────────────────────────
     'map.title':     { ar: 'ذكريات على الخريطة', en: 'Memories on the map' },

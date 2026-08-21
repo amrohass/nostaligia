@@ -94,6 +94,12 @@
        so this is unreachable from the form and mapped for the same reason as the three
        above: the caller who reaches it is not using the form. */
     invalid_decade: 'up.err.decade',
+    /* M4's place (migration 0049). Same reasoning again: the sheet resolves a place against
+       the gazetteer or drops a pin, so a member using the form cannot produce any of these.
+       The caller who can is one composing the draft themselves. */
+    invalid_place: 'up.err.place',
+    unknown_place: 'up.err.place',
+    invalid_coordinates: 'up.err.coordinates',
     duplicate_object_key: 'up.err.generic',
     quota_check_failed: 'up.err.generic',
     signing_failed: 'up.err.generic',

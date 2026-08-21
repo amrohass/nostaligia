@@ -131,7 +131,14 @@
     return rings;
   }
 
-  /* ── Layers ────────────────────────────────────────────────── */
+  /* ── Layers ──────────────────────────────────────────────────
+   *
+   * Every length-delimited field below reads its length into a variable BEFORE computing
+   * the end offset. `reader.p + reader.varint()` is the shorter form and it is wrong:
+   * JavaScript evaluates the left operand first, so `p` is captured before the varint
+   * advances it and every field ends one or two bytes early. The symptom is a tag read from
+   * the middle of a value — "wire type 7" — several fields later, nowhere near the mistake.
+   */
 
   function decodeValue(reader, end) {
     var value = null;
@@ -157,12 +164,14 @@
 
       if (field === 3) feature.type = reader.varint();
       else if (field === 2 && wire === 2) {
-        var tagEnd = reader.p + reader.varint();
+        var tagLength = reader.varint();
+        var tagEnd = reader.p + tagLength;
         var tags = [];
         while (reader.p < tagEnd) tags.push(reader.varint());
         feature.tags = tags;
       } else if (field === 4 && wire === 2) {
-        var geomEnd = reader.p + reader.varint();
+        var geomLength = reader.varint();
+        var geomEnd = reader.p + geomLength;
         feature.rings = geometry(reader, geomEnd);
         reader.p = geomEnd;
       } else reader.skip(wire);
@@ -184,14 +193,16 @@
       else if (field === 5) layer.extent = reader.varint();
       else if (field === 3 && wire === 2) layer.keys.push(reader.string(reader.varint()));
       else if (field === 4 && wire === 2) {
-        var valueEnd = reader.p + reader.varint();
+        var valueLength = reader.varint();
+        var valueEnd = reader.p + valueLength;
         layer.values.push(decodeValue(reader, valueEnd));
         reader.p = valueEnd;
       } else if (field === 2 && wire === 2) {
         // Deferred: the layer's name arrives in this same message and the caller decides by
         // NAME whether the features are wanted at all. Decoding first and asking afterwards
         // would decode every building in a tile the style never draws.
-        var featureEnd = reader.p + reader.varint();
+        var featureLength = reader.varint();
+        var featureEnd = reader.p + featureLength;
         featureRanges.push([reader.p, featureEnd]);
         reader.p = featureEnd;
       } else reader.skip(wire);
@@ -223,7 +234,8 @@
       var field = tag >> 3;
       var wire = tag & 0x7;
       if (field === 3 && wire === 2) {
-        var end = reader.p + reader.varint();
+        var layerLength = reader.varint();
+        var end = reader.p + layerLength;
         var layer = decodeLayer(new Reader(bytes, reader.p, end), end);
         if (!wanted || wanted.indexOf(layer.name) > -1) layer.decodeFeatures();
         layers[layer.name] = layer;

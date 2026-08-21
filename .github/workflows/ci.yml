@@ -131,6 +131,16 @@ jobs:
       - name: the read path, the XSS sweep, and the lists that must not drift
         run: node scripts/frontend-view-test.mjs
 
+      # M4. Two binary format readers written from the specs — a PMTiles archive and a
+      # vector tile — decoding files this test builds byte by byte. Nothing else in the
+      # repository can tell whether they are right: a checked-in fixture would make every
+      # assertion a comparison between two things nobody can read, and a decoder bug and a
+      # bad fixture would look identical. It caught a real one on its first run (a length
+      # captured before the varint that advances it), which is a defect whose only symptom
+      # is a blank map several fields later.
+      - name: the PMTiles reader, the tile decoder and the projection
+        run: node scripts/frontend-map-test.mjs
+
       # §9's budget: "< 150 KB brotli for HTML + CSS + JS + first feed page", and M3's exit
       # criterion says "budget met". Run on every push rather than measured once, because
       # the way a budget is broken is one module at a time by people who each added a small

@@ -163,6 +163,35 @@ select set_eq(
     ('request_takedown(p_post_id uuid, p_note text) -> authenticated'),
     ('request_takedown(p_post_id uuid, p_note text) -> service_role'),
 
+    -- M4's gazetteer (0048). All four are `authenticated` and none of them is a boundary:
+    -- 0017 already grants every signed-in user SELECT on `places`, and the two writes are
+    -- SECURITY INVOKER, so a member calling save_place is refused by the policy rather than
+    -- by a check inside the function. `anon` gets nothing here, including on the reads —
+    -- §2's "zero database reads for public visitors" is not softened by autocomplete being
+    -- useful, and a signed-out visitor gets place names from the published shard.
+    --
+    -- place_public is granted for a mechanical reason rather than a permissive one: the
+    -- three below are invoker-rights and call it, so a caller without EXECUTE would be
+    -- refused inside a function they were granted.
+    ('place_public(p places) -> authenticated'),
+    ('place_public(p places) -> service_role'),
+    ('places_search(p_q text, p_lat double precision, p_lon double precision, p_limit integer) -> authenticated'),
+    ('places_search(p_q text, p_lat double precision, p_lon double precision, p_limit integer) -> service_role'),
+    ('places_near(p_lat double precision, p_lon double precision, p_radius_m double precision, p_limit integer) -> authenticated'),
+    ('places_near(p_lat double precision, p_lon double precision, p_radius_m double precision, p_limit integer) -> service_role'),
+    ('save_place(p_id uuid, p_name_ar text, p_name_en text, p_aliases text[], p_lat double precision, p_lon double precision, p_unconfirmed boolean) -> authenticated'),
+    ('save_place(p_id uuid, p_name_ar text, p_name_en text, p_aliases text[], p_lat double precision, p_lon double precision, p_unconfirmed boolean) -> service_role'),
+
+    -- R1's missing control (0049). Same posture as save_place and for the same reason:
+    -- SECURITY INVOKER, so 0018's posts_update policy decides who may move an item and
+    -- 0012's trigger decides what that costs — an approved post goes back to the queue.
+    ('set_post_location(p_post_id uuid, p_place_id uuid, p_lat double precision, p_lon double precision, p_precision location_precision) -> authenticated'),
+    ('set_post_location(p_post_id uuid, p_place_id uuid, p_lat double precision, p_lon double precision, p_precision location_precision) -> service_role'),
+
+    -- The publisher's read side gains the gazetteer (0050). service_role only, exactly like
+    -- publishable_posts beside it.
+    ('publishable_places() -> service_role'),
+
 
     -- ── Still on the PUBLIC default, each for a reason ────────
     --
