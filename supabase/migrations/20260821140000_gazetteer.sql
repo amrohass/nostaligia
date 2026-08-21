@@ -25,6 +25,21 @@
 -- column grants still decide what, and a member calling save_place() is refused by the
 -- policy rather than by a check written here. §5 keeps its single boundary.
 --
+-- ── §6's bidi strip, and why it still does not apply here ────
+--
+-- 0045 stripped the override and isolate controls from every column carrying text a USER
+-- typed, and carved out `places` with a parenthetical — "(moderator-curated gazetteer, M4)"
+-- — which deferred the question to this milestone. The answer is that the carve-out stands,
+-- for the same reason content_blocks has one: 0017 admits only `is_moderator()` here, so the
+-- attacker the strip defends against would be a moderator attacking their own archive, and
+-- the trigger below records every write of theirs in two tables.
+--
+-- What changed in M4 and does NOT change the answer: these names are now published to every
+-- visitor and drawn on the map. The exposure is wider; the author is the same. And the
+-- contributor-facing path creates no rows here at all — the share sheet sends a place ID or
+-- a pair of coordinates, never a name, so there is no route from an untrusted keyboard into
+-- this table.
+--
 -- ── What is NOT stored ───────────────────────────────────────
 --
 -- `places.geohash` stays null and this file never writes it. §2: "Geohash is a derived

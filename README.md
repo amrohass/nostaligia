@@ -33,7 +33,7 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | 1 | PostGIS-backed geo — `places_search` (name + alias autocomplete, distance-ordered when there is a pin) and `places_near` (ST_DWithin on geography, the resolution step) | **done**, 18 pgTAP assertions |
 | 2 | The decade slider, filtering the map and the list without a re-render | **done** |
 | 3 | Place-name autocomplete → gazetteer resolution → drag-to-confirm pin, in the share sheet; the gazetteer becomes writable in the dashboard | **done**, 17 pgTAP assertions |
-| 4 | The PMTiles basemap — a v3 reader over Range requests, an MVT geometry decoder, and a canvas renderer, all loaded on demand | **done**, 45 assertions against archives the test builds byte by byte |
+| 4 | The PMTiles basemap — a v3 reader over Range requests, an MVT geometry decoder, and a canvas renderer, all loaded on demand | **done**, 46 assertions against archives the test builds byte by byte |
 | 5 | Tile-failure fallback to list view | **done** — and it is the same list the map is always rendered above |
 | — | R1's other half, carried from M0: a moderator can now CORRECT a location, not only see it flagged | **done** |
 
@@ -422,7 +422,7 @@ the tests too or the tests become the build step:
 |---|---|
 | `frontend-csp-test.mjs` | `el()` writes styles through CSSOM, not the style attribute; the set of third-party origins is **exactly** the one `config/site.json` declares, in both directions |
 | `frontend-auth-test.mjs` | the access token never reaches storage; every Edge Function refusal has a message; a `PATCH` with no `select=` is refused before the network |
-| `frontend-view-test.mjs` | every message key resolves in **both** languages; nothing in the served tree parses a string as HTML; the SPA's script and stylesheet lists match the prerendered pages'; the redaction filter filters |
+| `frontend-view-test.mjs` | every message key resolves in **both** languages; nothing in the served tree parses a string as HTML; no source file carries a control character (M4 shipped a regex with a raw 0x08 in it, which matched nothing and passed); the SPA's script and stylesheet lists match the prerendered pages'; the redaction filter filters |
 | `frontend-map-test.mjs` | the PMTiles v3 reader and the MVT decoder, against an archive and a tile the test **encodes byte by byte** — a checked-in fixture would make every assertion a comparison between two files nobody can read. Plus the projection, and that the map modules stay out of the shell |
 | `frontend-budget.mjs` | §9's 150 KB brotli ceiling, measured per file and failed on |
 
@@ -493,7 +493,7 @@ scripts/
   frontend-csp-test.mjs    14 assertions: CSSOM styling + the external-origin ratchet
   verify-deployed-headers.mjs  fetches a live deployment; proves headers are SERVED
   frontend-auth-test.mjs   36 assertions: session storage, refusal coverage, anon-key guard
-  frontend-map-test.mjs    45 assertions: PMTiles and MVT, decoded from files it encodes
+  frontend-map-test.mjs    46 assertions: PMTiles and MVT, decoded from files it encodes
   sigv4-roundtrip.ts       the presigner, verified by a real S3 server rather than by itself
   publish-race.sh          two psql backends contending for one publish lease
   lifecycle.sh             the write path end to end; owns the environment contract
