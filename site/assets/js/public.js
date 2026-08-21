@@ -1178,6 +1178,270 @@
 
   /* ── Share sheet ─────────────────────────────────────────── */
 
+  /* ── Where was this? ─────────────────────────────────────────
+     §10's M4, in the order it names: "place-name autocomplete → gazetteer resolution →
+     drag-to-confirm pin fallback".
+
+     The three steps are one control because they are one question, and because the ORDER is
+     the privacy design rather than a convenience. A contributor who types "المنارة" and
+     picks it out of the list attaches their photograph to a curated public landmark, and
+     migration 0049 publishes that coordinate unfuzzed — it is already public, in places.json,
+     one file over. Only when the gazetteer has no answer does the pin appear, and a pin is a
+     coordinate nobody curated, so it publishes snapped to roughly a block (§7).
+
+     Dropping a pin does not end there either: 0049's `places_near` is asked what named
+     places are within reach of it, and the contributor is offered them. Somebody who meant
+     Al-Manara and tapped thirty metres off should end up attached to Al-Manara rather than
+     filed at a coordinate that is nearly it.
+
+     Signed-in only, like everything else in this sheet. `places_search` is granted to
+     `authenticated` and to nobody else: §2's "zero database reads for public visitors" is
+     not softened by autocomplete being useful. */
+
+  function placePicker() {
+    var chosen = null;         // { id, name } from the gazetteer
+    var pin = null;            // { lat, lon } a contributor placed
+    var timer = null;
+    var sequence = 0;
+
+    var listId = 'place-results';
+    var results = el('ul.placepick__results', { id: listId, role: 'listbox', hidden: true });
+    var summary = el('p.placepick__chosen', { hidden: true });
+    var hint = el('p.field__hint', { text: t('share.fPlaceHint') });
+
+    var input = el('input.input.placepick__input', {
+      type: 'text',
+      role: 'combobox',
+      autocomplete: 'off',
+      'aria-expanded': 'false',
+      'aria-controls': listId,
+      placeholder: t('share.fPlacePh'),
+      oninput: function () { schedule(input.value); }
+    });
+
+    function clearResults() {
+      mount(results, []);
+      results.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    }
+
+    function describe() {
+      if (chosen) {
+        summary.hidden = false;
+        summary.textContent = t('share.fPlaceChosen', { name: chosen.name });
+      } else if (pin) {
+        summary.hidden = false;
+        summary.textContent = t('share.fPlacePinned');
+      } else {
+        summary.hidden = true;
+        summary.textContent = '';
+      }
+    }
+
+    function choose(place) {
+      chosen = {
+        id: place.id,
+        name: I18N.lang === 'en'
+          ? (place.name_en || place.name_ar)
+          : (place.name_ar || place.name_en)
+      };
+      pin = null;
+      input.value = '';
+      clearResults();
+      describe();
+    }
+
+    function keepPin(where) {
+      pin = { lat: where.lat, lon: where.lon };
+      chosen = null;
+      describe();
+    }
+
+    function clear() {
+      chosen = null;
+      pin = null;
+      input.value = '';
+      clearResults();
+      describe();
+    }
+
+    /* Debounced, and the results are dropped when a later query has already been sent.
+       Without the sequence check a slow response for "ال" can land after a fast one for
+       "المنارة" and replace the right answers with stale ones — which reads as the
+       autocomplete ignoring what was typed. */
+    function schedule(term) {
+      global.clearTimeout(timer);
+      if (!term || term.trim().length < 2) { clearResults(); return; }
+      var mine = ++sequence;
+      timer = global.setTimeout(function () {
+        DB.rpc('places_search', { p_q: term.trim() }).then(function (rows) {
+          if (mine !== sequence) return;
+          show(rows || []);
+        }, function () {
+          // A failed lookup is not an error a contributor can act on, and the pin below is
+          // the answer either way. Silence here, and the button stays.
+          if (mine === sequence) clearResults();
+        });
+      }, 250);
+    }
+
+    function show(rows) {
+      if (!rows.length) {
+        mount(results, el('li.placepick__none', { text: t('share.fPlaceNone') }));
+        results.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+        return;
+      }
+      mount(results, rows.map(function (row) {
+        var name = I18N.lang === 'en'
+          ? (row.name_en || row.name_ar)
+          : (row.name_ar || row.name_en);
+        var other = I18N.lang === 'en'
+          ? (row.name_ar || '')
+          : (row.name_en || '');
+        return el('li.placepick__result', { role: 'option' },
+          el('button.placepick__hit', {
+            type: 'button',
+            onclick: function () { choose(row); }
+          }, [
+            bdi(name),
+            other ? el('span.placepick__gloss.gloss-line', null, bdi(other)) : null,
+            row.unconfirmed ? el('span.placepick__flag', { text: t('share.fPlaceUnconfirmed') }) : null
+          ]));
+      }));
+      results.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    var pinButton = el('button.btn.btn--ghost.btn--small', {
+      type: 'button',
+      onclick: function () { openPinPicker(pin, keepPin, choose); },
+      text: t('share.fPlacePin')
+    });
+
+    var clearButton = el('button.btn.btn--ghost.btn--small', {
+      type: 'button', onclick: clear, text: t('share.fPlaceClear')
+    });
+
+    return {
+      node: el('div.field.placepick', null, [
+        el('label.field__label', { text: t('share.fPlace') }),
+        input,
+        results,
+        summary,
+        el('div.placepick__actions', null, [pinButton, clearButton]),
+        hint
+      ]),
+      /** The draft keys 0049 reads, and nothing when the question was skipped. */
+      read: function () {
+        if (chosen) return { place_id: chosen.id };
+        if (pin) return { lat: String(pin.lat.toFixed(6)), lon: String(pin.lon.toFixed(6)) };
+        return {};
+      }
+    };
+  }
+
+  /* The pin, and the resolution step after it.
+
+     The map is the same module /map uses, in 'pick' mode — one draggable teardrop and no
+     markers. When the basemap is not provisioned or will not load there is deliberately NO
+     numeric fallback: a pair of coordinate boxes is not a control anybody can answer
+     honestly from memory, and a wrong pin published at block precision is worse than no
+     location at all. The dialog says so and offers the gazetteer instead. */
+  function openPinPicker(current, onPin, onPlace) {
+    var scrim = null;
+    var instance = null;
+    var pin = current || null;
+
+    function close() {
+      if (instance) instance.destroy();
+      instance = null;
+      closeOverlay(scrim);
+      scrim = null;
+    }
+
+    var canvasSlot = el('div.mapview.mapview--pick');
+    var nearby = el('div.pinpick__near');
+    var confirm = el('button.btn.btn--primary', {
+      type: 'button',
+      disabled: !pin,
+      onclick: function () { if (pin) { onPin(pin); close(); } },
+      text: t('share.pinConfirm')
+    });
+
+    /* The gazetteer, asked what is around the pin. This is M4's "gazetteer resolution": the
+       archive would rather hold "Al-Manara" than a coordinate near it, so the named places
+       within 400 m are offered before the bare point is accepted. */
+    function askNearby(where) {
+      DB.rpc('places_near', { p_lat: where.lat, p_lon: where.lon }).then(function (rows) {
+        if (!scrim) return;
+        if (!rows || !rows.length) { mount(nearby, []); return; }
+        mount(nearby, [
+          el('p.pinpick__near-title', { text: t('share.pinNear') })
+        ].concat(rows.map(function (row) {
+          var name = I18N.lang === 'en'
+            ? (row.name_en || row.name_ar)
+            : (row.name_ar || row.name_en);
+          return el('button.btn.btn--ghost.btn--small', {
+            type: 'button',
+            onclick: function () { onPlace(row); close(); }
+          }, [bdi(name), el('span.pinpick__distance', {
+            text: t('share.pinDistance', { n: num(Math.round(row.distance_m)) })
+          })]);
+        })));
+      }, function () { if (scrim) mount(nearby, []); });
+    }
+
+    function failed() {
+      mount(canvasSlot, el('p.mapview__note', { role: 'status', text: t('share.pinNoMap') }));
+      confirm.disabled = true;
+    }
+
+    var dialog = el('div.dialog.dialog--pin', null, [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: t('share.pinTitle') }),
+          el('p.dialog__blurb', { text: t('share.pinBlurb') })
+        ]),
+        el('button.dialog__close', {
+          type: 'button', 'aria-label': t('action.close'), onclick: close,
+          text: '✕ ' + t('action.close')
+        })
+      ]),
+      canvasSlot,
+      el('p.pinpick__privacy', { text: t('share.pinPrivacy') }),
+      nearby,
+      el('div.dialog__actions', null, [
+        el('button.btn.btn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
+        confirm
+      ])
+    ]);
+
+    scrim = overlayShell('scrim.scrim--heavy', [dialog], close);
+
+    if (!global.CONFIG.basemap.url) { failed(); return; }
+
+    loadMapModules().then(function () {
+      if (!scrim) return;
+      instance = global.MAP.create(canvasSlot, {
+        url: global.CONFIG.basemap.url,
+        mode: 'pick',
+        label: t('share.pinTitle'),
+        center: pin || { lat: 31.9038, lon: 35.2034 },
+        zoom: 15,
+        pin: pin,
+        onPin: function (where) {
+          pin = where;
+          confirm.disabled = false;
+          askNearby(where);
+        },
+        onFail: failed
+      });
+      instance.setPlaces(geoCache.places || []);
+      instance.ready.catch(function () { /* onFail has it */ });
+    }, failed);
+  }
+
   function openShareSheet() {
     /* §9's gate, with intent: a signed-out visitor who presses Share is returned to this
        sheet after signing in, not to the archive. */
@@ -1264,6 +1528,8 @@
 
     var consentBox = el('input', { type: 'checkbox', required: true });
 
+    var place = placePicker();
+
     var busy = false;
 
     var form = el('form.dialog.dialog--sheet', {
@@ -1290,6 +1556,12 @@
         draft['title_' + lang] = titleValue;
         draft['body_' + lang] = storyValue;
         if (decadeSelect.value) draft.decade = decadeSelect.value;
+
+        /* M4. Either a gazetteer id or a pin, never both — the picker returns one shape or
+           the other, and 0049 resolves the coordinate from the ROW rather than trusting a
+           pair of numbers that arrived beside an id. */
+        var where = place.read();
+        Object.keys(where).forEach(function (key) { draft[key] = where[key]; });
 
         /* §7. Only `granted` is sent — granted_at is stamped by the database, because a
            timestamp evidencing that someone agreed at a moment is worthless if the person
@@ -1348,14 +1620,12 @@
       field(t('share.fTitle'), { type: 'text', placeholder: t('share.fTitlePh'), required: true }),
       el('div.field', null, [
         el('label.field__label', { text: t('share.fDecade') }),
-        decadeSelect,
-        /* The place field lived beside this one, with a datalist of seven hardcoded
-           landmarks. It went with data.js: a free-text place that resolves to nothing is a
-           question asked for no reason. §10's M4 owns place-name autocomplete, gazetteer
-           resolution and the drag-to-confirm pin — until then a moderator sets the place
-           from the queue, which is where the gazetteer will appear. */
-        el('p.field__hint', { text: t('share.fPlaceLater') })
+        decadeSelect
       ]),
+      /* The place field was a datalist of seven hardcoded landmarks, deleted with data.js
+         in M3 because a free-text place that resolves to nothing is a question asked for no
+         reason. This is what M4 replaces it with: the gazetteer, then a pin. */
+      place.node,
       field(t('share.fStory'), { multiline: true, placeholder: t('share.fStoryPh'), rows: '3' }),
       el('label.dropzone', null, [
         ICONS.upload(),
@@ -1826,19 +2096,41 @@
   }
 
   /* ── Located memories ────────────────────────────────────────
-     §10's M4 owns the map: PostGIS-backed geo, the decade slider, place-name autocomplete,
-     and a PMTiles basemap on R2. This is not that.
+     M4. The map is a canvas over a PMTiles basemap on R2 (§2), the decade control is a
+     slider, and the list under it is not a lesser version of either — it is §10's stated
+     "tile-failure fallback to list view", the accessible equivalent of a canvas nothing can
+     read aloud, and what a visitor sees while the tiles are still arriving.
 
-     What it IS: M4's own stated fallback — "tile-failure fallback to list view" — reading
-     the geo shards §2 already defines, filtered by decade. Leaflet and the public OSM tile
-     endpoint went with it, and both were forbidden anyway: §2 says "NEVER the public OSM
-     tile endpoint", and the CSP has blocked unpkg since M0, so the previous map rendered a
-     blank panel on every deployment that serves the policy.
+     Three ways the map does not draw, and all three end in the same list:
 
-     Reading the geo shards now rather than waiting means the shard format is exercised by
-     something before M4 depends on it, and it means a located item is reachable today. */
+       · no extract provisioned — config/site.json's basemap.path is empty, which is the
+         state this repository ships in until somebody builds the Palestine extract. Not a
+         failure and not reported as one.
+       · the archive is unreadable — a 404, a range request an intermediary stripped, or a
+         compression the browser has no decoder for (see pmtiles.js).
+       · the module would not load at all.
 
-  var geoCache = { items: null };
+     Only the second and third say so on the screen. A map that was never configured has
+     nothing to apologise for. */
+
+  var geoCache = { items: null, places: [] };
+
+  var mapState = {
+    node: null,          // the container, kept across renders so the canvas survives them
+    instance: null,
+    loading: false,
+    failed: false,
+    listNode: null,      // updated in place while the slider is dragged
+    countNode: null,
+    valueNode: null,
+    input: null
+  };
+
+  /* map.js and its two dependencies, fetched the first time somebody opens /map or drops a
+     pin. UI.loadMap is the shared loader — admin.js reaches for the same three files from
+     the gazetteer screen, and two copies of a load-order dependency is one copy too many.
+     See ui.js for why these are script tags rather than import(). */
+  function loadMapModules() { return UI.loadMap(); }
 
   function loadGeo() {
     if (geoCache.items) return Promise.resolve(geoCache.items);
@@ -1848,14 +2140,18 @@
        hardcoding that cell is what keeps it true for an item contributed from outside the
        city, which would otherwise be published into a shard nothing ever fetched. */
     return ARCHIVE.index().then(function (idx) {
-      if (!idx.cells.length) { geoCache.items = []; return geoCache.items; }
-      return Promise.all(idx.cells.map(function (cell) { return ARCHIVE.geo(cell); }))
-        .then(function (bodies) {
-          var all = [];
-          bodies.forEach(function (b) { all = all.concat(b.items); });
-          geoCache.items = all;
-          return all;
-        });
+      var cells = idx.cells.length
+        ? Promise.all(idx.cells.map(function (cell) { return ARCHIVE.geo(cell); }))
+        : Promise.resolve([]);
+      // The gazetteer alongside, because the basemap carries no labels of its own and a map
+      // of a city with no place names on it is a diagram.
+      return Promise.all([cells, ARCHIVE.places()]).then(function (both) {
+        var all = [];
+        both[0].forEach(function (b) { all = all.concat(b.items); });
+        geoCache.items = all;
+        geoCache.places = both[1] || [];
+        return all;
+      });
     }).catch(function () {
       geoCache.items = [];
       return geoCache.items;
@@ -1868,45 +2164,152 @@
     return idx && idx.decades.length ? idx.decades : DATA.DECADES;
   }
 
-  function renderLocated() {
-    var items = geoCache.items;
-    if (!items) return el('p.profile__empty', { text: t('q.loading') });
-
-    var visible = state.decade === 'all'
-      ? items
-      : items.filter(function (row) { return row.decade === state.decade; });
-
-    var decades = [{ id: 'all', label: t('map.all') }].concat(knownDecades().map(function (d) {
+  /** The slider's stops: every decade the archive has, with "all" at one end. */
+  function decadeStops() {
+    return [{ id: 'all', label: t('map.all') }].concat(knownDecades().map(function (d) {
       return { id: d, label: decadeLabel(d) };
     }));
+  }
+
+  function visibleItems() {
+    var items = geoCache.items || [];
+    if (state.decade === 'all') return items;
+    return items.filter(function (row) { return row.decade === state.decade; });
+  }
+
+  function locatedCards(visible) {
+    if (!visible.length) return el('p.profile__empty', { text: t('map.empty') });
+    return el('div.grid', null, [el('div.grid__col', null, visible.map(function (row) {
+      var card = memoryCard(row);
+      card.appendChild(el('div.located__where', {
+        text: t('map.precision.' + (row.precision || 'area'))
+      }));
+      return card;
+    }))]);
+  }
+
+  /* The slider moves, and the map and the list follow — without a re-render.
+
+     A full render() on every input event would rebuild the slider under the finger dragging
+     it, which loses focus, loses the drag on a touch screen, and makes the control feel
+     broken on exactly the mid-range device §10 names as the exit criterion. So the three
+     nodes that depend on the decade are updated in place. */
+  function applyDecade(id) {
+    state.decade = id;
+    var visible = visibleItems();
+
+    var stop = null;
+    decadeStops().forEach(function (option) { if (option.id === id) stop = option; });
+    if (mapState.valueNode && stop) mapState.valueNode.textContent = stop.label;
+    // A range input announces its numeric value, which here is an index into a list of
+    // decades and means nothing to anyone. aria-valuetext is what makes it say "the 1960s".
+    if (mapState.input && stop) mapState.input.setAttribute('aria-valuetext', stop.label);
+    if (mapState.countNode) {
+      mapState.countNode.textContent = t('map.inView', { n: num(visible.length) });
+    }
+    if (mapState.listNode) mount(mapState.listNode, locatedCards(visible));
+    if (mapState.instance) mapState.instance.setItems(visible);
+  }
+
+  function mapFailed() {
+    if (mapState.failed) return;
+    mapState.failed = true;
+    if (mapState.instance) { mapState.instance.destroy(); mapState.instance = null; }
+    mapState.node = null;
+    if (route() === 'map') render();
+  }
+
+  function ensureMap(visible) {
+    if (mapState.instance) { mapState.instance.setItems(visible); return; }
+    if (mapState.loading) return;
+    mapState.loading = true;
+
+    loadMapModules().then(function () {
+      if (mapState.failed || !mapState.node) return;
+      var instance = global.MAP.create(mapState.node, {
+        url: global.CONFIG.basemap.url,
+        label: t('map.canvasLabel'),
+        center: { lat: 31.9038, lon: 35.2034 },
+        onSelect: function (item) { navigate('/item/' + encodeURIComponent(item.id)); },
+        onFail: mapFailed
+      });
+      mapState.instance = instance;
+      instance.setPlaces(geoCache.places);
+      instance.setItems(visible);
+      // Opened on the archive it actually holds rather than on a hardcoded viewport: an
+      // item contributed from outside Ramallah is otherwise off-screen at every zoom.
+      instance.ready.then(function () {
+        if (visible.length) instance.fit(visible);
+      }, function () { /* onFail has it; this is only here so the rejection is handled */ });
+    }, mapFailed);
+  }
+
+  function renderLocated() {
+    if (!geoCache.items) return el('p.profile__empty', { text: t('q.loading') });
+
+    var visible = visibleItems();
+    var stops = decadeStops();
+    var index = 0;
+    stops.forEach(function (option, i) { if (option.id === state.decade) index = i; });
+
+    mapState.countNode = el('span.page-head__count', {
+      text: t('map.inView', { n: num(visible.length) })
+    });
+    mapState.valueNode = el('output.decade-slider__value', { text: stops[index].label });
+
+    var input = el('input.decade-slider__input', {
+      type: 'range',
+      min: '0',
+      max: String(stops.length - 1),
+      step: '1',
+      'aria-label': t('map.decade'),
+      'aria-valuetext': stops[index].label,
+      oninput: function () {
+        var chosen = stops[Math.min(stops.length - 1, Math.max(0, Number(input.value) || 0))];
+        applyDecade(chosen.id);
+      }
+    });
+    // Set as a property, not an attribute: on a range input the attribute is the DEFAULT
+    // value, and a form reset would be the only thing that ever read it.
+    input.value = String(index);
+    mapState.input = input;
+
+    mapState.listNode = el('div.located__list', null, locatedCards(visible));
+
+    var panel = null;
+    var note = null;
+    if (global.CONFIG.basemap.url && !mapState.failed) {
+      if (!mapState.node) {
+        mapState.node = el('div.mapview', null, [
+          // OpenStreetMap's licence requires the credit to be shown. It is a property of
+          // the extract, so it comes from config/site.json rather than from I18N.
+          el('p.mapview__credit', { text: global.CONFIG.basemap.attribution })
+        ]);
+      }
+      panel = mapState.node;
+      ensureMap(visible);
+    } else if (mapState.failed) {
+      // Said out loud, because a map that silently becomes a list looks like a design
+      // decision and this one is not. A basemap that was never configured says nothing.
+      note = el('p.mapview__note', { role: 'status', text: t('map.err.tiles') });
+    }
 
     return el('div.located', null, [
       el('div.page-head', null, [
         el('div', null, [
           el('h1.page-head__title', { text: t('map.title') }),
-          el('p.page-head__blurb', { text: t('map.blurbList') })
+          el('p.page-head__blurb', { text: t(panel ? 'map.blurb' : 'map.blurbList') })
         ]),
-        el('span.page-head__count', { text: t('map.inView', { n: num(visible.length) }) })
+        mapState.countNode
       ]),
-      el('div.decade-bar', null,
-        el('div.decade-bar__inner', { role: 'group', 'aria-label': t('map.decade') },
-          [el('span.decade-bar__label', { text: t('map.decade') })].concat(decades.map(function (option) {
-            return el('button.decade', {
-              type: 'button',
-              'aria-pressed': state.decade === option.id ? 'true' : 'false',
-              onclick: function () { state.decade = option.id; render(); },
-              text: option.label
-            });
-          })))),
-      visible.length
-        ? el('div.grid', null, [el('div.grid__col', null, visible.map(function (row) {
-            var card = memoryCard(row);
-            card.appendChild(el('div.located__where', {
-              text: t('map.precision.' + (row.precision || 'area'))
-            }));
-            return card;
-          }))])
-        : el('p.profile__empty', { text: t('map.empty') })
+      el('div.decade-slider', null, [
+        el('span.decade-slider__label', { text: t('map.decade') }),
+        input,
+        mapState.valueNode
+      ]),
+      panel,
+      note,
+      mapState.listNode
     ]);
   }
 

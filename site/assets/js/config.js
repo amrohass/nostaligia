@@ -48,6 +48,15 @@
     // the front end knows where the archive lives.
     archiveBase: "https://PLACEHOLDER_CDN_DOMAIN",
 
+    // M4's basemap: one PMTiles archive under the read path, or "" when none is
+    // provisioned. public.js loads the map module only when this has a value, so an empty
+    // string renders /map as the list -- section 10's own tile-failure fallback, reached
+    // deliberately rather than by an error.
+    basemap: Object.freeze({
+      url: "",
+      attribution: "© OpenStreetMap contributors"
+    }),
+
     // The exact policy served by _headers. Exposed so a page can assert at runtime that the
     // policy it is running under is the one this repository generated, rather than assuming.
     csp: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; font-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob: https://PLACEHOLDER_CDN_DOMAIN; media-src 'self' blob: https://PLACEHOLDER_CDN_DOMAIN; connect-src 'self' https://PLACEHOLDER_CDN_DOMAIN https://pjqvtmhizbnimqyxjbyq.supabase.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"

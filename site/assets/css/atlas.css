@@ -1126,14 +1126,6 @@ html[lang="en"] .mine__error { font: 400 11.5px var(--font-en); }
 
 .located { padding-bottom: 40px; }
 
-.located .decade-bar {
-  position: static;
-  justify-content: flex-start;
-  padding: 0 26px 18px;
-  pointer-events: auto;
-}
-.located .decade-bar__inner { box-shadow: var(--sh-card); }
-
 /* Where the item is, in the words section 7 uses -- an exact coordinate and a
    fuzzed area are different promises to the contributor and must not read alike. */
 .located__where {
@@ -1143,45 +1135,161 @@ html[lang="en"] .mine__error { font: 400 11.5px var(--font-en); }
 }
 html[lang="en"] .located__where { font: 500 10.5px var(--font-en); }
 
-/* The decade bar's own rules, kept from the map block because M4 needs them. */
-.decade-bar {
-  display: flex;
-  justify-content: center;
-  padding: 0 12px;
-}
-.decade-bar__inner {
+/* ── The decade slider (M4) ──────────────────────────────────
+   The pill bar of decade buttons this replaces is gone rather than kept beside it:
+   two controls for one filter is two things to keep in step, and section 9 asks for
+   a slider. Direction is deliberately NOT set here -- a range input already follows
+   the document's dir, and section 9's explicit RTL pass is M6's. */
+.decade-slider {
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(247, 244, 236, .96);
-  border: 1px solid rgba(62, 74, 46, .2);
-  border-radius: var(--r-pill);
-  padding: 7px 12px;
-  max-width: 100%;
-  overflow-x: auto;
+  gap: 12px;
+  padding: 4px 32px 14px;
 }
-.decade-bar__label {
+.decade-slider__label {
   font: 600 11.5px var(--font-ar);
   color: var(--ink-55);
-  padding-inline-end: 6px;
   white-space: nowrap;
 }
-html[lang="en"] .decade-bar__label {
+html[lang="en"] .decade-slider__label {
   font: 600 10.5px var(--font-en);
   letter-spacing: .04em;
   text-transform: uppercase;
 }
-.decade {
-  font: 600 12px var(--font-ar);
-  padding: 6px 13px;
-  border-radius: var(--r-pill);
-  color: var(--olive);
-  white-space: nowrap;
-  flex: none;
+.decade-slider__input {
+  flex: 1 1 auto;
+  max-width: 520px;
+  accent-color: var(--olive);
+  /* 44px of vertical hit area on a control that is drawn 4px tall. A decade slider
+     that needs a precise finger is a decade slider nobody uses on a phone. */
+  min-height: 44px;
 }
-html[lang="en"] .decade { font: 600 11px var(--font-en); }
-.decade:hover { background: var(--olive-a08); }
-.decade[aria-pressed="true"] { background: var(--olive); color: var(--paper); }
+.decade-slider__value {
+  font: 600 12.5px var(--font-ar);
+  color: var(--gold-ink);
+  min-width: 6ch;
+  white-space: nowrap;
+}
+html[lang="en"] .decade-slider__value { font: 600 12px var(--font-en); }
+
+/* ── The map panel (M4) ──────────────────────────────────────
+   A fixed aspect rather than a viewport height: `vh` on a phone changes as the URL
+   bar hides, which resizes the canvas mid-pan and reads as the map twitching. */
+.mapview {
+  position: relative;
+  margin: 0 32px 18px;
+  aspect-ratio: 16 / 10;
+  max-height: 620px;
+  border: 1px solid var(--olive-a22);
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  background: var(--map-canvas);
+  box-shadow: var(--sh-card);
+}
+.mapview__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The browser must not treat a drag on the canvas as a scroll, or panning the map
+     scrolls the page on every touch device. */
+  touch-action: none;
+  cursor: grab;
+}
+.mapview__canvas:focus-visible { outline: 2px solid var(--gold-ink); outline-offset: -2px; }
+.mapview__credit {
+  position: absolute;
+  inset-inline-end: 8px;
+  inset-block-end: 6px;
+  margin: 0;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  background: var(--cream-a75);
+  font: 400 10px var(--font-en);
+  color: var(--ink-60);
+  pointer-events: none;
+}
+.mapview__note {
+  margin: 0 32px 14px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--gold-a12);
+  font: 500 12.5px var(--font-ar);
+  color: var(--ink-70);
+}
+html[lang="en"] .mapview__note { font: 500 12px var(--font-en); }
+.mapview--pick {
+  margin: 0 0 12px;
+  aspect-ratio: 4 / 3;
+  max-height: 380px;
+}
+
+/* ── The place picker (M4) ───────────────────────────────────
+   Gazetteer first, pin second -- the markup order is the privacy order. */
+.placepick { position: relative; }
+.placepick__results {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 4px;
+  border: 1px solid var(--olive-a22);
+  border-radius: var(--r-md);
+  background: var(--paper-raised);
+  max-height: 210px;
+  overflow-y: auto;
+}
+.placepick__hit {
+  display: block;
+  width: 100%;
+  text-align: start;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  font: 500 13px var(--font-ar);
+  color: var(--ink);
+}
+html[lang="en"] .placepick__hit { font: 500 12.5px var(--font-en); }
+.placepick__hit:hover { background: var(--olive-a08); }
+.placepick__gloss { display: block; }
+.placepick__flag {
+  display: inline-block;
+  margin-inline-start: 8px;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  background: var(--gold-a18);
+  font: 500 10.5px var(--font-ar);
+  color: var(--gold-ink-deep);
+}
+.placepick__none {
+  padding: 8px 10px;
+  font: 400 12.5px var(--font-ar);
+  color: var(--ink-55);
+}
+.placepick__chosen {
+  margin: 8px 0 0;
+  font: 600 12.5px var(--font-ar);
+  color: var(--olive);
+}
+html[lang="en"] .placepick__chosen { font: 600 12px var(--font-en); }
+.placepick__actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+.dialog--pin { max-width: 560px; }
+.pinpick__privacy {
+  margin: 0 0 10px;
+  font: 400 12px var(--font-ar);
+  color: var(--ink-60);
+}
+html[lang="en"] .pinpick__privacy { font: 400 11.5px var(--font-en); }
+.pinpick__near { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pinpick__near-title {
+  width: 100%;
+  margin: 0;
+  font: 500 12px var(--font-ar);
+  color: var(--ink-65);
+}
+html[lang="en"] .pinpick__near-title { font: 500 11.5px var(--font-en); }
+.pinpick__distance {
+  margin-inline-start: 6px;
+  font: 400 11px var(--font-mono);
+  color: var(--ink-50);
+}
 
 /* ─────────────────────────── Events ─────────────────────────── */
 
@@ -1669,22 +1777,13 @@ html[lang="en"] .prerender__home { font: 600 12px var(--font-en); }
   }
   .viewer__comments .locked-prompt span:not(.locked-prompt__lock) { display: none; }
 
-  .located .decade-bar { padding: 0 16px 14px; }
-  .decade-bar__inner {
-    background: none;
-    border: 0;
-    box-shadow: none;
-    padding: 0;
-    gap: 6px;
-    justify-content: flex-start;
-    width: 100%;
-  }
-  .decade-bar__label { display: none; }
-  .decade {
-    background: rgba(247, 244, 236, .9);
-    border: 1px solid var(--olive-a22);
-    padding: 7px 13px;
-  }
+  /* Section 9: "Mobile is a faithful echo of desktop, not a reduced version." The map
+     stays, at a taller aspect because a phone is narrow -- 16/10 on a 360px screen is
+     a letterbox nobody can read a city in. */
+  .decade-slider { padding: 4px 16px 12px; gap: 8px; }
+  .decade-slider__label { display: none; }
+  .mapview { margin: 0 16px 14px; aspect-ratio: 3 / 4; max-height: none; }
+  .mapview__note { margin: 0 16px 12px; }
 
   .dialog { padding: 24px 20px 20px; }
   .dialog--form,

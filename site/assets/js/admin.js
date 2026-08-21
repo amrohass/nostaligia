@@ -343,8 +343,12 @@
      adding a column to this list is never cosmetic — it is how the queue silently
      becomes empty. */
   var QUEUE_QUERY = [
+    /* `place:places(...)` is a PostgREST embed across posts.place_id. It works because
+       0015 grants `authenticated` SELECT on those two columns and 0017's places_select
+       admits every signed-in reader — not because this query asked nicely. */
     'select=id,kind,title_ar,title_en,body_ar,body_en,created_on,' +
-      'license,provenance,decade,location_precision,' +
+      'license,provenance,decade,location_precision,place_id,' +
+      'place:places(name_ar,name_en),' +
       'media_assets(role,rendition,storage_path,bucket,mime,width,height,bytes,duration_s)',
     'status=eq.pending',
     'ingest_state=eq.ready',
@@ -416,7 +420,14 @@
          unchanged instead of needing a rewrite it will get in M3 anyway. */
       by: { ar: '', en: '' },
       byInitial: { ar: '؟', en: '?' },
-      place: { ar: '', en: '' },
+      /* Real as of M4. This was an empty pair for three milestones because nothing wrote
+         posts.place_id — 0049 does now, from the gazetteer the share sheet resolves
+         against, so the field a moderator reads is the answer a contributor gave. */
+      placeId: row.place_id || null,
+      place: row.place
+        ? { ar: row.place.name_ar || row.place.name_en || '',
+            en: row.place.name_en || row.place.name_ar || '' }
+        : { ar: '', en: '' },
       decade: row.decade ? { ar: String(row.decade), en: String(row.decade) } : { ar: '', en: '' },
       tags: [],
       thumbs: [],
@@ -585,6 +596,21 @@
                   ])
                 ])
               : null,
+            /* R1, carried from M0 and completed here. The queue has flagged 'exact' since
+               M1 "so publishing a precise coordinate is reviewed as a decision rather than
+               accepted as a default" — but a flag with no control beside it left a
+               moderator who saw a wrong pin with one option, which was to reject the whole
+               submission. This is the other half. */
+            el('div.detail__field', null, [
+              el('span.detail__key', { text: t('q.locationFix') }),
+              el('span.detail__value', null, [
+                el('button.abtn.abtn--ghost', {
+                  type: 'button',
+                  onclick: function () { openLocationFix(item); },
+                  text: t('q.locationFixDo')
+                })
+              ])
+            ]),
             el('div.detail__field', null, [
               el('span.detail__key', { text: t('q.tags') }),
               el('div.detail__tags', null, item.tags.map(function (tag) {
@@ -825,6 +851,140 @@
    * note goes to `moderation_actions` through the transaction-local GUC 0036 added, so the
    * ledger records why rather than only that.
    */
+  /**
+   * A moderator corrects where an item is.
+   *
+   * Two answers and one refusal, in the order 0049 resolves them: a gazetteer entry, a pin,
+   * or nothing at all. "Nothing" is not a cancel — it clears the coordinate and sets the
+   * precision to 'hidden', which is the correct outcome for a pin that should never have
+   * been placed, and there was no other way to reach it.
+   *
+   * The queue holds pending posts only, so this does not un-approve anything today. It can
+   * on an approved row — location is in 0012's content hash — and set_post_location returns
+   * the status the row ended up with rather than the one that was asked for, so the toast
+   * says which happened instead of leaving an item to reappear in the queue unexplained.
+   */
+  function openLocationFix(item) {
+    var chosen = item.placeId ? { id: item.placeId, name: pick(item.place) } : null;
+    var pin = null;
+    var timer = null;
+    var sequence = 0;
+    var scrim;
+
+    var results = el('ul.placepick__results', { role: 'listbox', hidden: true });
+    var summary = el('p.placepick__chosen');
+    var error = el('p.form-error', { role: 'alert', hidden: true });
+
+    function describe() {
+      summary.textContent = chosen ? t('q.locationPlace', { name: chosen.name })
+        : pin ? t('q.locationPin')
+        : t('q.locationNone');
+    }
+
+    var search = el('input.input', {
+      type: 'text',
+      placeholder: t('q.locationSearch'),
+      'aria-label': t('q.locationSearch'),
+      oninput: function () {
+        global.clearTimeout(timer);
+        var term = search.value.trim();
+        if (term.length < 2) { mount(results, []); results.hidden = true; return; }
+        var mine = ++sequence;
+        timer = global.setTimeout(function () {
+          DB.rpc('places_search', { p_q: term }).then(function (rows) {
+            if (mine !== sequence || !scrim) return;
+            mount(results, (rows || []).map(function (row) {
+              var name = pick({ ar: row.name_ar || row.name_en, en: row.name_en || row.name_ar });
+              return el('li.placepick__result', { role: 'option' },
+                el('button.placepick__hit', {
+                  type: 'button',
+                  onclick: function () {
+                    chosen = { id: row.id, name: name };
+                    pin = null;
+                    search.value = '';
+                    mount(results, []);
+                    results.hidden = true;
+                    describe();
+                  }
+                }, bdi(name)));
+            }));
+            results.hidden = false;
+          }, function () { if (scrim) { mount(results, []); results.hidden = true; } });
+        }, 250);
+      }
+    });
+
+    function close() {
+      global.clearTimeout(timer);
+      if (scrim && scrim._release) scrim._release();
+      if (scrim) scrim.remove();
+      scrim = null;
+    }
+
+    var form = el('form.dialog.dialog--form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        DB.rpc('set_post_location', {
+          p_post_id: item.id,
+          p_place_id: chosen ? chosen.id : null,
+          p_lat: pin ? pin.lat : null,
+          p_lon: pin ? pin.lon : null
+        }).then(function (out) {
+          if (!out || out.saved !== true) {
+            error.textContent = t('q.locationErr.' + ((out && out.reason) || 'generic'));
+            error.hidden = false;
+            return;
+          }
+          close();
+          UI.toast(t('q.locationSaved'));
+          loadQueue();
+        }, function (err) {
+          error.textContent = t(err && err.key ? err.key : 'admin.err.generic');
+          error.hidden = false;
+        });
+      }
+    }, [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: t('q.locationFix') }),
+          el('p.dialog__blurb', { text: t('q.locationBlurb') })
+        ]),
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+      ]),
+      summary,
+      el('div.field', null, [
+        el('label.field__label', { text: t('q.locationSearch') }),
+        search,
+        results
+      ]),
+      el('div.placepick__actions', null, [
+        el('button.abtn.abtn--ghost', {
+          type: 'button',
+          onclick: function () {
+            openPin(pin, function (where) { pin = where; chosen = null; describe(); });
+          },
+          text: t('q.locationPinDo')
+        }),
+        el('button.abtn.abtn--ghost', {
+          type: 'button',
+          onclick: function () { chosen = null; pin = null; describe(); },
+          text: t('q.locationClear')
+        })
+      ]),
+      el('p.field__hint', { text: t('q.locationNote') }),
+      error,
+      el('div.dialog__actions', null, [
+        el('button.abtn.abtn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
+        el('button.abtn.abtn--primary', { type: 'submit', text: t('q.locationSave') })
+      ])
+    ]);
+
+    describe();
+    scrim = el('div.scrim', { role: 'dialog', 'aria-modal': 'true' }, [form]);
+    global.document.body.appendChild(scrim);
+    scrim._release = UI.trapFocus(scrim, close);
+  }
+
   function confirmTakedown(row) {
     var noteInput = el('textarea.input', {
       rows: '2', required: true,
@@ -963,29 +1123,42 @@
 
   /* ── 4e Places ───────────────────────────────────────────── */
 
-  /* The gazetteer, read-only, and honestly labelled.
+  /* The gazetteer, and in M4 it is writable.
    *
-   * §10's M4 owns this screen's real job: "place-name autocomplete → gazetteer resolution →
-   * drag-to-confirm pin fallback; PMTiles basemap on R2". What was here instead was seven
-   * invented landmarks on a Leaflet map fed by the public OSM tile endpoint — which §2
-   * forbids in as many words, and which the CSP has blocked since M0, so the panel rendered
-   * blank on any deployment that actually served the policy.
+   * §10's M4: "place-name autocomplete → gazetteer resolution → drag-to-confirm pin
+   * fallback". The contributor's half of that is in the share sheet; this is the half that
+   * makes it worth anything, because autocomplete over an empty table answers nothing. A
+   * moderator adds the places, confirms the coordinates, and collects the misspellings as
+   * aliases — 0048's matcher is a substring match and Arabic orthography varies, so an
+   * alias is the answer to "why did searching for منارة not find المنارة".
    *
-   * So the map is gone and the table is real. A moderator can see which places exist and
-   * which have never had their coordinates confirmed, which is the information the screen
-   * was pretending to give. Editing them is M4's, and the screen says so rather than
-   * offering a control that would need a gazetteer to mean anything.
+   * What this screen replaced: seven invented landmarks on a Leaflet map fed by the public
+   * OSM tile endpoint, which §2 forbids in as many words and the CSP has blocked since M0.
+   *
+   * §5, once, because this screen now writes: nothing here is a guard. 0017's places_insert
+   * and places_update policies require is_moderator(), 0048's save_place is SECURITY
+   * INVOKER so those policies still decide, and 0048's trigger writes §4's audit rows
+   * whatever calls it. A member who loads this file and clicks Save is refused by the
+   * database.
    */
   function renderPlaces() {
     var p = panel('places');
 
     return [
-      topbar(t('pl.title'), t('pl.sub', { n: p.loaded ? num(p.rows.length) : '—' }), [langButton()]),
+      topbar(t('pl.title'), t('pl.sub', { n: p.loaded ? num(p.rows.length) : '—' }), [
+        el('button.abtn.abtn--primary', {
+          type: 'button', onclick: function () { openPlaceEditor(null); }, text: t('pl.add')
+        }),
+        langButton()
+      ]),
       el('div.admin__scroll', null, [
-        el('p.panel__aside', { style: 'padding:0 0 14px', text: t('pl.m4Note') }),
+        el('p.panel__aside', { style: 'padding:0 0 14px', text: t('pl.editNote') }),
         p.rows.length
           ? el('div.places', null, p.rows.map(function (place) {
-              return el('div.place', null, [
+              return el('button.place.place--button', {
+                type: 'button',
+                onclick: function () { openPlaceEditor(place); }
+              }, [
                 el('div', { style: 'flex:1;min-width:0' }, [
                   el('div.place__name', null, bdi(pick({ ar: place.name_ar || place.name_en, en: place.name_en || place.name_ar }))),
                   el('div.place__coords.gloss-line', {
@@ -1000,6 +1173,209 @@
           : panelState(p, 'pl.empty')
       ])
     ];
+  }
+
+  /**
+   * Create or correct one entry.
+   *
+   * The coordinate is set with the same pin control a contributor uses, on the same map
+   * module, because a gazetteer coordinate and a contributor's pin are the same act — and
+   * because a pair of numeric boxes is not something anybody can fill in honestly from
+   * memory.
+   *
+   * `unconfirmed` is the one field with a rule behind it rather than a preference: 0005's
+   * places_confirmed_has_location says a confirmed place knows where it is, so saving a
+   * confirmed entry with no pin is refused. An entry with a name and no coordinate is
+   * legitimate and is exactly what the flag is for — it is a place somebody named that
+   * nobody has located yet, and 0050 keeps it out of the published map until they do.
+   */
+  function openPlaceEditor(place) {
+    var editing = place || null;
+    var names = UI.langPair(t('pl.name'), {
+      ar: (editing && editing.name_ar) || '',
+      en: (editing && editing.name_en) || ''
+    });
+    var aliasInput = el('input.input', {
+      type: 'text',
+      placeholder: t('pl.aliasesPh'),
+      'aria-label': t('pl.aliases')
+    });
+    aliasInput.value = ((editing && editing.aliases) || []).join('، ');
+
+    var point = editing && typeof editing.lat === 'number'
+      ? { lat: editing.lat, lon: editing.lon }
+      : null;
+    var pointNote = el('p.field__hint', {
+      text: point ? t('pl.pinSet', { n: point.lat.toFixed(4) + ', ' + point.lon.toFixed(4) })
+                  : t('pl.pinNone')
+    });
+
+    var unconfirmed = el('input', { type: 'checkbox' });
+    unconfirmed.checked = Boolean(editing && editing.unconfirmed);
+
+    var error = el('p.form-error', { role: 'alert', hidden: true });
+    var scrim;
+
+    function close() {
+      if (scrim && scrim._release) scrim._release();
+      if (scrim) scrim.remove();
+      scrim = null;
+    }
+
+    var form = el('form.dialog.dialog--form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        var pair = names.read();
+        var args = {
+          p_id: editing ? editing.id : null,
+          p_name_ar: pair.ar || null,
+          p_name_en: pair.en || null,
+          // Split on either comma, because a moderator typing Arabic is typing on an Arabic
+          // keyboard and the comma there is ،
+          p_aliases: aliasInput.value.split(/[,،]/).map(function (a) { return a.trim(); })
+            .filter(Boolean),
+          p_lat: point ? point.lat : null,
+          p_lon: point ? point.lon : null,
+          p_unconfirmed: unconfirmed.checked
+        };
+
+        DB.rpc('save_place', args).then(function (out) {
+          if (!out || out.saved !== true) {
+            // The database's own reason, named. "Could not save" is not something a
+            // moderator can act on; "a confirmed place needs a pin" is.
+            error.textContent = t('pl.err.' + ((out && out.reason) || 'generic'));
+            error.hidden = false;
+            return;
+          }
+          close();
+          // Reloaded rather than patched into the list: the row that came back is the row
+          // the database has, and merging a local copy is how two views of one table start
+          // disagreeing.
+          var panelData = panel('places');
+          panelData.loaded = false;
+          panelData.loading = false;
+          LOADERS.places();
+          UI.toast(t('pl.saved'));
+        }, function (err) {
+          error.textContent = t(err && err.key ? err.key : 'admin.err.generic');
+          error.hidden = false;
+        });
+      }
+    }, [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: editing ? t('pl.editTitle') : t('pl.addTitle') }),
+          el('p.dialog__blurb', { text: t('pl.blurb') })
+        ]),
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+      ]),
+      names.node,
+      el('div.field', null, [
+        el('label.field__label', { text: t('pl.aliases') }),
+        aliasInput,
+        el('p.field__hint', { text: t('pl.aliasesWhy') })
+      ]),
+      el('div.field', null, [
+        el('label.field__label', { text: t('pl.point') }),
+        el('button.abtn.abtn--ghost', {
+          type: 'button',
+          onclick: function () {
+            openPin(point, function (where) {
+              point = where;
+              pointNote.textContent = t('pl.pinSet', {
+                n: where.lat.toFixed(4) + ', ' + where.lon.toFixed(4)
+              });
+            });
+          },
+          text: t('pl.pinPick')
+        }),
+        pointNote
+      ]),
+      el('label.checkbox.checkbox--wrap', null, [
+        unconfirmed,
+        el('span', { text: t('pl.unconfirmedLabel') })
+      ]),
+      error,
+      el('div.dialog__actions', null, [
+        el('button.abtn.abtn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
+        el('button.abtn.abtn--primary', { type: 'submit', text: t('pl.save') })
+      ])
+    ]);
+
+    scrim = el('div.scrim', { role: 'dialog', 'aria-modal': 'true' }, [form]);
+    global.document.body.appendChild(scrim);
+    scrim._release = UI.trapFocus(scrim, close);
+  }
+
+  /**
+   * The map, in pick mode, over a scrim.
+   *
+   * Shared by the gazetteer editor and by the queue's location control below. When no
+   * basemap is provisioned — config/site.json's basemap.path is empty until somebody builds
+   * the extract — this says so and offers nothing else: a coordinate typed into a box is a
+   * coordinate nobody verified, and this is the table the whole map draws its names from.
+   */
+  function openPin(current, onConfirm) {
+    var pin = current || null;
+    var instance = null;
+    var scrim;
+
+    function close() {
+      if (instance) instance.destroy();
+      instance = null;
+      if (scrim && scrim._release) scrim._release();
+      if (scrim) scrim.remove();
+      scrim = null;
+    }
+
+    var slot = el('div.mapview.mapview--pick');
+    var confirm = el('button.abtn.abtn--primary', {
+      type: 'button',
+      disabled: !pin,
+      onclick: function () { if (pin) { onConfirm(pin); close(); } },
+      text: t('pl.pinConfirm')
+    });
+
+    function failed() {
+      mount(slot, el('p.mapview__note', { role: 'status', text: t('pl.pinNoMap') }));
+      confirm.disabled = true;
+    }
+
+    var dialog = el('div.dialog.dialog--pin', null, [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: t('pl.pinTitle') }),
+          el('p.dialog__blurb', { text: t('pl.pinBlurb') })
+        ]),
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+      ]),
+      slot,
+      el('div.dialog__actions', null, [
+        el('button.abtn.abtn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
+        confirm
+      ])
+    ]);
+
+    scrim = el('div.scrim', { role: 'dialog', 'aria-modal': 'true' }, [dialog]);
+    global.document.body.appendChild(scrim);
+    scrim._release = UI.trapFocus(scrim, close);
+
+    if (!CONFIG.basemap.url) { failed(); return; }
+
+    UI.loadMap().then(function () {
+      if (!scrim) return;
+      instance = global.MAP.create(slot, {
+        url: CONFIG.basemap.url,
+        mode: 'pick',
+        label: t('pl.pinTitle'),
+        center: pin || { lat: 31.9038, lon: 35.2034 },
+        zoom: 15,
+        pin: pin,
+        onPin: function (where) { pin = where; confirm.disabled = false; },
+        onFail: failed
+      });
+      instance.ready.catch(function () { /* onFail has it */ });
+    }, failed);
   }
 
   /* ── 4f Members ──────────────────────────────────────────── */
@@ -1325,7 +1701,12 @@
     events: loadArchive,
     places: function () {
       loadPanel('places', function () {
-        return DB.select('places', 'select=id,name_ar,name_en,unconfirmed&order=name_ar.asc&limit=200');
+        /* The RPC, not the table, and the reason is one column: `location` is a geography,
+           which PostgREST hands over as WKB hex — a string this screen would have to parse
+           to show a coordinate or seed the pin. 0048's places_search returns lat and lon as
+           numbers, along with the aliases the editor needs, and an empty term means the
+           whole gazetteer. */
+        return DB.rpc('places_search', { p_q: '', p_limit: 200 });
       });
     },
     members: function () {

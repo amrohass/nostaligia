@@ -298,6 +298,44 @@
     toastTimer = global.setTimeout(function () { node.remove(); }, 3200);
   }
 
+  /* A module, fetched the first time something needs it.
+
+     §5 has admin.js "dynamically imported on moderator/admin login" and §9 budgets the
+     first paint, so two things in this codebase are deliberately absent from a shell's
+     script list: the dashboard, and M4's map. Both are IIFEs against `window` rather than
+     ES modules — import() cannot take them — and the property that actually matters is
+     that the BYTES are not fetched, which a script tag gives.
+
+     Not secrecy, in either case. §5: "Hiding client code is not security." Anyone may
+     request either file directly.
+
+     Memoised per src, so two callers racing for the map get one download and one
+     evaluation. A failure clears the memo: a module that failed to load because the
+     network dropped must be retryable, and a rejected promise left in the map would refuse
+     forever. */
+  var scripts = {};
+  function loadScript(src) {
+    if (!scripts[src]) {
+      scripts[src] = new Promise(function (resolve, reject) {
+        var node = doc.createElement('script');
+        node.src = src;
+        node.onload = function () { resolve(src); };
+        node.onerror = function () { scripts[src] = null; reject(new Error('ui.err.script')); };
+        doc.body.appendChild(node);
+      });
+    }
+    return scripts[src];
+  }
+
+  /* The map, in dependency order — and the order is load-bearing: map.js reads PMTILES and
+     MVT off `window` when its IIFE runs, so a parallel load that finished out of order
+     would leave it holding undefined. */
+  function loadMap() {
+    return loadScript('/assets/js/pmtiles.js')
+      .then(function () { return loadScript('/assets/js/mvt.js'); })
+      .then(function () { return loadScript('/assets/js/map.js'); });
+  }
+
   /** Traps Tab inside an open dialog and restores focus when it closes. */
   function trapFocus(container, onEscape) {
     var previous = doc.activeElement;
@@ -337,6 +375,8 @@
     langPair: langPair,
     ICONS: ICONS,
     toast: toast,
-    trapFocus: trapFocus
+    trapFocus: trapFocus,
+    loadScript: loadScript,
+    loadMap: loadMap
   };
 })(window);

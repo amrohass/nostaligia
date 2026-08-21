@@ -112,6 +112,32 @@
     "base": "@cdn"
   },
 
+  "_basemap_comment": [
+    "M4's basemap. CLAUDE.md section 2: 'PMTiles (Palestine extract) on R2. NEVER the public",
+    "OSM tile endpoint.' One object in the `public` bucket, read with HTTP Range requests, so",
+    "it arrives over the same CDN as the shards at the same $0 egress and there is no tile",
+    "server to run, rate-limit or pay for.",
+    "",
+    "`path` is relative to read_path.base, exactly like every shard path -- it is NOT a URL,",
+    "for the same reason nothing else in the front end carries a hostname.",
+    "",
+    "EMPTY until the extract is built and uploaded. Empty is deliberate and is not a failure:",
+    "map.js is only fetched when there is a basemap to draw, so an empty value renders /map as",
+    "the list view -- which is section 10's own stated tile-failure fallback, reached by the",
+    "same path a broken archive reaches it by. See the README for the one command that builds",
+    "the extract.",
+    "",
+    "`attribution` is a legal requirement rather than a courtesy: a Protomaps extract is",
+    "derived from OpenStreetMap, whose licence requires the credit to be displayed. It is",
+    "rendered as text beside the map, in both languages, and it is here rather than in i18n.js",
+    "because it is a property of the FILE -- change the extract's source and this changes with",
+    "it."
+  ],
+  "basemap": {
+    "path": "",
+    "attribution": "© OpenStreetMap contributors"
+  },
+
   "_function_env_comment": [
     "Values a deployed Edge Function needs that are not origins in the CORS sense. Same seam",
     "as function_cors above and the same mitigation: the generator prints the exact",

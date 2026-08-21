@@ -50,7 +50,8 @@
     ready: null,          // in-flight or settled ready() promise
     shards: {},           // path -> in-flight or settled fetch promise
     blocks: null,         // content.json, once loaded
-    index: null           // index.json, once loaded
+    index: null,          // index.json, once loaded
+    places: null          // places.json, once loaded
   };
 
   function ArchiveError(key, detail) {
@@ -151,6 +152,7 @@
     // that would look like an editing mistake rather than a caching one.
     state.blocks = null;
     state.index = null;
+    state.places = null;
     return ready();
   }
 
@@ -242,6 +244,30 @@
       if (err && err.key === 'archive.err.missing') return null;
       throw err;
     });
+  }
+
+  /**
+   * places.json — every name M4's map draws.
+   *
+   * The basemap is vector geometry with its label layers deliberately not rendered (see
+   * mvt.js), so this file is the map's entire text: gazetteer entries a moderator typed, in
+   * both languages, published like every other shard. A release built before the gazetteer
+   * existed has none, and an empty map is the correct rendering of that.
+   */
+  function places() {
+    if (state.places) return Promise.resolve(state.places);
+    return ready()
+      .then(function () { return shard('places.json'); })
+      .then(function (body) {
+        // NOT filtered through keep(). §8's redaction list is post ids; a gazetteer entry
+        // is not a contribution and cannot be taken down. Running it through anyway would
+        // read as though it could be, which is worse than the two lines it saves.
+        state.places = body.items || [];
+        return state.places;
+      }, function (err) {
+        if (err && err.key === 'archive.err.missing') { state.places = []; return state.places; }
+        throw err;
+      });
   }
 
   /**
@@ -375,6 +401,7 @@
     refreshRedactions: fetchRedactions,
     isRedacted: isRedacted,
     index: index,
+    places: places,
     /* The cached index, or null. A synchronous reader for the one caller that needs the
        decade list mid-render and cannot await — reaching into _state for it would make a
        view depend on this module's internals, which is what _state exists NOT to be. */

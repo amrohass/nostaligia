@@ -64,7 +64,23 @@
   --gold-a20: rgba(217, 164, 65, .20);
   --gold-a40: rgba(217, 164, 65, .40);
   --gold-a45: rgba(217, 164, 65, .45);
+  /* The map (M4). A canvas cannot resolve var(), so map.js reads these off the document
+     element by name and paints with the values — which is what keeps section 9's "never
+     hardcode a color" true for a renderer that draws pixels rather than DOM.
+     Same paper-and-olive family as everything else: the basemap is a backdrop for the
+     memories on it, not a road atlas, so it is quiet and low-contrast on purpose. */
   --map-canvas: #EEF1E6;
+  --map-earth: #E8E4D8;
+  --map-landuse: #E1E7D3;
+  --map-water: #C6D6D9;
+  --map-building: #DDD8C8;
+  --map-road: #FBF8EF;
+  --map-road-major: #FFFDF6;
+  --map-boundary: #8A9268;
+  --map-label: #26281F;
+  --map-label-halo: #F7F4EC;
+  --map-pin: #C05B3E;
+  --map-pin-ink: #F7F4EC;
 
   /* Type */
   --font-ar: 'IBM Plex Sans Arabic', system-ui, sans-serif;

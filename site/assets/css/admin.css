@@ -747,6 +747,16 @@ html[lang="en"] .factbox { font: 400 11.5px/1.7 var(--font-en); }
   text-align: start;
 }
 .place:hover { background: var(--paper-raised); }
+/* M4: a row is a <button> now, because it opens the editor. atlas.css's element reset —
+   which this shell loads too — already strips the background, border and padding, so the
+   only thing to restore is the border-bottom the reset takes with it.
+   The editor's own controls (.placepick__*, .mapview*) need nothing here for the same
+   reason: they are atlas.css's, and admin.html loads it. */
+.place--button {
+  border-bottom: 1px solid rgba(62, 74, 46, .08);
+  border-inline-start: 3px solid transparent;
+}
+.place--button:focus-visible { outline: 2px solid var(--gold-ink); outline-offset: -2px; }
 .place[aria-selected="true"] {
   background: var(--paper-sunken);
   border-inline-start-color: var(--terracotta);
@@ -1036,3 +1046,4 @@ html[lang="en"] .admin-gate__note { font: 400 13px var(--font-en); }
   margin-inline-end: auto;
 }
 html[lang="en"] .decisions__warn { font: 500 11.5px var(--font-en); }
+

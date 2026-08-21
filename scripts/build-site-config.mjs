@@ -129,6 +129,35 @@ if (archiveBase) {
   }
 }
 
+// -- The basemap ------------------------------------------------------------
+// Section 2: "PMTiles (Palestine extract) on R2." A path relative to read_path.base, so the
+// archive and the basemap move together and neither carries a hostname.
+//
+// Empty is legal and means "not provisioned": /map falls back to the list, which is M4's own
+// stated tile-failure fallback. What is NOT legal is a value that looks configured and is
+// not -- an absolute URL (which would put a hostname outside this file) or a path escaping
+// the read path.
+const basemapPath = (cfg.basemap?.path ?? '').trim();
+if (basemapPath) {
+  if (/^[a-z]+:/i.test(basemapPath) || basemapPath.startsWith('//')) {
+    throw new Error(
+      `basemap.path: "${basemapPath}" is a URL — it must be a path under read_path.base, so the origin stays in this file`);
+  }
+  if (basemapPath.includes('..')) {
+    throw new Error(`basemap.path: "${basemapPath}" escapes the read path`);
+  }
+  if (!basemapPath.endsWith('.pmtiles')) {
+    throw new Error(`basemap.path: "${basemapPath}" is not a .pmtiles archive`);
+  }
+}
+const basemapUrl = basemapPath
+  ? `${archiveBase}/${basemapPath.replace(/^\//, '')}`
+  : '';
+const basemapAttribution = (cfg.basemap?.attribution ?? '').trim();
+if (basemapPath && !basemapAttribution) {
+  throw new Error('basemap.attribution is empty — an OpenStreetMap-derived extract must display its credit');
+}
+
 // -- The publisher's view of the site ---------------------------------------
 // Not a CORS origin -- a canonical URL. Same rules for the same reasons as the loop above,
 // minus the localhost exemption: a prerendered page whose og:url is http://localhost is a
@@ -223,6 +252,15 @@ ${Object.entries(cfg.domains).map(([k, v]) => `      ${k}: 'https://${v}'`).join
     // read_path in config/site.json. archive.js joins paths onto this, and nothing else in
     // the front end knows where the archive lives.
     archiveBase: ${JSON.stringify(archiveBase)},
+
+    // M4's basemap: one PMTiles archive under the read path, or "" when none is
+    // provisioned. public.js loads the map module only when this has a value, so an empty
+    // string renders /map as the list -- section 10's own tile-failure fallback, reached
+    // deliberately rather than by an error.
+    basemap: Object.freeze({
+      url: ${JSON.stringify(basemapUrl)},
+      attribution: ${JSON.stringify(basemapAttribution)}
+    }),
 
     // The exact policy served by _headers. Exposed so a page can assert at runtime that the
     // policy it is running under is the one this repository generated, rather than assuming.
