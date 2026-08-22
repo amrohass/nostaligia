@@ -391,13 +391,34 @@ jobs:
           supabase test db > /tmp/tap.out 2>&1 || rc=$?
           cat /tmp/tap.out
           if [ "$rc" -ne 0 ]; then
-            # Each failing assertion as its own ANNOTATION, not only in the log body.
-            # The lifecycle job has always done this and it is why a red run there can be
-            # diagnosed from the outside; this step said "pgTAP reported failing
-            # assertions" and put the detail in a log that needs admin rights to download.
-            # The names pgTAP prints are the whole diagnosis, so they belong where the
-            # failure is visible.
-            grep '^not ok' /tmp/tap.out | while IFS= read -r line; do
+            # The diagnosis as ANNOTATIONS, not only in the log body. The lifecycle job has
+            # always done this and it is why a red run there can be read from outside; this
+            # step said "pgTAP reported failing assertions" and put the detail in a log that
+            # needs admin rights to download.
+            #
+            # EVERY grep is guarded with `|| true`, and that is the whole reason this block
+            # is shaped like this. Under the `set -euo pipefail` on line 1, a grep that
+            # matches nothing exits 1 and takes the step down with it — so the first version
+            # of this block swallowed the very diagnosis it exists to print, including the
+            # summary line below, on exactly the run where a file died before emitting a
+            # single `not ok`. That is this repository's recurring defect (a masked pipe
+            # exit) written by the person who documents it.
+            #
+            # The patterns are pg_prove's, not raw TAP's, and that distinction cost a run.
+            # pg_prove does not echo `not ok` lines unless it is verbose: it prints
+            # "# Failed test 4: '...'" and "…28_gazetteer.test.sql .. Failed 1/18 subtests".
+            # A grep for '^not ok' therefore matches nothing on a perfectly ordinary
+            # assertion failure — which, unguarded, then killed the step. `not ok` stays in
+            # the list because it costs nothing and a future --verbose would emit it.
+            #
+            # The last patterns are for the case with no assertion result at all: a file
+            # that raises a SQL error reports nothing, and "Dubious" plus the ERROR text is
+            # the only thing that says what happened.
+            {
+              grep '^not ok' /tmp/tap.out || true
+              grep -E '# +Failed test|Failed [0-9]+/[0-9]+|Dubious|ERROR:|died|psql:|planned [0-9]+ test' /tmp/tap.out || true
+            } > /tmp/tap.err
+            head -60 /tmp/tap.err | while IFS= read -r line; do
               echo "::error::$line"
             done
             echo "::error::pgTAP reported failing assertions"
