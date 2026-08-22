@@ -322,7 +322,20 @@ begin
     if not found then
       return jsonb_build_object('saved', false, 'reason', 'unknown_place');
     end if;
-    v_precision := coalesce(p_precision, case when v_location is null then 'hidden' else 'exact' end);
+    -- Both branches cast, and they have to be. A CASE whose arms are bare quoted literals
+    -- resolves to `text` before COALESCE ever sees it, so the expression becomes
+    -- coalesce(location_precision, text) and the function fails to PARSE:
+    --
+    --     COALESCE types public.location_precision and text cannot be matched
+    --
+    -- plpgsql defers that to first execution rather than to CREATE, so the migration
+    -- applies cleanly and the error arrives on the first call. A single unknown literal
+    -- beside an enum is fine — it is coerced from the other operand, which is why the
+    -- 'street' line below needs no help and this one did.
+    v_precision := coalesce(
+      p_precision,
+      case when v_location is null then 'hidden'::public.location_precision
+           else 'exact'::public.location_precision end);
   elsif p_lat is not null or p_lon is not null then
     if p_lat is null or p_lon is null
        or p_lat < -90 or p_lat > 90 or p_lon < -180 or p_lon > 180 then
