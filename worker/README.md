@@ -6,8 +6,15 @@ Function has no ffmpeg and a 200 MB upload exhausts a Deno isolate before a WASM
 finishes.
 
 It is a plain container with no host-specific SDK, so **which host runs it is a deployment
-choice, not an architectural one**. The commands below use Cloud Run because it scales to
-zero; nothing in `src/` knows that.
+choice, not an architectural one**. The commands below use Scaleway Serverless Containers
+because it scales to zero and needs no invoker identity; nothing in `src/` knows that. It
+ran on Cloud Run first, and the move cost no change under `src/` — which is the claim above,
+tested.
+
+That claim holds for the *container*. It does **not** extend to the execution model: the
+worker answers 202 and works with no request in flight, which is a Cloud Run–specific
+guarantee (`--no-cpu-throttling`) rather than a portable one. See the deadline gap under
+Deploy.
 
 ---
 
@@ -71,11 +78,18 @@ retry, and the cost of being wrong the other way is a lost photograph.
 **Inbound** — an HMAC-SHA256 over the raw request body, shared with `complete-upload`. The
 timestamp is inside the signed payload, so a signature cannot outlive its window.
 
-Cloud Run IAM would be stronger, and is not used, deliberately: it would require the Edge
-Function to mint a Google OIDC token, which means a **GCP service-account key in Supabase
-secrets** — a new capability-bearing credential in a new place, which §6 argues against more
-strongly than it argues for IAM. Signature rejection costs one HMAC and no I/O, and
-`--max-instances` bounds what a flood can spend.
+A platform invoker identity would be stronger, and is not used, deliberately. On Cloud Run
+it would require the Edge Function to mint a Google OIDC token, and there is **no keyless
+path** to one: Workload Identity Federation needs the caller to present a token from a
+federated IdP, and Supabase Edge Functions expose no ambient machine identity to user code.
+So it means a GCP service-account private key in Supabase secrets. Scaleway's
+`privacy=private` has the same shape with a Scaleway token in place of the Google one.
+Either way it is a **new capability-bearing credential in a new place**, which §6 argues
+against more strongly than it argues for IAM.
+
+The host therefore has no bearing on this trust boundary — the HMAC is the gate on every
+platform, which is what made the container portable between them. Signature rejection costs
+one HMAC and no I/O, and `max-scale` bounds what a flood can spend.
 
 **Outbound** — a JWT asserting `role: media_worker`, minted out of band. The worker never
 holds the signing secret, so a full compromise yields a token that can call two functions,
@@ -89,20 +103,31 @@ Never in this repository, never in the Dockerfile, never a build arg.
 
 | name | capability-bearing | where it comes from |
 |---|:--:|---|
-| `MEDIA_WORKER_SECRET` | yes | Secret Manager → `--set-secrets`; the same value in Supabase Function secrets |
-| `MEDIA_WORKER_JWT` | yes | `scripts/mint-worker-jwt.ts`, then Secret Manager |
-| `R2_ACCESS_KEY_ID` | yes | Secret Manager |
-| `R2_SECRET_ACCESS_KEY` | yes | Secret Manager |
-| `R2_ACCOUNT_ID` | no | Secret Manager, kept with the pair above |
-| `SUPABASE_URL` | no | `--set-env-vars` |
-| `SUPABASE_ANON_KEY` | no — public by design | `--set-env-vars` |
+| `MEDIA_WORKER_SECRET` | yes | `secret-environment-variables`; the same value in Supabase Function secrets |
+| `MEDIA_WORKER_JWT` | yes | `scripts/mint-worker-jwt.ts`, then `secret-environment-variables` |
+| `R2_ACCESS_KEY_ID` | yes | `secret-environment-variables` |
+| `R2_SECRET_ACCESS_KEY` | yes | `secret-environment-variables` |
+| `R2_ACCOUNT_ID` | no | `secret-environment-variables`, kept with the pair above |
+| `SUPABASE_URL` | no | `environment-variables` |
+| `SUPABASE_ANON_KEY` | no — public by design | `environment-variables` |
+
+`SUPABASE_URL` is the **bare origin** — `https://<ref>.supabase.co`, no path. `db.ts` appends
+`/rest/v1/rpc/…` itself, so a value ending in `/rest/v1/` produces `/rest/v1/rest/v1/rpc/…`
+and every RPC 404s. Nothing else in the worker reads it, so nothing catches the mistake.
 
 Locally they belong in `worker/.dev.vars`, which `.gitignore` matches at every depth and
-`scripts/forbidden-paths.ere` blocks from a force-add.
+`scripts/forbidden-paths.ere` blocks from a force-add. Nothing auto-loads that file — pass it
+explicitly with `docker run --env-file` or `deno run --env-file=`.
 
-**Mint a separate R2 token for the worker** — read on `quarantine`, write on `originals` and
-`public`. `request-upload` only needs write on `quarantine`; reusing one token gives each
-side the other's reach for no reason.
+**Mint a separate R2 token for the worker** — Object Read **& Write** on `quarantine`,
+`originals` and `public`. Read-only on `quarantine` is not enough: step 9 DELETEs the
+quarantine object, so a read-only token transcodes successfully and then fails cleanup.
+`request-upload` only needs `quarantine`; reusing one token gives each side the other's reach
+for no reason.
+
+Note that an R2 API token carries **one permission level across all the buckets it selects**,
+so a per-bucket split — read here, write there — is not expressible in a single token. Two
+tokens still buy independent revocation, which is the part worth having.
 
 ---
 
@@ -147,58 +172,99 @@ docker rm -f rma-store-minio
 
 ## Deploy
 
-`--source` is not usable here: it looks for a Dockerfile at the root of the build context,
-and this one lives at `worker/Dockerfile` while needing a context rooted at the repository so
-it can reach `supabase/functions/_shared`. So the image is built and pushed explicitly.
+**Scaleway Serverless Containers.** Moved off Cloud Run (§12 deviation, 22 Aug 2026): the
+GCP invoker service account was declined rather than accept a new class of
+capability-bearing secret, and per §6 the host has no bearing on the HMAC trust boundary —
+see Authentication above. Nothing in `src/` changed, which is the claim that made the move
+cheap.
+
+The image is built and pushed explicitly, because the Dockerfile lives at `worker/Dockerfile`
+while needing a build context rooted at the repository so it can reach
+`supabase/functions/_shared`.
 
 ```bash
-REGION=europe-west3
-REPO="$REGION-docker.pkg.dev/$PROJECT_ID/rma"
+REGION=nl-ams                       # see "Region" below — there is no Frankfurt
+REG="rg.$REGION.scw.cloud/rma"
 TAG=$(git rev-parse --short HEAD)
 
 # one-time
-gcloud artifacts repositories create rma --repository-format=docker --location="$REGION"
-gcloud auth configure-docker "$REGION-docker.pkg.dev"
+scw registry namespace create name=rma region="$REGION"
+docker login "rg.$REGION.scw.cloud" -u nologin --password-stdin   # paste a Scaleway secret key
+scw container namespace create name=rma region="$REGION"
 
 # build from the REPOSITORY ROOT, not from worker/
-docker build -f worker/Dockerfile -t "$REPO/media-worker:$TAG" .
-docker push "$REPO/media-worker:$TAG"
+docker build -f worker/Dockerfile -t "$REG/media-worker:$TAG" .
+docker push "$REG/media-worker:$TAG"
 
-gcloud run deploy rma-media-worker \
-  --image "$REPO/media-worker:$TAG" \
-  --region "$REGION" \
-  --min-instances=0 \
-  --max-instances=3 \
-  --concurrency=1 \
-  --cpu=2 --memory=4Gi \
-  --timeout=3600 \
-  --execution-environment=gen2 \
-  --no-cpu-throttling \
-  --allow-unauthenticated \
-  --set-env-vars "SUPABASE_URL=https://<ref>.supabase.co,SUPABASE_ANON_KEY=<anon>" \
-  --set-secrets "MEDIA_WORKER_SECRET=media-worker-secret:latest,\
-MEDIA_WORKER_JWT=media-worker-jwt:latest,\
-R2_ACCOUNT_ID=r2-account-id:latest,\
-R2_ACCESS_KEY_ID=r2-access-key-id:latest,\
-R2_SECRET_ACCESS_KEY=r2-secret-access-key:latest"
+scw container container create \
+  name=rma-media-worker \
+  namespace-id="$NAMESPACE_ID" \
+  region="$REGION" \
+  image="$REG/media-worker:$TAG" \
+  port=8080 \
+  privacy=public \
+  https-connections-only=true \
+  min-scale=0 \
+  max-scale=3 \
+  mvcpu-limit=2000 \
+  memory-limit-bytes=4294967296 \
+  timeout=3600s \
+  environment-variables.SUPABASE_URL="https://<ref>.supabase.co" \
+  environment-variables.SUPABASE_ANON_KEY="<anon>" \
+  secret-environment-variables.MEDIA_WORKER_SECRET="<value>" \
+  secret-environment-variables.MEDIA_WORKER_JWT="<value>" \
+  secret-environment-variables.R2_ACCOUNT_ID="<value>" \
+  secret-environment-variables.R2_ACCESS_KEY_ID="<value>" \
+  secret-environment-variables.R2_SECRET_ACCESS_KEY="<value>"
+
+scw container container deploy "$CONTAINER_ID" region="$REGION"
 ```
 
 Tagged by commit, never `:latest` — a rollback needs a tag that still points at the image it
 pointed at yesterday.
 
-Each flag is a §6 cost control or a correctness requirement:
+Each value is a §6 cost control or a correctness requirement:
 
-- `--min-instances=0` — scale to zero. At ~300 items an always-on instance is the largest
-  avoidable line on a grant-funded budget.
-- `--max-instances=3` — the hard billing ceiling.
-- `--concurrency=1` — ffmpeg is CPU-bound; two jobs on one instance thrash and OOM.
-- `--no-cpu-throttling` — **required**, because the job runs after the 202. It governs CPU on
-  a live instance, not whether idle instances persist, so it does not conflict with
-  scale-to-zero.
-- `--region europe-west3` — Frankfurt, matching the Supabase region (§2).
+- `min-scale=0` — scale to zero. At ~300 items an always-on instance is the largest
+  avoidable line on a grant-funded budget. **Read the deadline gap below before trusting it.**
+- `max-scale=3` — the hard billing ceiling.
+- `mvcpu-limit=2000` / `memory-limit-bytes` — 2 vCPU and 4 GiB. ffmpeg is CPU-bound; two
+  concurrent jobs on one instance thrash and OOM, and the busy flag in `main.ts` refuses the
+  second rather than relying on a platform concurrency setting.
+- `privacy=public` — the HMAC is the gate, deliberately. `privacy=private` would need a
+  Scaleway token in Supabase secrets, which is the trade Authentication above refuses.
+- `https-connections-only=true` — the job body carries no secret, but the signature is a
+  bearer-ish value and there is no reason to send it in clear.
+- `secret-environment-variables.*` — never `environment-variables` for these five. The
+  distinction is that secrets are write-only once set and are not returned by a describe.
+
+**Region.** Scaleway Serverless Containers runs in `fr-par`, `nl-ams` and `pl-waw` only —
+**there is no Frankfurt region on this product**, so §2's colocation with Supabase EU
+(Frankfurt) is not literally available. `nl-ams` is the nearest. All three are EU, so the
+data-residency posture §7 depends on is intact; what is lost is a same-city hop, which costs
+latency on RPCs and nothing on correctness.
+
+**The deadline gap — read this before relying on `min-scale=0`.**
+
+`timeout=3600s` is Scaleway's **maximum**: the documented range is 10 seconds to 60 minutes.
+`JOB_DEADLINE_MS` in `src/pipeline.ts` is **240 minutes**. The two do not meet, and Cloud
+Run's 60-minute ceiling did not meet it either — so this is not a regression, but it is not
+parity with the constant either.
+
+Worse, and specific to scale-to-zero: this worker answers `202` and then transcodes with **no
+request in flight**, and a container set to `min-scale=0` has "all instances terminated after
+15 minutes of inactivity". If inactivity is measured by requests — which is how every
+scale-to-zero HTTP platform measures it — the effective ceiling is 15 minutes, not 60. Cloud
+Run answered this with `--no-cpu-throttling`; Scaleway documents no equivalent and is silent
+on post-response work.
+
+Nothing here is settled by reading more documentation. It is settled by deploying a container
+that answers 202 and heartbeats for 40 minutes, and watching where the logs stop. Until that
+is run, treat `min-scale=1` as the safe setting and the billing consequence as the price of
+not knowing.
 
 Four ceilings compose: daily quota bounds uploads per user, `ingest_attempts` bounds
-invocations per upload, `concurrency × max-instances` bounds parallel transcodes, and the
+invocations per upload, the busy flag × `max-scale` bounds parallel transcodes, and the
 in-process job timeout bounds each one.
 
 ---
