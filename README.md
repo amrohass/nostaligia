@@ -37,6 +37,25 @@ Milestones run in order and nothing is built ahead. See CLAUDE.md §10 for the f
 | 5 | Tile-failure fallback to list view | **done** — and it is the same list the map is always rendered above |
 | — | R1's other half, carried from M0: a moderator can now CORRECT a location, not only see it flagged | **done** |
 
+**What the first green run cost, recorded because it is the useful part.** Four red runs
+before the database job passed (green at run 32572070470), every one a defect that a local
+`supabase test db` would have shown in seconds — Docker's engine is not running on the
+maintainer's machine, so the suite's first execution of new SQL is on CI. Three were SQL
+and one was CI's own diagnostics:
+
+- `<->` left unqualified in a function that pins `search_path = ''`. PostGIS lives in
+  `extensions`, and an OPERATOR resolves through the search path exactly like a function
+  name — which is easy to forget, because an operator looks like syntax rather than a name.
+- `place_public` taking a whole `places` ROW. A whole-row reference needs SELECT on every
+  column, and 0015 grants seven of nine — so every call by `authenticated` was refused from
+  inside a function the caller was allowed to run. The lifecycle harness caught it, the same
+  way it caught the identical rule in M1 (`return=representation` is a SELECT of `*`).
+- `coalesce(enum, case when … then 'a' else 'b' end)`. A CASE of bare literals is `text`,
+  so the parse fails at first execution rather than at CREATE.
+- and one run lost to the pgTAP step reporting "pgTAP reported failing assertions" and
+  nothing else. Its failing lines are annotations now, like the lifecycle job's — GitHub's
+  job logs need admin rights, and annotations do not.
+
 **The map draws no text.** Every name on it comes from `places.json` — the confirmed
 gazetteer, published into each release — rather than from the tiles' own label layers,
 which are deliberately not rendered. That is what makes an Arabic-first map possible: an
