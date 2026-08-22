@@ -59,6 +59,25 @@ language sql immutable as $fn$
     from jsonb_array_elements(p_result) with ordinality as t(hit, ord);
 $fn$;
 
+/* Audit rows for a gazetteer action, counted through a definer function.
+ *
+ * 0020's audit_log_select requires is_admin(), and the actor below is a MODERATOR — which
+ * is the role the gazetteer belongs to. Reading the table directly would return zero rows
+ * and the assertion would fail while describing the trail as missing, when what is missing
+ * is the reader's privilege. Created before the role switch, so it is owned by the
+ * superuser this suite runs as; the same shape 29_upload_location uses to read `location`.
+ *
+ * moderation_actions is NOT read this way: 0020 lets a moderator read it, that is what the
+ * dashboard does, and asserting it directly is therefore worth something. */
+create function pg_temp.audit_count(p_action text, p_actor uuid) returns integer
+language sql stable security definer set search_path = '' as $fn$
+  select count(*)::integer
+    from public.audit_log a
+   where a.target_type = 'place'
+     and a.action = p_action
+     and (p_actor is null or a.actor = p_actor);
+$fn$;
+
 set local role authenticated;
 set local request.jwt.claims to
   '{"sub":"00000000-0000-0000-0000-00000000ba02","role":"authenticated"}';
@@ -190,9 +209,7 @@ select ok(
 -- ordinary inserts by the suite's superuser and the trigger logged those too, with a null
 -- actor. Counting everything would make the number a fact about the fixtures.
 select is(
-  (select count(*)::integer from public.audit_log
-    where target_type = 'place' and action = 'place.create'
-      and actor = '00000000-0000-0000-0000-00000000ba01'),
+  pg_temp.audit_count('place.create', '00000000-0000-0000-0000-00000000ba01'),
   2,
   'both of the moderator''s creations left an audit row, unasked');
 
@@ -216,7 +233,7 @@ begin
 end $$;
 
 select is(
-  (select count(*)::integer from public.audit_log where action = 'place.confirm'),
+  pg_temp.audit_count('place.confirm', null),
   1,
   'confirming one is recorded as place.confirm, not as an ordinary edit');
 
