@@ -414,14 +414,18 @@ jobs:
             # The last patterns are for the case with no assertion result at all: a file
             # that raises a SQL error reports nothing, and "Dubious" plus the ERROR text is
             # the only thing that says what happened.
-            {
-              grep '^not ok' /tmp/tap.out || true
-              grep -E '# +Failed test|Failed [0-9]+/[0-9]+|Dubious|ERROR:|died|psql:|planned [0-9]+ test' /tmp/tap.out || true
-            } > /tmp/tap.err
-            head -60 /tmp/tap.err | while IFS= read -r line; do
+            # The summary FIRST, then at most nine details: GitHub keeps ten error
+            # annotations per step and silently drops the rest, so anything emitted after
+            # ten lines of detail is not there when somebody reads the run. A bare `psql:`
+            # pattern is what proved that — it matched one "NOTICE: extension pgtap already
+            # exists" per test file, filled the quota with noise, and hid the diagnosis
+            # completely.
+            echo "::error::pgTAP reported failing assertions"
+            grep -E '^not ok|# +Failed test|Failed [0-9]+/[0-9]+|Dubious|ERROR:|FATAL:|died|planned [0-9]+ test' /tmp/tap.out \
+              | grep -v 'NOTICE:' > /tmp/tap.err || true
+            head -9 /tmp/tap.err | while IFS= read -r line; do
               echo "::error::$line"
             done
-            echo "::error::pgTAP reported failing assertions"
             exit "$rc"
           fi
 
