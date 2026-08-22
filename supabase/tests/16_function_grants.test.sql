@@ -173,8 +173,13 @@ select set_eq(
     -- place_public is granted for a mechanical reason rather than a permissive one: the
     -- three below are invoker-rights and call it, so a caller without EXECUTE would be
     -- refused inside a function they were granted.
-    ('place_public(p places) -> authenticated'),
-    ('place_public(p places) -> service_role'),
+    --
+    -- It takes COLUMNS rather than a `places` row, and that is a privilege decision rather
+    -- than a signature preference: a whole-row argument requires SELECT on every column of
+    -- the table, 0015 grants seven of nine, and the refusal reads "permission denied for
+    -- table places" from inside a function the caller was allowed to run.
+    ('place_public(p_id uuid, p_name_ar text, p_name_en text, p_aliases text[], p_location geography, p_unconfirmed boolean) -> authenticated'),
+    ('place_public(p_id uuid, p_name_ar text, p_name_en text, p_aliases text[], p_location geography, p_unconfirmed boolean) -> service_role'),
     ('places_search(p_q text, p_lat double precision, p_lon double precision, p_limit integer) -> authenticated'),
     ('places_search(p_q text, p_lat double precision, p_lon double precision, p_limit integer) -> service_role'),
     ('places_near(p_lat double precision, p_lon double precision, p_radius_m double precision, p_limit integer) -> authenticated'),

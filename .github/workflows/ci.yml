@@ -391,6 +391,15 @@ jobs:
           supabase test db > /tmp/tap.out 2>&1 || rc=$?
           cat /tmp/tap.out
           if [ "$rc" -ne 0 ]; then
+            # Each failing assertion as its own ANNOTATION, not only in the log body.
+            # The lifecycle job has always done this and it is why a red run there can be
+            # diagnosed from the outside; this step said "pgTAP reported failing
+            # assertions" and put the detail in a log that needs admin rights to download.
+            # The names pgTAP prints are the whole diagnosis, so they belong where the
+            # failure is visible.
+            grep '^not ok' /tmp/tap.out | while IFS= read -r line; do
+              echo "::error::$line"
+            done
             echo "::error::pgTAP reported failing assertions"
             exit "$rc"
           fi

@@ -70,27 +70,54 @@ alter type public.moderation_target add value if not exists 'place';
 -- this schema exists to withhold something: a gazetteer entry is a curated public landmark,
 -- not a contribution. It names no person, carries no author and is not fuzzed. `location`
 -- on a POST is the coordinate §7 protects; `location` on a PLACE is the map.
-create or replace function public.place_public(p public.places)
+--
+-- ── COLUMNS, not a row, and that is not a style choice ───────
+--
+-- The obvious signature is a whole `public.places` row — it is what post_content_hash and
+-- post_audit_snapshot take, and it reads better at every call site. It is also wrong here,
+-- and it is wrong invisibly until a browser role calls it:
+--
+--     permission denied for table places
+--
+-- A whole-row reference requires SELECT on EVERY column of the table, not on the columns
+-- the function goes on to read. 0015 revoked table-level SELECT on `places` and re-granted
+-- seven columns; created_at and updated_at are not among them, so the row reference is
+-- refused for `authenticated` while each of the seven reads is allowed. The two functions
+-- above get away with it because they are granted to service_role alone and called from
+-- triggers, which run as the owner.
+--
+-- The same rule produced the M1 defect db.js records at length: `Prefer:
+-- return=representation` with no `select=` is a SELECT of `*`, and the moderation queue
+-- could not approve anything. This cost a CI run to rediscover from the other direction —
+-- and it is why RETURNING in save_place below names its columns too.
+create or replace function public.place_public(
+  p_id          uuid,
+  p_name_ar     text,
+  p_name_en     text,
+  p_aliases     text[],
+  p_location    extensions.geography,
+  p_unconfirmed boolean
+)
 returns jsonb
 language sql
-stable
+immutable
 set search_path = ''
 as $$
   select jsonb_build_object(
-    'id',          p.id,
-    'name_ar',     p.name_ar,
-    'name_en',     p.name_en,
-    'aliases',     to_jsonb(p.aliases),
-    'lat',         case when p.location is null then null
-                        else extensions.st_y(p.location::extensions.geometry) end,
-    'lon',         case when p.location is null then null
-                        else extensions.st_x(p.location::extensions.geometry) end,
-    'unconfirmed', p.unconfirmed
+    'id',          p_id,
+    'name_ar',     p_name_ar,
+    'name_en',     p_name_en,
+    'aliases',     to_jsonb(coalesce(p_aliases, '{}'::text[])),
+    'lat',         case when p_location is null then null
+                        else extensions.st_y(p_location::extensions.geometry) end,
+    'lon',         case when p_location is null then null
+                        else extensions.st_x(p_location::extensions.geometry) end,
+    'unconfirmed', p_unconfirmed
   );
 $$;
 
-comment on function public.place_public(public.places) is
-  'One definition of a gazetteer entry as everything outside the table sees it.';
+comment on function public.place_public(uuid, text, text, text[], extensions.geography, boolean) is
+  'A gazetteer entry as everything outside the table sees it. Takes columns, not a row — see the header.';
 
 -- ── §4's trail ───────────────────────────────────────────────
 --
@@ -114,7 +141,8 @@ begin
     v_action := 'place.create';
     v_before := null;
   else
-    v_before := public.place_public(old);
+    v_before := public.place_public(old.id, old.name_ar, old.name_en, old.aliases,
+                                    old.location, old.unconfirmed);
     -- Confirming a place is the decision worth being able to query for on its own: it is
     -- the moment a name someone typed becomes a coordinate the map draws.
     v_action := case
@@ -124,7 +152,9 @@ begin
   end if;
 
   insert into public.audit_log (actor, action, target_type, target_id, before, after)
-  values (auth.uid(), v_action, 'place', new.id, v_before, public.place_public(new));
+  values (auth.uid(), v_action, 'place', new.id, v_before,
+          public.place_public(new.id, new.name_ar, new.name_en, new.aliases,
+                              new.location, new.unconfirmed));
 
   insert into public.moderation_actions (actor, action, target_type, target_id)
   values (auth.uid(), v_action, 'place', new.id);
@@ -214,7 +244,8 @@ as $$
   -- unordered set takes an arbitrary N and sorting those afterwards produces a neatly
   -- ordered list of the wrong eight places.
   ranked as (
-    select public.place_public(pl)          as hit,
+    select public.place_public(pl.id, pl.name_ar, pl.name_en, pl.aliases,
+                              pl.location, pl.unconfirmed) as hit,
            pl.unconfirmed                   as un,
            case when q.origin is null or pl.location is null then null
                 else pl.location OPERATOR(extensions.<->) q.origin end as dist,
@@ -263,8 +294,11 @@ as $$
            least(greatest(coalesce(p_limit, 6), 1), 25)        as lim
   ),
   ranked as (
-    select public.place_public(pl) || jsonb_build_object(
-             'distance_m', round((pl.location OPERATOR(extensions.<->) q.origin)::numeric, 1)) as hit,
+    select public.place_public(pl.id, pl.name_ar, pl.name_en, pl.aliases,
+                              pl.location, pl.unconfirmed)
+             || jsonb_build_object(
+                  'distance_m',
+                  round((pl.location OPERATOR(extensions.<->) q.origin)::numeric, 1)) as hit,
            pl.location OPERATOR(extensions.<->) q.origin                  as dist
     from public.places pl, q
     where p_lat is not null and p_lon is not null
@@ -309,7 +343,15 @@ declare
   v_name_en  text := nullif(btrim(coalesce(p_name_en, '')), '');
   v_aliases  text[];
   v_location extensions.geography;
-  v_row      public.places;
+
+  -- Named columns rather than a `public.places` row, for the reason place_public's header
+  -- gives: RETURNING * is a SELECT of every column, and 0015 grants seven of nine.
+  v_id           uuid;
+  v_out_name_ar  text;
+  v_out_name_en  text;
+  v_out_aliases  text[];
+  v_out_location extensions.geography;
+  v_out_unconf   boolean;
 begin
   if v_name_ar is null and v_name_en is null then
     return jsonb_build_object('saved', false, 'reason', 'name_required');
@@ -343,7 +385,8 @@ begin
   if p_id is null then
     insert into public.places (name_ar, name_en, aliases, location, unconfirmed)
     values (v_name_ar, v_name_en, v_aliases, v_location, p_unconfirmed)
-    returning * into v_row;
+    returning id, name_ar, name_en, aliases, location, unconfirmed
+         into v_id, v_out_name_ar, v_out_name_en, v_out_aliases, v_out_location, v_out_unconf;
   else
     update public.places
        set name_ar     = v_name_ar,
@@ -352,18 +395,21 @@ begin
            location    = v_location,
            unconfirmed = p_unconfirmed
      where id = p_id
-    returning * into v_row;
+    returning id, name_ar, name_en, aliases, location, unconfirmed
+         into v_id, v_out_name_ar, v_out_name_en, v_out_aliases, v_out_location, v_out_unconf;
 
     -- Zero rows is what an RLS refusal looks like on an UPDATE, and it is also what a
     -- deleted id looks like. Named as one thing because the caller cannot act differently
     -- on the two, and because guessing which it was would mean telling a member whether a
     -- given id exists.
-    if v_row.id is null then
+    if v_id is null then
       return jsonb_build_object('saved', false, 'reason', 'not_found_or_refused');
     end if;
   end if;
 
-  return jsonb_build_object('saved', true, 'place', public.place_public(v_row));
+  return jsonb_build_object('saved', true, 'place',
+    public.place_public(v_id, v_out_name_ar, v_out_name_en, v_out_aliases,
+                        v_out_location, v_out_unconf));
 end;
 $$;
 
@@ -385,8 +431,10 @@ comment on function public.save_place(uuid, text, text, text[], double precision
 -- CALLER's rights and a caller without EXECUTE on this would be refused inside a function
 -- it was granted. It returns the columns 0015 already grants every signed-in user SELECT on,
 -- from a row the caller had to have in hand to pass it.
-revoke execute on function public.place_public(public.places) from public, anon;
-grant  execute on function public.place_public(public.places) to authenticated, service_role;
+revoke execute on function public.place_public(uuid, text, text, text[], extensions.geography, boolean)
+  from public, anon;
+grant  execute on function public.place_public(uuid, text, text, text[], extensions.geography, boolean)
+  to authenticated, service_role;
 
 revoke execute on function public.places_search(text, double precision, double precision, int)
   from public, anon;
