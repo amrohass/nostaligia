@@ -11,7 +11,7 @@
  * everything anyone has ever asked to have removed.
  */
 
-import { env, rpc } from "../_shared/http.ts";
+import { rpc, serviceRoleJwt } from "../_shared/http.ts";
 import type { TakedownDb, TakedownObject } from "./takedown.ts";
 
 export class PostgrestTakedownDb implements TakedownDb {
@@ -33,7 +33,7 @@ export class PostgrestTakedownDb implements TakedownDb {
   }
 
   async redactedPostIds(): Promise<string[]> {
-    const res = await rpc("redacted_post_ids", {}, env("SUPABASE_SERVICE_ROLE_KEY"));
+    const res = await rpc("redacted_post_ids", {}, serviceRoleJwt());
     if (!res.ok) throw new Error("redacted_post_ids returned " + res.status);
     return await res.json() as string[];
   }

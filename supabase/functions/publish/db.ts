@@ -11,13 +11,13 @@
  * it happily, and flip the pointer onto an archive with nothing in it.
  */
 
-import { env, rpc } from "../_shared/http.ts";
+import { env, rpc, serviceRoleJwt } from "../_shared/http.ts";
 import type { Db } from "./release.ts";
 import type { RollbackDb } from "./rollback.ts";
 import type { ContentBlocks, SourcePlace, SourcePost, SourceProfile } from "./shards.ts";
 
 export class PostgrestDb implements Db, RollbackDb {
-  private readonly key = env("SUPABASE_SERVICE_ROLE_KEY");
+  private readonly key = serviceRoleJwt();
 
   private async call<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
     const res = await rpc(name, args, this.key);

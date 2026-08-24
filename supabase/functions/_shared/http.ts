@@ -96,3 +96,33 @@ export function unverifiedClaim(jwt: string, path: string[]): unknown {
     return null;
   }
 }
+
+/**
+ * The service-role credential to send as a BEARER to PostgREST.
+ *
+ * Not simply `env("SUPABASE_SERVICE_ROLE_KEY")`, and the reason is a platform change
+ * rather than a preference. The hosted runtime now injects the NEW key formats into the
+ * reserved names: `SUPABASE_ANON_KEY` arrives as `sb_publishable_…` and
+ * `SUPABASE_SERVICE_ROLE_KEY` as `sb_secret_…`. Those are opaque strings, not JWTs, and
+ * `rpc()` puts this value in `Authorization: Bearer`, where PostgREST parses a JWT and
+ * answers
+ *
+ *     401 PGRST301 {"message":"Expected 3 parts in JWT; got 1"}
+ *
+ * Every Db method turns a non-2xx into a throw — deliberately, so a network error can
+ * never be mistaken for "no approved posts" — and handler.ts has no try/catch around
+ * publish(), so the whole thing surfaced as a bare 500 with no detail. Measured, not
+ * inferred: `apikey` accepts the publishable key happily; only the bearer must be a JWT.
+ *
+ * The obvious fix — set `SUPABASE_SERVICE_ROLE_KEY` to the legacy JWT — is impossible:
+ * the CLI refuses the reserved prefix outright ("Env name cannot start with SUPABASE_,
+ * skipping"). Hence a second, unreserved name that takes precedence when present.
+ *
+ * The fallback is kept rather than replaced, so this stays correct on any deployment
+ * where the platform still injects a legacy JWT — including the local stack and CI.
+ */
+export function serviceRoleJwt(): string {
+  const explicit = Deno.env.get("SERVICE_ROLE_JWT");
+  if (explicit) return explicit;
+  return env("SUPABASE_SERVICE_ROLE_KEY");
+}
