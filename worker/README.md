@@ -184,13 +184,15 @@ while needing a build context rooted at the repository so it can reach
 
 ```bash
 REGION=nl-ams                       # see "Region" below — there is no Frankfurt
-REG="rg.$REGION.scw.cloud/rma"
+REG="rg.$REGION.scw.cloud/rma-media"
 TAG=$(git rev-parse --short HEAD)
 
-# one-time
-scw registry namespace create name=rma region="$REGION"
+# one-time. The name is `rma-media`, not `rma`: Scaleway enforces a minimum length on
+# both namespace kinds and refuses three characters with
+#   Key: 'Namespace.Name' Error:Field validation for 'Name' failed on the 'min' tag
+scw registry namespace create name=rma-media region="$REGION"
 docker login "rg.$REGION.scw.cloud" -u nologin --password-stdin   # paste a Scaleway secret key
-scw container namespace create name=rma region="$REGION"
+scw container namespace create name=rma-media region="$REGION"
 
 # build from the REPOSITORY ROOT, not from worker/
 docker build -f worker/Dockerfile -t "$REG/media-worker:$TAG" .
@@ -204,13 +206,14 @@ scw container container create \
   port=8080 \
   privacy=public \
   https-connections-only=true \
-  min-scale=0 \
+  min-scale=1 \
   max-scale=3 \
   mvcpu-limit=2000 \
-  memory-limit-bytes=4294967296 \
+  memory-limit-bytes=4GB \
   timeout=3600s \
   environment-variables.SUPABASE_URL="https://<ref>.supabase.co" \
   environment-variables.SUPABASE_ANON_KEY="<anon>" \
+  environment-variables.R2_BUCKET_PREFIX="nostaligia-" \
   secret-environment-variables.MEDIA_WORKER_SECRET="<value>" \
   secret-environment-variables.MEDIA_WORKER_JWT="<value>" \
   secret-environment-variables.R2_ACCOUNT_ID="<value>" \
@@ -225,8 +228,18 @@ pointed at yesterday.
 
 Each value is a §6 cost control or a correctness requirement:
 
-- `min-scale=0` — scale to zero. At ~300 items an always-on instance is the largest
-  avoidable line on a grant-funded budget. **Read the deadline gap below before trusting it.**
+- `min-scale=1` — **not** scale-to-zero, and this contradicts §6 knowingly. §6 wants zero
+  because at ~300 items an always-on instance is the largest avoidable line on a
+  grant-funded budget. It is `1` here because the measurement below shows `0` does not
+  keep the instance alive to finish a job. This is the safe setting, not the right one:
+  see "What the heartbeat probe measured".
+- `environment-variables.R2_BUCKET_PREFIX` — the physical buckets are `nostaligia-*` while
+  the `Bucket` union, `media_assets.bucket` and `assertManifest` all stay logical. Omit it
+  and every signed request names a bucket that does not exist, which R2 answers
+  `NoSuchBucket`. Unset legitimately means no prefix, which is what keeps the MinIO
+  harnesses working, so nothing warns you that it is missing.
+- `memory-limit-bytes=4GB` — the CLI rejects a byte count and a megabyte unit alike:
+  *"size must be defined using the G or GB unit"*.
 - `max-scale=3` — the hard billing ceiling.
 - `mvcpu-limit=2000` / `memory-limit-bytes` — 2 vCPU and 4 GiB. ffmpeg is CPU-bound; two
   concurrent jobs on one instance thrash and OOM, and the busy flag in `main.ts` refuses the
@@ -259,9 +272,43 @@ Run answered this with `--no-cpu-throttling`; Scaleway documents no equivalent a
 on post-response work.
 
 Nothing here is settled by reading more documentation. It is settled by deploying a container
-that answers 202 and heartbeats for 40 minutes, and watching where the logs stop. Until that
-is run, treat `min-scale=1` as the safe setting and the billing consequence as the price of
-not knowing.
+that answers 202 and heartbeats for 40 minutes, and watching where the logs stop.
+
+**What the heartbeat probe measured — 24 Aug 2026. `min-scale=0` does not survive.**
+
+A throwaway container was deployed at `min-scale=0`, `max-scale=1`, answering `202` and
+then heartbeating every 30s for 40 minutes with nothing in flight — the same shape
+`main.ts` uses. It kept its beats in memory and served them from `/report`, deliberately
+rather than relying on Cockpit: an empty Loki result cannot distinguish "the instance died"
+from "the log pipeline lagged", which is the exact distinction being measured.
+
+    triggered  15:20:40Z  ->  202 {"boot":"e3dcf3f9","accepted":true}
+    /report    16:05:31Z  ->  200 {"boot":"fe1f646a","booted_at":"16:05:38Z",
+                                   "accepted_at":null,"beat_count":0}
+
+The instance that answered `202` was gone. What served `/report` was a different instance,
+booted **seven seconds after the request arrived** — a cold start, with no history. So the
+platform reclaimed the worker while it was working, exactly as the inactivity reasoning
+above predicted, and post-response work is not safe at `min-scale=0`.
+
+Two honest limits on that result. It proves the instance was gone by minute 45, **not** that
+it died at 15 — pinning the moment needs Cockpit, or a probe that writes each beat somewhere
+that outlives the container. And it cannot distinguish "terminated" from "frozen so hard it
+never woke", though for a job under a deadline those have the same consequence.
+
+**What it does not settle** is the production answer, and that reopened rather than closed:
+
+- `min-scale=1` — works, and bills continuously for a container that is idle almost all of
+  the time. §6 names this the largest avoidable line on a grant-funded budget, and with the
+  ~300 launch items transcoded offline the real load is a handful of uploads a day.
+- **Serverless Jobs** — 24h, 6 vCPU, 16 GB, and API-triggered, which puts a Scaleway
+  credential in Supabase secrets.
+
+That second option deserves a note, because it undercuts a decision already taken: a
+Scaleway credential in Supabase secrets is the *same trade* that moved this worker off Cloud
+Run. If it is acceptable here, then Cloud Run's `--no-cpu-throttling` with `min-scale=0` —
+which solves precisely this problem and was abandoned over precisely this objection —
+deserves reconsidering on the merits rather than being treated as settled.
 
 Four ceilings compose: daily quota bounds uploads per user, `ingest_attempts` bounds
 invocations per upload, the busy flag × `max-scale` bounds parallel transcodes, and the
