@@ -1,0 +1,487 @@
+
+=== [1/22] photo-01  صورة (1).JPG  start 2026-08-24T14:57:33.934Z ===
+
+photo-01  REAL  6.0 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.01s
+  probe                      ffprobe   0.28s
+  preserve_master            store     0.02s
+  display.webp               ffmpeg    1.12s
+  probe                      ffprobe   0.33s
+  probe                      ffprobe   0.22s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.35s
+  probe                      ffprobe   0.21s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     2.56s
+
+--- exit 0, wall 15s ---
+
+=== [2/22] photo-02  صورة (2).JPG  start 2026-08-24T14:57:48.735Z ===
+
+photo-02  REAL  3.7 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.17s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    1.01s
+  probe                      ffprobe   0.24s
+  probe                      ffprobe   0.19s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.26s
+  probe                      ffprobe   0.17s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     2.06s
+
+--- exit 0, wall 10s ---
+
+=== [3/22] photo-03  صورة (3).JPG  start 2026-08-24T14:57:58.403Z ===
+
+photo-03  REAL  3.9 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.21s
+  preserve_master            store     0.01s
+  display.webp               ffmpeg    0.98s
+  probe                      ffprobe   0.17s
+  probe                      ffprobe   0.18s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.36s
+  probe                      ffprobe   0.14s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     2.06s
+
+--- exit 0, wall 9s ---
+
+=== [4/22] photo-04  صورة (4).JPG  start 2026-08-24T14:58:07.069Z ===
+
+photo-04  REAL  5.0 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.32s
+  preserve_master            store     0.01s
+  display.webp               ffmpeg    1.13s
+  probe                      ffprobe   0.18s
+  probe                      ffprobe   0.17s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.27s
+  probe                      ffprobe   0.13s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     2.23s
+
+--- exit 0, wall 9s ---
+
+=== [5/22] photo-05  صورة (5).JPG  start 2026-08-24T14:58:16.427Z ===
+
+photo-05  REAL  3.4 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.21s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    1.49s
+  probe                      ffprobe   0.22s
+  probe                      ffprobe   0.21s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.30s
+  probe                      ffprobe   0.16s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     2.60s
+
+--- exit 0, wall 13s ---
+
+=== [6/22] photo-06  صورة (6).JPG  start 2026-08-24T14:58:29.564Z ===
+
+photo-06  REAL  4.7 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.15s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    1.75s
+  probe                      ffprobe   0.27s
+  probe                      ffprobe   0.24s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.38s
+  probe                      ffprobe   0.28s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     3.09s
+
+--- exit 0, wall 12s ---
+
+=== [7/22] photo-07  صورة (7).JPG  start 2026-08-24T14:58:42.025Z ===
+
+photo-07  REAL  3.7 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.27s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    1.19s
+  probe                      ffprobe   0.31s
+  probe                      ffprobe   0.20s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.27s
+  probe                      ffprobe   0.13s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     2.39s
+
+--- exit 0, wall 10s ---
+
+=== [8/22] photo-08  صورة (8).JPG  start 2026-08-24T14:58:51.897Z ===
+
+photo-08  REAL  4.2 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.19s
+  preserve_master            store     0.01s
+  display.webp               ffmpeg    1.14s
+  probe                      ffprobe   0.23s
+  probe                      ffprobe   0.19s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.46s
+  probe                      ffprobe   0.18s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     2.41s
+
+--- exit 0, wall 11s ---
+
+=== [9/22] photo-09  صورة (9).JPG  start 2026-08-24T14:59:03.234Z ===
+
+photo-09  REAL  3.5 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.16s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    0.93s
+  probe                      ffprobe   0.23s
+  probe                      ffprobe   0.17s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.26s
+  probe                      ffprobe   0.14s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     1.90s
+
+--- exit 0, wall 12s ---
+
+=== [10/22] photo-10  صورة (10).JPG  start 2026-08-24T14:59:15.247Z ===
+
+photo-10  REAL  4.0 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.20s
+  preserve_master            store     0.01s
+  display.webp               ffmpeg    0.97s
+  probe                      ffprobe   0.20s
+  probe                      ffprobe   0.18s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.27s
+  probe                      ffprobe   0.13s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     1.97s
+
+--- exit 0, wall 10s ---
+
+=== [11/22] photo-11  صورة (11).JPG  start 2026-08-24T14:59:25.116Z ===
+
+photo-11  REAL  3.8 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.16s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    1.08s
+  probe                      ffprobe   0.19s
+  probe                      ffprobe   0.23s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.36s
+  probe                      ffprobe   0.17s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     2.21s
+
+--- exit 0, wall 10s ---
+
+=== [12/22] photo-12  صورة (12).JPG  start 2026-08-24T14:59:35.413Z ===
+
+photo-12  REAL  3.5 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.19s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    1.00s
+  probe                      ffprobe   0.17s
+  probe                      ffprobe   0.17s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.25s
+  probe                      ffprobe   0.16s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     1.95s
+
+--- exit 0, wall 11s ---
+
+=== [13/22] photo-13  صورة (13).JPG  start 2026-08-24T14:59:46.500Z ===
+
+photo-13  REAL  4.3 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.22s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    0.96s
+  probe                      ffprobe   0.19s
+  probe                      ffprobe   0.19s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.28s
+  probe                      ffprobe   0.13s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     1.98s
+
+--- exit 0, wall 10s ---
+
+=== [14/22] photo-14  صورة (14).JPG  start 2026-08-24T14:59:56.579Z ===
+
+photo-14  REAL  4.3 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.16s
+  preserve_master            store     0.01s
+  display.webp               ffmpeg    0.99s
+  probe                      ffprobe   0.21s
+  probe                      ffprobe   0.17s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.26s
+  probe                      ffprobe   0.12s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     1.95s
+
+--- exit 0, wall 9s ---
+
+=== [15/22] photo-15  صورة (15).JPG  start 2026-08-24T15:00:05.972Z ===
+
+photo-15  REAL  5.0 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.17s
+  preserve_master            store     0.01s
+  display.webp               ffmpeg    1.01s
+  probe                      ffprobe   0.19s
+  probe                      ffprobe   0.18s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.29s
+  probe                      ffprobe   0.13s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     1.98s
+
+--- exit 0, wall 11s ---
+
+=== [16/22] photo-16  صورة (16).JPG  start 2026-08-24T15:00:16.640Z ===
+
+photo-16  REAL  5.0 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.16s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    0.97s
+  probe                      ffprobe   0.18s
+  probe                      ffprobe   0.18s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.28s
+  probe                      ffprobe   0.13s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     1.92s
+
+--- exit 0, wall 10s ---
+
+=== [17/22] photo-17  صورة (17).JPG  start 2026-08-24T15:00:27.144Z ===
+
+photo-17  REAL  5.5 MiB  6000x4000  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.00s
+  probe                      ffprobe   0.17s
+  preserve_master            store     0.00s
+  display.webp               ffmpeg    1.05s
+  probe                      ffprobe   0.20s
+  probe                      ffprobe   0.23s
+  upload:display.webp        store     0.00s
+  thumb.webp                 ffmpeg    0.33s
+  probe                      ffprobe   0.15s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.00s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     2.16s
+
+--- exit 0, wall 13s ---
+
+=== [18/22] video-51s-1080x1920  دقيقة.mp4  start 2026-08-24T15:00:39.985Z ===
+
+video-51s-1080x1920  REAL  52.1 MiB  51.6s  1080x1920  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.08s
+  probe                      ffprobe   0.23s
+  preserve_master            store     0.08s
+  1440p.mp4                  ffmpeg    185.50s
+  probe                      ffprobe   0.26s
+  upload:1440p.mp4           store     0.03s
+  1080p.mp4                  ffmpeg    114.06s
+  probe                      ffprobe   0.14s
+  upload:1080p.mp4           store     0.02s
+  720p.mp4                   ffmpeg    71.14s
+  probe                      ffprobe   0.27s
+  upload:720p.mp4            store     0.01s
+  480p.mp4                   ffmpeg    53.88s
+  probe                      ffprobe   0.14s
+  upload:480p.mp4            store     0.01s
+  poster.webp                ffmpeg    0.92s
+  probe                      ffprobe   0.29s
+  upload:poster.webp         store     0.00s
+  thumb.webp                 ffmpeg    0.31s
+  probe                      ffprobe   0.14s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.01s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     427.54s
+
+--- exit 0, wall 442s ---
+
+=== [19/22] video-52s-2730x1440  4k.mp4  start 2026-08-24T15:08:01.952Z ===
+
+video-52s-2730x1440  REAL  84.2 MiB  52.1s  2730x1440  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.94s
+  probe                      ffprobe   0.33s
+  preserve_master            store     0.21s
+  1440p.mp4                  ffmpeg    542.41s
+  probe                      ffprobe   2.35s
+  upload:1440p.mp4           store     0.53s
+  1080p.mp4                  ffmpeg    251.64s
+  probe                      ffprobe   0.18s
+  upload:1080p.mp4           store     0.02s
+  720p.mp4                   ffmpeg    127.20s
+  probe                      ffprobe   0.15s
+  upload:720p.mp4            store     0.01s
+  480p.mp4                   ffmpeg    81.31s
+  probe                      ffprobe   0.14s
+  upload:480p.mp4            store     0.01s
+  poster.webp                ffmpeg    1.19s
+  probe                      ffprobe   0.15s
+  upload:poster.webp         store     0.00s
+  thumb.webp                 ffmpeg    0.25s
+  probe                      ffprobe   0.12s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.04s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     1009.18s
+
+--- exit 0, wall 1087s ---
+
+=== [20/22] video-86s-1080x1920  دقيق ونص2.mp4  start 2026-08-24T15:26:09.031Z ===
+
+video-86s-1080x1920  REAL  81.7 MiB  86.1s  1080x1920  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.04s
+  probe                      ffprobe   0.21s
+  preserve_master            store     0.05s
+  1440p.mp4                  ffmpeg    270.59s
+  probe                      ffprobe   0.48s
+  upload:1440p.mp4           store     0.07s
+  1080p.mp4                  ffmpeg    168.93s
+  probe                      ffprobe   0.15s
+  upload:1080p.mp4           store     0.03s
+  720p.mp4                   ffmpeg    93.95s
+  probe                      ffprobe   0.15s
+  upload:720p.mp4            store     0.04s
+  480p.mp4                   ffmpeg    57.44s
+  probe                      ffprobe   0.13s
+  upload:480p.mp4            store     0.02s
+  poster.webp                ffmpeg    0.72s
+  probe                      ffprobe   0.13s
+  upload:poster.webp         store     0.00s
+  thumb.webp                 ffmpeg    0.18s
+  probe                      ffprobe   0.14s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.02s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     593.47s
+
+--- exit 0, wall 618s ---
+
+=== [21/22] video-96s-1080x1920  دقيقة ونص.mp4  start 2026-08-24T15:36:28.435Z ===
+
+video-96s-1080x1920  REAL  94.7 MiB  96.6s  1080x1920  2 vCPU
+────────────────────────────────────────────────────────────────
+  magic_bytes                store     0.00s
+  download                   store     0.06s
+  probe                      ffprobe   0.29s
+  preserve_master            store     0.07s
+  1440p.mp4                  ffmpeg    331.99s
+  probe                      ffprobe   0.19s
+  upload:1440p.mp4           store     0.09s
+  1080p.mp4                  ffmpeg    244.99s
+  probe                      ffprobe   0.19s
+  upload:1080p.mp4           store     0.04s
+  720p.mp4                   ffmpeg    122.56s
+  probe                      ffprobe   0.15s
+  upload:720p.mp4            store     0.04s
+  480p.mp4                   ffmpeg    74.99s
+  probe                      ffprobe   0.15s
+  upload:480p.mp4            store     0.02s
+  poster.webp                ffmpeg    0.76s
+  probe                      ffprobe   0.14s
+  upload:poster.webp         store     0.00s
+  thumb.webp                 ffmpeg    0.20s
+  probe                      ffprobe   0.14s
+  upload:thumb.webp          store     0.00s
+  remove_quarantine          store     0.01s
+────────────────────────────────────────────────────────────────
+  TOTAL                      ready     777.07s
+
+--- exit 0, wall 824s ---
+
+=== [22/22] video-1095s-1920x1080  حوالي ال20 دقيقة.mp4  start 2026-08-24T15:50:12.506Z ===
