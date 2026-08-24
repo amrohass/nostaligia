@@ -24,7 +24,7 @@ import { timingSafeEqual } from "../_shared/secret.ts";
 import { publish } from "./release.ts";
 import { rollback } from "./rollback.ts";
 import { PostgrestDb } from "./db.ts";
-import { r2Endpoint, R2Sink } from "../_shared/r2.ts";
+import { r2BucketPrefix, r2Endpoint, R2Sink } from "../_shared/r2.ts";
 import { CloudflarePurger, cloudflareFromEnv } from "../takedown/cdn.ts";
 
 /** §2: shards and the pointer both live in the CDN-fronted bucket. */
@@ -69,6 +69,7 @@ export async function handleRequest(req: Request): Promise<Response> {
     secretAccessKey: env("R2_SECRET_ACCESS_KEY"),
     bucket: PUBLIC_BUCKET,
     endpoint: r2Endpoint(),
+    bucketPrefix: r2BucketPrefix(),
   });
 
   if (body.action === "rollback") {

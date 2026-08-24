@@ -74,3 +74,7 @@ gitleaks-report.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Real footage for the timing probe. NEVER committed — 1.2 GB, and ladder-fixture.ts
+# refuses committed real footage on purpose. Staged locally, read by probe-timing.ts.
+fottage/

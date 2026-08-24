@@ -56,7 +56,7 @@
 
 import { presignR2Put } from "../_shared/sigv4.ts";
 import { bearer, corsHeaders, env, fail, json, rpc, unverifiedClaim } from "../_shared/http.ts";
-import { r2Endpoint } from "../_shared/r2.ts";
+import { r2BucketPrefix, r2Endpoint } from "../_shared/r2.ts";
 
 // ── Caps, §6 ─────────────────────────────────────────────────
 // 1024-based, matching how every operating system reports a file size to the person
@@ -365,6 +365,7 @@ export async function handleRequest(req: Request): Promise<Response> {
       contentLength: bytes,
       expiresIn: URL_TTL_SECONDS,
       endpoint: r2Endpoint(),
+      bucketPrefix: r2BucketPrefix(),
     });
   } catch {
     // Never echo the reason: the only way this throws is a missing or malformed R2

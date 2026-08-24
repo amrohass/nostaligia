@@ -193,3 +193,38 @@ Deno.test("UNSIGNED-PAYLOAD is used, and never leaks into the URL", async () => 
     "and not as a hoisted parameter either",
   );
 });
+
+// ── The bucket prefix ────────────────────────────────────────
+//
+// The physical buckets are `nostaligia-*` while the logical names are structural in this
+// codebase (worker union type, and `media_assets.bucket` is a Postgres enum). The prefix is
+// applied at the one point a bucket becomes a path segment, so these assertions are about
+// the PATH — the only place the distinction can be got wrong.
+
+Deno.test("an absent prefix leaves the bucket exactly as given", async () => {
+  const { url } = await presignR2Put(BASE);
+  assertEquals(
+    new URL(url).pathname,
+    "/quarantine/user/object",
+    "unset must be a no-op: MinIO in the lifecycle harness creates the bare names",
+  );
+});
+
+Deno.test("a prefix becomes part of the bucket segment, not a new one", async () => {
+  const { url } = await presignR2Put({ ...BASE, bucketPrefix: "nostaligia-" });
+  assertEquals(
+    new URL(url).pathname,
+    "/nostaligia-quarantine/user/object",
+    "one segment — buckets do not nest, and a second slash would move the name into the key",
+  );
+});
+
+Deno.test("the prefix is covered by the signature", async () => {
+  const plain = await presignR2Put(BASE);
+  const prefixed = await presignR2Put({ ...BASE, bucketPrefix: "nostaligia-" });
+  assert(
+    sigOf(plain.url) !== sigOf(prefixed.url),
+    "same key, same clock, different bucket — a signature that did not move would mean " +
+      "the path was not canonicalised, and the URL would be replayable against either",
+  );
+});

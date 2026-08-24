@@ -42,6 +42,12 @@ export interface R2Credentials {
   secretAccessKey: string;
   /** Test-only override, exactly as in _shared/sigv4.ts. */
   endpoint?: { host: string; protocol?: "http:" | "https:" };
+  /**
+   * Prepended to the logical bucket to form the physical one. Empty means they are the
+   * same. See _shared/r2.ts r2BucketPrefix() — the `Bucket` union above stays logical on
+   * purpose, because `media_assets.bucket` is a Postgres enum over the same three names.
+   */
+  bucketPrefix?: string;
 }
 
 const SIGNED_URL_TTL_S = 900;
@@ -83,6 +89,7 @@ export class R2Store implements ObjectStore {
       expiresIn: SIGNED_URL_TTL_S,
       signHeaders,
       endpoint: this.creds.endpoint,
+      bucketPrefix: this.creds.bucketPrefix,
     });
   }
 
@@ -161,7 +168,11 @@ export class R2Store implements ObjectStore {
     // x-amz-copy-source MUST be signed. It is the entire instruction — an unsigned one
     // could be rewritten in flight to copy any object the credentials can reach into the
     // destination this URL authorises.
-    const source = `/${from.bucket}/${uriEncodePath(from.key)}`;
+    // The SOURCE bucket is prefixed here rather than by the signer: this is a header, not
+    // the request path, so it never passes through presignR2. Omitting the prefix would
+    // name a bucket that does not exist and lose the master — the one object §6 calls the
+    // archival copy — while the destination, which the signer does prefix, looked correct.
+    const source = `/${this.creds.bucketPrefix ?? ""}${from.bucket}/${uriEncodePath(from.key)}`;
     const { url, headers } = await this.sign("PUT", to.bucket, to.key, {
       "x-amz-copy-source": source,
     });

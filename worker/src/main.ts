@@ -201,6 +201,9 @@ function buildStore(): ObjectStore {
     accessKeyId: env("R2_ACCESS_KEY_ID"),
     secretAccessKey: env("R2_SECRET_ACCESS_KEY"),
     endpoint: r2Endpoint(),
+    // Unset means no prefix, which is what keeps ladder-fixture.ts and store-roundtrip.ts
+    // working against bare bucket names. See _shared/r2.ts r2BucketPrefix().
+    bucketPrefix: Deno.env.get("R2_BUCKET_PREFIX") ?? "",
   });
 }
 

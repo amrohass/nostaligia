@@ -110,6 +110,23 @@ export interface PresignRequestInput {
    * authorises — it only produces a URL that R2 would reject.
    */
   endpoint?: { host: string; protocol?: "http:" | "https:" };
+  /**
+   * Prepended to `bucket` to form the PHYSICAL bucket name. Empty — the normal case —
+   * means the logical name is the physical name.
+   *
+   * It exists because the buckets in the deployment account are named `nostaligia-*`
+   * while `quarantine` / `originals` / `public` are structural everywhere else: the
+   * worker types them as a union, and `media_assets.bucket` is a Postgres enum. Prefixing
+   * HERE, at the one place a bucket name becomes a path segment, keeps the logical names
+   * intact through the database, the manifest and CLAUDE.md §2 — and needs no migration.
+   *
+   * Passed in rather than read from the environment, for the reason r2.ts gives about
+   * `endpoint`: this file is deliberately free of anything ambient. See r2BucketPrefix().
+   *
+   * Not a security surface. It is covered by the signature like the rest of the path, so a
+   * wrong value produces a URL R2 rejects rather than one that reaches somewhere else.
+   */
+  bucketPrefix?: string;
 }
 
 export interface PresignedRequest {
@@ -140,9 +157,12 @@ export async function presignR2(i: PresignRequestInput): Promise<PresignedReques
   const dateStamp = amzDate.slice(0, 8);
   const scope = `${dateStamp}/${region}/${service}/aws4_request`;
 
-  // Each path segment is encoded individually so the separators survive.
+  // Each path segment is encoded individually so the separators survive. The prefix and the
+  // bucket are ONE segment — encoded together, after concatenation, because the physical
+  // bucket is a single path component and encoding them apart would escape nothing
+  // differently but would invite a `/` in a prefix to look like it worked.
   const canonicalUri = "/" +
-    [i.bucket, ...i.key.split("/")].map(uriEncode).join("/");
+    [`${i.bucketPrefix ?? ""}${i.bucket}`, ...i.key.split("/")].map(uriEncode).join("/");
 
   // host is always signed; a URL whose host is not covered can be replayed against another
   // endpoint. Sorted byte-wise by name, which is what SigV4 requires and what a caller
@@ -217,6 +237,8 @@ export interface PresignInput {
   expiresIn: number;
   now?: Date;
   endpoint?: { host: string; protocol?: "http:" | "https:" };
+  /** See PresignRequestInput.bucketPrefix. Forwarded verbatim. */
+  bucketPrefix?: string;
 }
 
 export interface PresignResult extends PresignedRequest {
@@ -245,6 +267,7 @@ export async function presignR2Put(i: PresignInput): Promise<PresignResult> {
     },
     now: i.now,
     endpoint: i.endpoint,
+    bucketPrefix: i.bucketPrefix,
   });
   return { ...signed, method: "PUT" };
 }

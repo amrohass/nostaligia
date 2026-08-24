@@ -39,6 +39,8 @@ export interface R2Config {
   bucket: string;
   /** Undefined — the normal case — means Cloudflare R2. See r2Endpoint() below. */
   endpoint?: { host: string; protocol: "http:" | "https:" };
+  /** Prepended to `bucket` to form the physical name. See r2BucketPrefix() below. */
+  bucketPrefix?: string;
 }
 
 /**
@@ -78,6 +80,34 @@ export function r2Endpoint(): { host: string; protocol: "http:" | "https:" } | u
     throw new Error("R2_ENDPOINT must be an http: or https: URL");
   }
   return { host: u.host, protocol: u.protocol };
+}
+
+/**
+ * What the deployment's buckets are actually called, relative to the logical names.
+ *
+ * The account holds `nostaligia-quarantine`, `nostaligia-originals`, `nostaligia-public`,
+ * while `quarantine` / `originals` / `public` are structural in this codebase — the worker
+ * types them as a union and `media_assets.bucket` is a Postgres enum. Rather than rename
+ * either side, the logical name survives everywhere and becomes physical at the single
+ * point where a bucket turns into a path segment.
+ *
+ * UNSET MEANS NO PREFIX, and that is the correct default rather than an oversight: MinIO in
+ * `scripts/lifecycle/run.ts` and `worker/scripts/store-roundtrip.ts` create buckets under
+ * the bare names, so an unset variable keeps every harness working unchanged.
+ *
+ * The separator is part of the value — `nostaligia-`, not `nostaligia`. A prefix is
+ * concatenated verbatim, so the trailing dash is the caller's to supply, and a value that
+ * forgets it fails loudly as NoSuchBucket rather than quietly reaching somewhere else.
+ *
+ * A `/` is refused. R2 has no bucket nesting, so a slash here would move part of the name
+ * into the key and produce a signature for an object in a bucket nobody meant.
+ */
+export function r2BucketPrefix(): string {
+  const raw = Deno.env.get("R2_BUCKET_PREFIX") ?? "";
+  if (raw.includes("/")) {
+    throw new Error("R2_BUCKET_PREFIX must not contain '/': buckets do not nest");
+  }
+  return raw;
 }
 
 /** Long enough to survive a slow upload, short enough that a leaked URL is not a key. */
