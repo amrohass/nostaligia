@@ -9,14 +9,14 @@
     // the repository may contain a hostname -- that is what makes this a one-file change.
     domains: Object.freeze({
           "site": "PLACEHOLDER_DOMAIN",
-          "cdn": "PLACEHOLDER_CDN_DOMAIN",
+          "cdn": "pub-18aab56b95304deb89be2ad31e43b413.r2.dev",
           "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co",
           "turnstile": "challenges.cloudflare.com"
     }),
 
     origins: Object.freeze({
       site: 'https://PLACEHOLDER_DOMAIN',
-      cdn: 'https://PLACEHOLDER_CDN_DOMAIN',
+      cdn: 'https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev',
       supabase: 'https://pjqvtmhizbnimqyxjbyq.supabase.co',
       turnstile: 'https://challenges.cloudflare.com'
     }),
@@ -40,13 +40,13 @@
     // reaching a visitor. Empty until the hosted key is filled in; auth.js throws a named
     // error in that state rather than sending requests that 401 for no visible reason.
     supabase: Object.freeze({
-      anonKey: ""
+      anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBqcXZ0bWhpemJuaW1xeXhqYnlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzOTI4NzQsImV4cCI6MjEwMTk2ODg3NH0.8We3RtASkqLErr3tcN6sj1teN0bUFA6RMQO-WKG6gY4"
     }),
 
     // Where the read path begins (section 2). An empty string means same origin -- see
     // read_path in config/site.json. archive.js joins paths onto this, and nothing else in
     // the front end knows where the archive lives.
-    archiveBase: "https://PLACEHOLDER_CDN_DOMAIN",
+    archiveBase: "https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev",
 
     // M4's basemap: one PMTiles archive under the read path, or "" when none is
     // provisioned. public.js loads the map module only when this has a value, so an empty
@@ -59,6 +59,6 @@
 
     // The exact policy served by _headers. Exposed so a page can assert at runtime that the
     // policy it is running under is the one this repository generated, rather than assuming.
-    csp: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; font-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob: https://PLACEHOLDER_CDN_DOMAIN; media-src 'self' blob: https://PLACEHOLDER_CDN_DOMAIN; connect-src 'self' https://PLACEHOLDER_CDN_DOMAIN https://pjqvtmhizbnimqyxjbyq.supabase.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
+    csp: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; font-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob: https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev; media-src 'self' blob: https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev; connect-src 'self' https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev https://pjqvtmhizbnimqyxjbyq.supabase.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
   });
 })(window);

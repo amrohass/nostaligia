@@ -12,7 +12,7 @@
 
   "domains": {
     "site": "PLACEHOLDER_DOMAIN",
-    "cdn": "PLACEHOLDER_CDN_DOMAIN",
+    "cdn": "pub-18aab56b95304deb89be2ad31e43b413.r2.dev",
     "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co",
     "turnstile": "challenges.cloudflare.com"
   },
@@ -34,7 +34,7 @@
     "pasted into by mistake is the field next to the word 'supabase' in a config file."
   ],
   "supabase": {
-    "anon_key": ""
+    "anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBqcXZ0bWhpemJuaW1xeXhqYnlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzOTI4NzQsImV4cCI6MjEwMTk2ODg3NH0.8We3RtASkqLErr3tcN6sj1teN0bUFA6RMQO-WKG6gY4"
   },
 
   "_turnstile_comment": [
