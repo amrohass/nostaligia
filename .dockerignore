@@ -1,0 +1,19 @@
+# The build context for worker/Dockerfile, scoped to what it actually COPYs.
+#
+# Everything is excluded and two trees are added back, deliberately in that order: the
+# Dockerfile needs `worker/src` and `supabase/functions/_shared` and nothing else, so an
+# allowlist states that fact rather than chasing new heavy directories as they appear.
+#
+# Two reasons, and the second is the one that matters:
+#
+#  1. `fottage/` is 1.2 GB of real footage. Without this file every build ships it to the
+#     daemon to be ignored, on a laptop where that is minutes per build.
+#  2. `worker/.dev.vars` and `supabase/functions/.dev.vars` hold capability-bearing
+#     secrets -- the R2 pair, MEDIA_WORKER_SECRET, MEDIA_WORKER_JWT. Nothing COPYs them
+#     and they never reached an image, but an unscoped context hands them to the daemon
+#     and bakes them into a build cache layer's provenance for no benefit at all.
+#     worker/README.md: "Never in this repository, never in the Dockerfile, never a build
+#     arg." Not in the context either.
+*
+!worker/src
+!supabase/functions/_shared

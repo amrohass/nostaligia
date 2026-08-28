@@ -128,11 +128,18 @@ function ck(cond: boolean, msg: string): void {
   checks.check(cond, msg);
 }
 
+/* Unset means no prefix, which is what MinIO and CI use and why nothing warned before.
+   Against real R2 the physical buckets are `nostaligia-*` while the Bucket union stays
+   logical, so a run pointed at the deployed stack must pass R2_BUCKET_PREFIX or every call
+   names a bucket that does not exist and R2 answers NoSuchBucket. */
+const R2_BUCKET_PREFIX = Deno.env.get("R2_BUCKET_PREFIX") ?? "";
+
 const minio = new URL(MINIO_ENDPOINT);
 const store = new R2Store({
   accountId: R2_ACCOUNT_ID,
   accessKeyId: R2_ACCESS_KEY_ID,
   secretAccessKey: R2_SECRET_ACCESS_KEY,
+  bucketPrefix: R2_BUCKET_PREFIX,
   endpoint: { host: minio.host, protocol: minio.protocol === "http:" ? "http:" : "https:" },
 });
 
