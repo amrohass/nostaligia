@@ -168,6 +168,17 @@ jobs:
       # site/index.html's script and stylesheet lists (a prerendered page is served at
       # /item/{id}, where a relative asset path resolves under the route and 404s), and the
       # only thing that can catch the two drifting is a test that reads the shell.
+      # `scripts/` was type-checked by nothing until 29 Aug 2026, and it had two real
+      # errors when the check was first run. Both were the same TypeScript 5.7 change --
+      # the typed arrays became generic over their buffer, and the default
+      # `ArrayBufferLike` admits SharedArrayBuffer, which is neither a BodyInit nor a
+      # BufferSource. `deno run` does NOT type-check, so sigv4-roundtrip.ts was being
+      # EXECUTED by the step below while carrying an error no job could report.
+      #
+      # Cheap, and it closes the class rather than the two instances.
+      - name: scripts/ type-check
+        run: deno check scripts/*.ts scripts/lifecycle/*.ts
+
       - name: gate 1, the role floor and the presigner
         run: deno test --allow-env --allow-read supabase/functions/
 

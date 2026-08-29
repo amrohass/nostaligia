@@ -51,14 +51,19 @@ function report(name: string, ok: boolean, detail: string): void {
   }
 }
 
-function bodyOf(n: number): Uint8Array {
+function bodyOf(n: number): Uint8Array<ArrayBuffer> {
   return new Uint8Array(n).fill(0x41);
 }
 
 async function put(
   url: string,
   headers: Record<string, string>,
-  body: Uint8Array,
+  // Uint8Array<ArrayBuffer>, not the bare alias. TypeScript 5.7 made the typed arrays
+  // generic over their buffer, and the default `ArrayBufferLike` includes
+  // SharedArrayBuffer -- which is not a BodyInit, so a bare `Uint8Array` no longer
+  // satisfies fetch(). Narrowing the parameter is right rather than a cast: every caller
+  // here allocates a plain ArrayBuffer, and a shared one genuinely cannot be sent.
+  body: Uint8Array<ArrayBuffer>,
 ): Promise<{ status: number; text: string }> {
   // Content-Length is set by fetch from the body; sending it by hand is a forbidden
   // header and would be dropped. That is exactly the property the design relies on --
