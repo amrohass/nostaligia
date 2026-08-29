@@ -140,10 +140,19 @@ navigation and the basemap — were the session's own tasks, and both are in the
 
 1. **Route `/item/*` on the site origin to the R2 `public` bucket.** This is M3's unmet exit
    criterion and it is testable on staging today.
-2. **Add `Range` to the R2 bucket's CORS `AllowedHeaders`.** Not blocking — measured with
-   headless Chromium, current browsers safelist a simple byte range and send no preflight, so
-   the map works today. An older Android WebView will preflight and get nothing, and §10's
-   exit criterion is about exactly that device.
+2. ~~**Add `Range` to the R2 bucket's CORS `AllowedHeaders`.**~~ **Done 30 Aug 2026.** The
+   stored policy had no `AllowedHeader` element at all, which is why every preflighted
+   header failed rather than just `Range`. Merged as a strict superset of what was live —
+   `GET` and both origins untouched, `HEAD`, `range` and `MaxAgeSeconds 3600` added — so
+   read traffic could not regress, and it was applied against a bucket already serving.
+   Verified after: preflight `204` with `Allow-Headers: range` and `Allow-Methods: GET,
+   HEAD`; ranged `GET` still `206` with the right `Content-Range`; `manifest.json`, a feed
+   shard and a rendition all still `200`; `originals/` still `404` through the CDN; and
+   `/map` still draws in a browser (38 range responses, canvas painted, no console errors).
+   No `ExposeHeaders` was needed and none was added: `pmtiles.js` reads only `res.status`
+   and the body, never `Content-Range`.
+   Propagation was ~10s — the read-back showed the new policy immediately while the
+   preflight still refused, the same lag the quarantine bucket showed.
 
 ---
 
@@ -211,9 +220,18 @@ Incidental findings from the run, neither acted on:
   with a GPSInfo tag; the published WebP has no `EXIF` chunk, no `XMP` chunk and no
   `Exif  ` anywhere. Evidence for launch gate 2 rather than a discharge of it — the gate
   wants a deliberate verification with the GPS coordinates read out on both sides.
-- The test account and its pending post are **left in place** as the evidence, and are
-  test data to remove: post `1ad4e709-fd89-46b4-a88d-f334ac78da7d`, member
-  `a12af40e-adc6-4acc-ae82-e36fa362e61f`.
+- The test post `1ad4e709-fd89-46b4-a88d-f334ac78da7d` is **`status='withdrawn'`** as of
+  30 Aug 2026, set by its own author — RLS lets an owner move their own post between
+  `pending` and `withdrawn`, and there is no DELETE policy for anyone, so the row and its
+  history survive by design.
+  It was **not** removed through §8's takedown path, and the attempt is worth recording:
+  the deployed function refused a member `403 forbidden`, which is §4 behaving exactly as
+  written. Takedown needs a moderator or admin credential that this session did not have.
+  Two consequences, both accepted rather than hidden: the derivative bytes
+  (`display.webp`, `thumb.webp`) **remain in the `public` bucket** at their unguessable
+  UUID paths, because only takedown deletes objects; and nothing was added to
+  `redactions.json`, because nothing was published to redact — the post never reached a
+  release. The member account `a12af40e-adc6-4acc-ae82-e36fa362e61f` is left as-is.
 
 Two notes for the record:
 
