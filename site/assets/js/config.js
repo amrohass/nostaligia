@@ -11,14 +11,16 @@
           "site": "PLACEHOLDER_DOMAIN",
           "cdn": "pub-18aab56b95304deb89be2ad31e43b413.r2.dev",
           "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co",
-          "turnstile": "challenges.cloudflare.com"
+          "turnstile": "challenges.cloudflare.com",
+          "r2_s3": "1dca8f581a2c818cf5c84c17110a59f0.r2.cloudflarestorage.com"
     }),
 
     origins: Object.freeze({
       site: 'https://PLACEHOLDER_DOMAIN',
       cdn: 'https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev',
       supabase: 'https://pjqvtmhizbnimqyxjbyq.supabase.co',
-      turnstile: 'https://challenges.cloudflare.com'
+      turnstile: 'https://challenges.cloudflare.com',
+      r2_s3: 'https://1dca8f581a2c818cf5c84c17110a59f0.r2.cloudflarestorage.com'
     }),
 
     // Cloudflare Turnstile. The site key is public by construction — it ships in the
@@ -59,6 +61,6 @@
 
     // The exact policy served by _headers. Exposed so a page can assert at runtime that the
     // policy it is running under is the one this repository generated, rather than assuming.
-    csp: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; font-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob: https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev; media-src 'self' blob: https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev; connect-src 'self' https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev https://pjqvtmhizbnimqyxjbyq.supabase.co; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
+    csp: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; font-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob: https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev; media-src 'self' blob: https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev; connect-src 'self' https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev https://pjqvtmhizbnimqyxjbyq.supabase.co https://1dca8f581a2c818cf5c84c17110a59f0.r2.cloudflarestorage.com; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
   });
 })(window);

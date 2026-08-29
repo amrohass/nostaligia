@@ -144,3 +144,51 @@ navigation and the basemap — were the session's own tasks, and both are in the
    headless Chromium, current browsers safelist a simple byte range and send no preflight, so
    the map works today. An older Android WebView will preflight and get nothing, and §10's
    exit criterion is about exactly that device.
+
+---
+
+## Addendum — 30 Aug 2026: M1's first row was wrong
+
+The M1 table above reads "Auth + Turnstile, `request-upload` with role-aware caps, quotas,
+signed URLs — **met.** All four Edge Functions are ACTIVE and answer 401 unauthenticated."
+
+That was measured with `curl`, and **curl does not enforce CORS or CSP**. From a browser,
+uploading on the deployed site was impossible and had been since M1. Three independent
+causes, each sufficient on its own, each surfacing as the same sentence — upload.js maps
+every network-layer rejection to `up.err.offline`, "لا يوجد اتصال. تحقّق من الشبكة" — so
+none of them named itself:
+
+1. **`apikey` was missing from the Edge Functions' `Access-Control-Allow-Headers`.**
+   upload.js and admin.js both send it; the preflight granted only `authorization,
+   content-type`, so the browser refused before the request left it. **Fixed** in
+   `_shared/http.ts` and deployed to `request-upload`, `complete-upload` and `takedown`;
+   verified in Chromium against the live origin. `scripts/frontend-cors-test.mjs` is the
+   two-way ratchet that would have caught it, and now runs in CI.
+2. **`connect-src` omitted the R2 S3 endpoint.** The PUT goes to
+   `<account>.r2.cloudflarestorage.com`, which the site's own CSP never allowed — the page
+   blocked its own upload before CORS was consulted. **Fixed** in `config/site.json`
+   (`domains.r2_s3`, `@r2_s3` in `connect-src`); it reaches the live site on the next Pages
+   deploy.
+3. **The `quarantine` bucket has no CORS policy at all.** An OPTIONS preflight answers 403
+   with no `Access-Control-*` headers for GET, PUT and HEAD alike. **NOT fixed — needs an
+   admin credential.** The R2 token in `.dev.vars` is object-scoped and answers
+   `AccessDenied` to `GetBucketCors`, which is correct least privilege and also means this
+   cannot be done from here. `scripts/provision-r2-cors.ts` applies it given an Admin Read
+   & Write token, prints the dashboard JSON without one, and in its default mode checks the
+   live bucket with no credential at all.
+
+**Until (3) is done, uploading still fails on the deployed site**, now for one reason
+instead of three.
+
+Two notes for the record:
+
+- **`delete-account` is not deployed.** `supabase functions list` returns four functions
+  and it is not among them, though its migration (`20260829090000`) is applied. Nothing in
+  this session touched it.
+- **The R2 CORS item at the bottom of this document is confirmed still open** and is the
+  same class of gap as (3): a preflight for `Range` against the public bucket answers 403.
+  A plain GET carries `Access-Control-Allow-Origin` correctly, so reads work and only a
+  preflighting client is affected, exactly as recorded. `provision-r2-cors.ts --print`
+  emits the rule to merge, and deliberately never applies it — `PutBucketCors` replaces
+  rather than merges, and the existing policy on that bucket cannot be read back with the
+  token available.

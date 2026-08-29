@@ -23,11 +23,41 @@ export function corsHeaders(req: Request): Record<string, string> {
   if (!allowed.includes(origin)) return {};
   return {
     "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Headers": "authorization, content-type",
+    "Access-Control-Allow-Headers": ALLOWED_REQUEST_HEADERS.join(", "),
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Vary": "Origin",
   };
 }
+
+/**
+ * Every header the front end is permitted to send to a function.
+ *
+ * `apikey` is here because the front end sends it, and that is the whole reason this list
+ * is a named constant rather than a string literal. It was omitted until 29 Aug 2026, and
+ * the failure it caused is worth recording because nothing about it pointed here:
+ *
+ *   Access to fetch at '…/functions/v1/request-upload' from origin
+ *   'https://nostaligia.pages.dev' has been blocked by CORS policy: Request header field
+ *   apikey is not allowed by Access-Control-Allow-Headers in preflight response.
+ *
+ * The browser fails the preflight BEFORE any request reaches the function, so `fetch()`
+ * rejects with a bare TypeError, and upload.js's rejection handler maps every TypeError to
+ * `up.err.offline` — "لا يوجد اتصال" — which sends whoever is debugging it to look at the
+ * network, the origin allowlist, and Turnstile, none of which were wrong. The origin
+ * allowlist in particular ANSWERED CORRECTLY throughout: `curl -X OPTIONS` returned a
+ * 204 with the right Allow-Origin, because curl does not enforce what it is told. Only a
+ * browser fails this, and only on the header line.
+ *
+ * Two rules for anything added here:
+ *   - it must be a header the front end actually sends — scripts/frontend-cors-test.mjs
+ *     compares this list against what site/assets/js really puts on a functions/v1 fetch,
+ *     in both directions, so a header removed from the client must be removed here too;
+ *   - allowing a header grants nothing. This list governs what a browser may SEND, not
+ *     what the function trusts. `apikey` carries the anon key, which §6 states plainly is
+ *     public by design; authorization carries the caller's own JWT, which PostgREST
+ *     verifies independently (see rpc() below).
+ */
+export const ALLOWED_REQUEST_HEADERS = ["apikey", "authorization", "content-type"];
 
 export function json(body: unknown, status: number, req: Request): Response {
   return new Response(JSON.stringify(body), {

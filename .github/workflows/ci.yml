@@ -131,6 +131,15 @@ jobs:
       - name: the read path, the XSS sweep, and the lists that must not drift
         run: node scripts/frontend-view-test.mjs
 
+      # The headers the front end SENDS against the ones the preflight GRANTS. A mismatch
+      # is invisible to everything else here and to curl -- curl is told the CORS rules and
+      # does not enforce them, so the deployed function answered every probe correctly
+      # while no browser could reach it. `apikey` was missing from Allow-Headers from M1
+      # until 29 Aug 2026, which made uploading impossible on the deployed site and
+      # reported it as "no connection".
+      - name: the CORS preflight covers what the front end sends
+        run: node scripts/frontend-cors-test.mjs
+
       # M4. Two binary format readers written from the specs — a PMTiles archive and a
       # vector tile — decoding files this test builds byte by byte. Nothing else in the
       # repository can tell whether they are right: a checked-in fixture would make every

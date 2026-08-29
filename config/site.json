@@ -10,11 +10,35 @@
     "Nothing else in the repository should ever contain a hostname."
   ],
 
+  "_domains_comment": [
+    "r2_s3 is the R2 S3 API endpoint, and it is here because the UPLOAD PUT goes straight",
+    "to it from the browser: request-upload presigns against this host (sigv4.ts builds it",
+    "from R2_ACCOUNT_ID), and the XHR in upload.js sends the bytes there directly.",
+    "connect-src must therefore admit it, or the page's own CSP blocks the PUT before CORS",
+    "is ever consulted -- which is exactly what it did from M1 until 29 Aug 2026. The",
+    "symptom was upload.js's generic offline message, and nothing in it named the CSP.",
+    "",
+    "This is NOT the same host as cdn. Reads come from the r2.dev public bucket; writes go",
+    "to the S3 API. Two hosts, two directions, and the CSP needs both.",
+    "",
+    "THE ACCOUNT ID IS IN THIS FILE ON PURPOSE, and it is the one value here that was",
+    "argued about. It is not capability-bearing -- R2 authorises by signature, not by",
+    "account id -- and every uploading member already receives it inside the presigned URL,",
+    "so it cannot be withheld from the people who use the site. The exact host is preferred",
+    "over a *.r2.cloudflarestorage.com wildcard because a wildcard would make ANY R2",
+    "account a destination this page may send data to, which is a real widening of an",
+    "otherwise tight connect-src. The narrow value is the safer one here, not merely the",
+    "more specific one.",
+    "",
+    "The R2 access key and secret remain what section 6 is about, and neither is here."
+  ],
+
   "domains": {
     "site": "PLACEHOLDER_DOMAIN",
     "cdn": "pub-18aab56b95304deb89be2ad31e43b413.r2.dev",
     "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co",
-    "turnstile": "challenges.cloudflare.com"
+    "turnstile": "challenges.cloudflare.com",
+    "r2_s3": "1dca8f581a2c818cf5c84c17110a59f0.r2.cloudflarestorage.com"
   },
 
   "_supabase_comment": [
@@ -179,7 +203,7 @@
     "frame-src": ["@turnstile"],
     "img-src": ["'self'", "data:", "blob:", "@cdn"],
     "media-src": ["'self'", "blob:", "@cdn"],
-    "connect-src": ["'self'", "@cdn", "@supabase"],
+    "connect-src": ["'self'", "@cdn", "@supabase", "@r2_s3"],
     "worker-src": ["'self'", "blob:"],
     "manifest-src": ["'self'"],
     "upgrade-insecure-requests": []
