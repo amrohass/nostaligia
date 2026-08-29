@@ -134,7 +134,7 @@
     "it."
   ],
   "basemap": {
-    "path": "",
+    "path": "basemap/palestine-20260828.pmtiles",
     "attribution": "© OpenStreetMap contributors"
   },
 

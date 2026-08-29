@@ -78,3 +78,9 @@ desktop.ini
 # Real footage for the timing probe. NEVER committed — 1.2 GB, and ladder-fixture.ts
 # refuses committed real footage on purpose. Staged locally, read by probe-timing.ts.
 fottage/
+
+# ── Basemap archives ─────────────────────────────────────────
+# A Palestine extract is ~180 MB. It belongs in the R2 `public` bucket, which is what
+# scripts/provision-basemap.ts puts it there for, and its identity in this repository is
+# one line of config/site.json. Never the bytes.
+*.pmtiles

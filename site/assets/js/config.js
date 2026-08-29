@@ -53,7 +53,7 @@
     // string renders /map as the list -- section 10's own tile-failure fallback, reached
     // deliberately rather than by an error.
     basemap: Object.freeze({
-      url: "",
+      url: "https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev/basemap/palestine-20260828.pmtiles",
       attribution: "© OpenStreetMap contributors"
     }),
 
