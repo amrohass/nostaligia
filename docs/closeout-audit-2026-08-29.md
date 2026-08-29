@@ -170,23 +170,60 @@ none of them named itself:
    (`domains.r2_s3`, `@r2_s3` in `connect-src`); it reaches the live site on the next Pages
    deploy.
 3. **The `quarantine` bucket has no CORS policy at all.** An OPTIONS preflight answers 403
-   with no `Access-Control-*` headers for GET, PUT and HEAD alike. **NOT fixed — needs an
-   admin credential.** The R2 token in `.dev.vars` is object-scoped and answers
-   `AccessDenied` to `GetBucketCors`, which is correct least privilege and also means this
-   cannot be done from here. `scripts/provision-r2-cors.ts` applies it given an Admin Read
-   & Write token, prints the dashboard JSON without one, and in its default mode checks the
-   live bucket with no credential at all.
+   with no `Access-Control-*` headers for GET, PUT and HEAD alike. The R2 token in
+   `.dev.vars` is object-scoped and answers `AccessDenied` to `GetBucketCors`, which is
+   correct least privilege and also means this could not be done from here.
+   **Fixed 30 Aug 2026** with a temporary admin token, via
+   `scripts/provision-r2-cors.ts --apply`: `PUT` from both allowed origins, `content-type`
+   as the only allowed header, 3600s max-age. Note the policy takes **tens of seconds to
+   propagate** — the script's own check failed immediately after a successful `PutBucketCors`
+   and passed on retry, which is exactly why the check is separate from the write.
 
-**Until (3) is done, uploading still fails on the deployed site**, now for one reason
-instead of three.
+## Addendum 2 — 30 Aug 2026: the whole path, driven by a browser
+
+All three causes above are now closed, and the contribution lifecycle was run end to end on
+the live origin rather than argued about. A real account was created through the **public
+signup form** — real Turnstile, real confirmation email, no admin API — and a real 4 MB
+photograph uploaded through the real share sheet:
+
+    request-upload  200  →  R2 quarantine PUT  200  →  complete-upload  202
+    ingest_state: ready · ingest_attempts: 1 · ingest_error: null · status: pending
+
+and every §6 bucket invariant held afterwards:
+
+| Invariant | Result |
+|---|---|
+| quarantine object removed after processing | **404 — gone** |
+| master survives in `originals/` | **200, 4,185,036 bytes — byte-for-byte the upload** |
+| renditions CDN-reachable | 200 (`display.webp` 1920×1280, `thumb.webp` 400×266) |
+| master NOT CDN-reachable | **404** |
+
+This is the same invariant M1's exit criterion names, demonstrated on the **image** path
+through a browser; M1's line is about a 4K **video** through `m1-deployed.ts` and is still
+unproven, unchanged and still waiting on the service-role JWT.
+
+Incidental findings from the run, neither acted on:
+
+- **`redirect_to` on the confirmation email is `http://localhost:3000`.** A real member
+  confirming their address from an email client lands on a host that does not exist for
+  them. It is a Supabase Auth "Site URL" / redirect-allowlist setting, not code.
+- **EXIF does not survive the re-encode.** The source JPEG carries an APP1 `Exif` block
+  with a GPSInfo tag; the published WebP has no `EXIF` chunk, no `XMP` chunk and no
+  `Exif  ` anywhere. Evidence for launch gate 2 rather than a discharge of it — the gate
+  wants a deliberate verification with the GPS coordinates read out on both sides.
+- The test account and its pending post are **left in place** as the evidence, and are
+  test data to remove: post `1ad4e709-fd89-46b4-a88d-f334ac78da7d`, member
+  `a12af40e-adc6-4acc-ae82-e36fa362e61f`.
 
 Two notes for the record:
 
 - **`delete-account` is not deployed.** `supabase functions list` returns four functions
   and it is not among them, though its migration (`20260829090000`) is applied. Nothing in
   this session touched it.
-- **The R2 CORS item at the bottom of this document is confirmed still open** and is the
-  same class of gap as (3): a preflight for `Range` against the public bucket answers 403.
+- **The R2 CORS item at the bottom of this document is confirmed still open** (re-measured
+  30 Aug) and is the same class of gap as (3): a preflight for `Range` against the public
+  bucket answers 403. The stored policy is `GET` + both origins and **no `AllowedHeader`
+  element at all**, which is why any preflighted header fails.
   A plain GET carries `Access-Control-Allow-Origin` correctly, so reads work and only a
   preflighting client is affected, exactly as recorded. `provision-r2-cors.ts --print`
   emits the rule to merge, and deliberately never applies it — `PutBucketCors` replaces
