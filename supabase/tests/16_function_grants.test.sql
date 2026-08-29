@@ -197,6 +197,20 @@ select set_eq(
     -- publishable_posts beside it.
     ('publishable_places() -> service_role'),
 
+    -- Withdrawal (0051). `authenticated` may CALL it, exactly like request_takedown: the
+    -- check is inside the function, so a member aiming at somebody else gets a named
+    -- refusal and the audit row names them rather than the service key. `anon` gets
+    -- nothing — a signed-out caller has no account to withdraw and no id to name.
+    ('request_account_deletion(p_user_id uuid, p_note text) -> authenticated'),
+    ('request_account_deletion(p_user_id uuid, p_note text) -> service_role'),
+
+    -- The GoTrue half's receipt, and the one function here that `authenticated` must NOT
+    -- reach: stamping auth_scrubbed_at is a claim that the email is gone from auth.users,
+    -- and a browser is in no position to make it. `deleted_at is not null and
+    -- auth_scrubbed_at is null` is the retry list, so a false stamp removes a half-finished
+    -- erasure from the only place anyone would look for it.
+    ('mark_account_auth_scrubbed(p_user_id uuid) -> service_role'),
+
 
     -- ── Still on the PUBLIC default, each for a reason ────────
     --

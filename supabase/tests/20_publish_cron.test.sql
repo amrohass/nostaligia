@@ -247,7 +247,7 @@ update public.posts set title_en = 'edited draft'
 select is(pg_temp.dcontent('draft') + pg_temp.dcounter('draft'), 0::bigint,
   'editing a PENDING post moves nothing — the WHEN clause discriminates');
 
--- 11–12 · profiles, narrowed to the three columns shards.ts actually prints.
+-- 11–12 · profiles, narrowed to the columns a release actually carries.
 select pg_temp.mark('displayname');
 update public.profiles set display_name = 'اسم آخر'
  where id = '00000000-0000-0000-0000-00000000ca01';
@@ -255,12 +255,20 @@ update public.profiles set display_name = 'اسم آخر'
 select is(pg_temp.dcontent('displayname'), 1::bigint,
   'a display_name change moves content — it is printed on every card the author wrote');
 
+-- This assertion was inverted until 0051, and it was correct when written: at M2 a
+-- profile's whole presence in a release was shards.ts `author()`, so a bio lived on the
+-- profile PAGE and in no shard. M3's 0044 added profile/{handle}.json, which carries `bio`,
+-- `member_since` and both visibility flags — and 0033's WHEN clause was not widened to
+-- match. For three milestones a bio or visibility edit therefore moved shard bytes and
+-- signalled nothing, going live only when some unrelated content change happened to
+-- publish, which on a quiet week is days. 0051 widened the clause; this is the assertion
+-- that now holds it.
 select pg_temp.mark('bio');
 update public.profiles set bio = 'سيرة أطول'
  where id = '00000000-0000-0000-0000-00000000ca01';
 
-select is(pg_temp.dcontent('bio'), 0::bigint,
-  '...but a bio change does not — it appears on the profile page and in no shard');
+select is(pg_temp.dcontent('bio'), 1::bigint,
+  '...and so does a bio change, because 0044 put the bio in profile/{handle}.json');
 
 -- 13 · A derivative landing is what turns an approved post into a publishable one.
 select pg_temp.mark('asset');

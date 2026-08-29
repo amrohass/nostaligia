@@ -82,3 +82,10 @@ verify_jwt = false
 # session, and the guard behind the gate is the role check in the database.
 [functions.takedown]
 verify_jwt = true
+
+# delete-account (0051). Verified, like takedown and for the same reason: the caller is a
+# signed-in person's browser, and the guard behind the gate is 0051's own is_admin() check
+# against auth.uid(). A member who reaches this endpoint with a valid token and somebody
+# else's id is refused by Postgres, not by the gateway.
+[functions.delete-account]
+verify_jwt = true
