@@ -1713,6 +1713,14 @@ html[lang="en"] .prerender__home { font: 600 12px var(--font-en); }
 @media (max-width: 900px) {
   .grid { gap: 12px; padding-inline: 16px; }
   .grid__col { gap: 12px; }
+
+  /* WCAG 2.5.8 wants a 24px target. These are standalone navigation links in a column, not
+     links inside a sentence, so the inline-text exception does not apply to them — they
+     measured 160x21 on every phone width. The gap shrinks by the padding that is added so
+     the footer does not grow. */
+  .site-footer__links { gap: 4px; }
+  .site-footer__links a { display: flex; align-items: center; min-height: 24px; }
+  .dialog__opt-out { min-height: 24px; }
   .hero { padding: 24px 16px 4px; }
   .hero__line { font-size: 23px; line-height: 1.65; }
   html[lang="en"] .hero__line { font-size: 26px; }
@@ -1730,14 +1738,62 @@ html[lang="en"] .prerender__home { font: 600 12px var(--font-en); }
     border-bottom-color: rgba(38, 40, 31, .12);
   }
   .masthead .wordmark__primary { color: var(--paper); font-size: 16px; }
+  /* The line above never applied in English, and measurement is how that surfaced rather
+     than reading: `html[lang="en"] .wordmark__primary` is (0,2,1) and beats `.masthead
+     .wordmark__primary` at (0,2,0), so English kept its 19px DESKTOP size on every phone —
+     "Ramallah Memory Atlas" wrapping to two lines and taking 44px of header against
+     Arabic's 18px. The `font` shorthand there also resets family and weight, so this has to
+     restate the size at higher specificity rather than nudge it. */
+  html[lang="en"] .masthead .wordmark__primary { font-size: 15px; }
   .masthead .wordmark__secondary { color: rgba(247, 244, 236, .75); font-size: 6.5px; }
   html[lang="en"] .masthead .wordmark__secondary { font-size: 11px; }
-  .masthead__nav { display: none; }
+
+  /* §9: "Mobile is a faithful echo of desktop, not a reduced version."
+     This rule used to be `.masthead__nav { display: none }`, with no replacement anywhere —
+     so Archive, Map and Events were simply unreachable from the header on every phone. The
+     only way to another section was the browser's back button or a link inside the page,
+     and /map in particular had no inbound route at all. The block below this one already
+     argues the faithful-echo line about the map; the nav was the thing it was written for.
+
+     A second ROW rather than a hamburger, and that is the point: the same three links, in
+     the same order, with the same aria-current — visible without a tap, with no disclosure
+     state to manage, no focus trap to get wrong, and no JavaScript. A menu that hides the
+     navigation behind a button IS the reduced version §9 rules out.
+
+     The nav is a child of .masthead__lead, so the wrap happens there: the wordmark holds
+     row one beside the actions, flex-basis: 100% pushes the nav to row two. */
+  .masthead__lead { flex-wrap: wrap; gap: 0 20px; align-items: center; }
+  .masthead__nav {
+    display: flex;
+    flex-basis: 100%;
+    margin-inline-start: 0;
+    margin-top: 10px;
+    gap: 22px;
+  }
+  /* The masthead is terracotta on mobile (above), so the olive-on-paper link colours from
+     the desktop rule are near-invisible against it. Same links, legible ground. */
+  .masthead .navlink {
+    color: rgba(247, 244, 236, .82);
+    /* 24px minimum touch target (WCAG 2.5.8) reached with padding rather than a height, so
+       the underline still sits on the text baseline rather than floating below the box. */
+    padding-block: 2px 5px;
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+  }
+  .masthead .navlink[aria-current="page"] {
+    color: var(--paper);
+    border-bottom-color: var(--paper);
+  }
   .masthead__actions { gap: 9px; }
   .masthead .lang-toggle { color: var(--paper); border-color: rgba(247, 244, 236, .5); }
   .masthead .lang-toggle:hover { background: rgba(247, 244, 236, .16); }
   .masthead .btn--quiet { color: var(--paper); font-weight: 600; }
-  .masthead .btn--primary { background: var(--paper); color: var(--terracotta); padding: 8px 14px; }
+  /* nowrap because the label is two words in both languages ("إنشاء حساب", "Create
+     account") and the header is the narrowest row on the page: allowed to wrap it became a
+     58px-tall button beside an 18px wordmark, which reads as a layout fault rather than a
+     button. It shrinks by padding instead, and the label is short enough that it fits. */
+  .masthead .btn--primary { background: var(--paper); color: var(--terracotta); padding: 8px 14px; white-space: nowrap; }
   .masthead .btn--primary:hover { background: #fff; }
   .masthead .avatar-btn { background: var(--paper); color: var(--terracotta); }
 
@@ -1804,7 +1860,10 @@ html[lang="en"] .prerender__home { font: 600 12px var(--font-en); }
 
   .infopage__toc { padding-inline: 16px; }
   .infopage__body { padding-inline: 16px; }
-  .infosection { padding: 20px 18px; scroll-margin-top: 74px; }
+  /* 74px was the masthead's height before it gained the nav row. The masthead is sticky, so
+     an anchor that clears less than its height scrolls the section's own title underneath
+     it — which on the info page means every deep link lands on a heading you cannot read. */
+  .infosection { padding: 20px 18px; scroll-margin-top: 108px; }
   .infosection__title { font-size: 18px; }
   .infosection__para { font-size: 13.5px; line-height: 2; }
   .donate-contact__row { min-width: 0; flex-basis: 100%; }
