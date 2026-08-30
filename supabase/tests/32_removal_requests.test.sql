@@ -35,14 +35,23 @@ values ('00000000-0000-0000-0000-00000000e0c3', 'moderator',
 -- Somebody else's post, APPROVED: the case the control exists for, since an author can
 -- already withdraw their own (0018) and the person with the claim usually is not the author.
 --
--- license and provenance are not decoration here: posts_approved_has_rights refuses an
--- approved row without both, which is 0032's whole subject.
+-- An approved row has to satisfy BOTH of 0006's approval constraints, and they are worth
+-- naming because between them they are §1 and §7 written as CHECKs:
+--   posts_approved_has_rights       — nothing goes public without a licence and provenance
+--   posts_approved_is_attributable  — nothing is approved without WHO approved it, when,
+--                                     and the content hash they approved
+-- Set directly rather than by transitioning through the trigger, which is possible here
+-- only because this INSERT runs before any JWT is set: posts_stamp_authorship returns
+-- early when auth.uid() is null and leaves these alone. Under a member's claims it would
+-- force status back to 'pending' and null all three, which is §1 doing its job.
 insert into public.posts (id, kind, title_en, body_en, status, created_by,
-                          license, provenance, consent)
+                          license, provenance, consent,
+                          approved_by, approved_at, content_hash)
 values ('00000000-0000-0000-0000-00000000ef01', 'media', 'a photograph', 'of a street',
         'approved', '00000000-0000-0000-0000-00000000e0c1',
         'CC-BY-SA-4.0', 'family album',
-        jsonb_build_object('granted', true, 'may_withdraw', true));
+        jsonb_build_object('granted', true, 'may_withdraw', true),
+        '00000000-0000-0000-0000-00000000e0c3', now(), 'fixture-hash');
 
 create function pg_temp.audit_rows(p_action text) returns integer
 language sql stable security definer as $fn$
