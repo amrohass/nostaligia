@@ -1,130 +1,137 @@
-Ramallah Memory Atlas — M5 is half built. Two items wait on Amro.
+Ramallah Memory Atlas — a five-bug pass landed on 30 Aug. Read CLAUDE.md fully first; it
+governs this repo and overrides your defaults. §1 gained an amendment on 30 Aug that you
+must read before touching comments.
 
-Read CLAUDE.md fully before touching anything; it governs this repo and overrides your
-defaults. Then read `docs/closeout-audit-2026-08-29.md` — including both addenda, which
-correct claims the audit's own tables make.
+**This file replaces the earlier 30 Aug handoff, whose "what is true" list was right about
+almost everything and wrong about the one thing it named as a root cause.**
 
-**This file replaces the 24 Aug handoff, which was describing a system that no longer
-exists** (it said no worker was deployed, the write path was dead and the archive held 0
-posts; all three stopped being true on 28–30 Aug).
+## The thing to unlearn from the last handoff
 
-## Where this stands in one paragraph
+It said *"auto-publish on approval is still unwired — vault entries `rma_publish_url` and
+`rma_publish_secret` are unset"*. **Both were set, on 28 Aug.** The dispatch was firing
+correctly and the publisher was answering **401 unauthorized**, because the vault's copy of
+the secret and the Edge Function's `PUBLISH_SECRET` were different strings. `pg_net` records
+every dispatch in `net._http_response`, and two 401s were sitting there — which is where a
+minute of looking would have found it, and where you should look first next time.
 
-M0–M4 are complete and audited against the deployed system. M5 items 1–3 shipped on
-30 Aug — the contributor precision control, the removal request, and the Dublin Core
-export — and CI run 61 is green on all six jobs. The contribution lifecycle has been run
-end to end **through a browser on the live origin**: real signup, real Turnstile, real
-confirmation email, a real 4 MB photograph, `ingest_state: ready`, and every §6 bucket
-invariant checked afterwards. What remains in M5 is the seed importer (needs Amro's data)
-and backups + one tested restore (§11 gate 3, outlined and awaiting three decisions).
+**The general lesson, which cost most of this session: NEXT-SESSION.md's stated causes are
+hypotheses.** Two of five bugs had a different cause than the one written down, and one had
+no cause at all because it was already fixed.
 
-## Do these FIRST, before trusting anything below
+## Do these FIRST
 
-1. `supabase migration list` — two migrations landed on 30 Aug (0052, 0053). The hosted DB
-   was 26 migrations behind once before and nothing else being green implied it.
-2. **Check Docker actually starts.** It was wedged for the whole 30 Aug session — `docker
-   info` hung to a 124 timeout rather than erroring, and `wsl --shutdown` hung too. No
-   pgTAP ran locally all session; CI was the only executor. If it is still wedged, expect
-   to iterate through CI, and see "Reading CI failures" below.
+1. `supabase migration list --linked`. On 30 Aug the hosted database was **three migrations
+   behind** (0051 account_deletion, 0052 precision_control, 0053 removal_requests) while CI
+   was green on all six jobs and the handoff described all three as shipped. **CI proves
+   nothing about the hosted database** — it builds a fresh one from the same files. They are
+   applied now; check again anyway.
+2. `docker version`. Wedged all of 29–30 Aug. It now *errors* rather than hanging
+   (`dockerDesktopLinuxEngine` not found) which is progress, but the daemon is not running
+   and no pgTAP has run locally in three sessions. CI is the only executor.
+3. `supabase db query --linked -f some.sql` **works and is the fastest tool here** — it goes
+   through the Management API as `postgres`, needs no database password, and takes a file
+   (multi-line SQL as an argument gets mangled). Every diagnosis below came from it. You can
+   simulate PostgREST exactly:
 
-## What is true as of 30 Aug 2026 — re-verify, do not trust this list
+       begin;
+       set local role authenticated;
+       set local request.jwt.claims = '{"sub":"<uuid>","role":"authenticated"}';
+       <the statement>
+       rollback;
 
-- **The upload path works from a browser.** It had never worked on the deployed site.
-  Three independent causes, each sufficient alone, all surfacing as the same Arabic
-  sentence (`up.err.offline`, "لا يوجد اتصال"): `apikey` missing from the Edge Functions'
-  `Access-Control-Allow-Headers`; `connect-src` omitting the R2 S3 endpoint so the page
-  blocked its own PUT; and the `quarantine` bucket having no CORS policy at all. All three
-  fixed and verified in Chromium against the live origin.
-- **Five Edge Functions ACTIVE** — `request-upload`, `complete-upload`, `publish`,
-  `takedown`, and `delete-account` (deployed 30 Aug; its migration had been applied since
-  29 Aug with nothing serving it).
-- **R2 CORS now exists on two buckets.** `quarantine`: PUT + `content-type`, both allowed
-  origins. `public`: the pre-existing GET rule merged with `HEAD`, `range` and a 3600s
-  max-age, applied as a strict superset so read traffic could not regress. Verified after:
-  ranged GET still 206, map still draws, `originals/` still 404 through the CDN.
-  **R2 takes ~10s to propagate a bucket CORS change** — a successful PutBucketCors followed
-  by a 403 preflight is propagation, not failure.
-- **Bucket sizes**, measured: `originals` 4 objects / 22.1 MB; `public` 59 objects /
-  176.4 MB of which **173.9 MB is the basemap**; `quarantine` 0 objects. The archive's own
-  published bytes are ~2.5 MB.
-- CI: 33 pgTAP files, 622 assertions. Front end: CSP 14, cors 6, auth 36, view 46, map 46,
-  budget 84.6 KiB against §9's 150 KiB.
+   That reproduces an RLS or privilege refusal in about four seconds instead of a CI cycle.
 
-## M5 — what is left
+## What the five bugs actually were
 
-**Seed importer** — not started, needs Amro's ~300 items. Nothing in the repo is seed data.
+| # | Reported | Actual cause |
+|---|---|---|
+| 1 | auto-publish never fires | vault secret ≠ function `PUBLISH_SECRET`; 401 on every dispatch |
+| 2 | uploads land no bytes | **not reproducible** — see below |
+| 3 | admin text edits refused | `ON CONFLICT DO UPDATE` needs SELECT on a column 0015 withholds |
+| 4 | comments need moderation | true, and the moderation screen never existed |
+| 5 | map has no labels | `public.places` had zero rows; the renderer was fine |
 
-**Backups + one tested restore (§11 gate 3)** — outlined in full at the end of the 30 Aug
-session, not built, waiting on three decisions from Amro:
-  1. **Where** the self-held copy lives — second R2 under a different account / local
-     encrypted disk / third-party cold storage / hybrid. Jurisdiction is a real input here,
-     not a footnote (`reconciled-plan.md` F29).
-  2. Whether the **cadence amendments** stand: weekly full DB + *incremental* originals
-     rather than weekly-full media, plus snapshots pinned forever at pre-launch and
-     immediately after the seed import — because a weekly cycle can lose the entire import.
-  3. Whether the **restore target** is local Docker or a scratch Supabase project.
+**1 · The publish secret was rotated** (openssl, 64 hex) into all three places that must
+agree: the hosted Edge Function env, `vault.secrets.rma_publish_secret`, and
+`supabase/functions/.dev.vars`. CI's lifecycle job uses its own literal and is unaffected.
+Verified: `select public.publish_tick('manual')` → `net._http_response` 200 → pointer flipped.
+Auto-publish then fired unprompted twice more that session from ordinary content changes.
 
-Three findings from that outline that will bite whoever builds it:
-  - **`supabase db dump` excludes the `auth` schema by default** (also `vault`, `cron`,
-    `extensions`, `storage`). A default dump restores a `posts` table whose every
-    `created_by` points at a user that does not exist, and `user_roles` — where §4's
-    authorization actually lives — keyed to nobody. Three dumps are needed, not one.
-  - **`public` is 98.6% basemap.** The irreplaceable set is `originals/` plus Postgres.
-    `quarantine` must NOT be backed up: it holds uploads that have not passed magic-byte
-    validation and is purged at 30 days.
-  - **`supabase db dump` mints its own temporary login role**, so a dump from a logged-in
-    machine needs no database password. Headless in CI it needs the DB password or a CLI
-    access token — and that token can manage the whole project. That is the local-vs-CI
-    decision, and it is a security decision rather than a convenience one.
+**2 · Uploading works and the report could not be reproduced.** The most recent upload
+(30 Aug 14:58) went `post.create → ingest.processing → ingest.complete` in seven seconds,
+put 1,833,101 bytes in `originals/` at exactly the declared size, two derivatives in
+`public/` reachable over the CDN, and the master 404 through it. All three of the 29–30 Aug
+causes were re-tested **through Chromium** and hold: the `request-upload` preflight passes
+with `apikey`, the CSP does not block the R2 S3 host, and the quarantine bucket answers a
+PUT preflight 204 with the right `Access-Control-Allow-*`.
+**One trap worth keeping:** a browser `fetch` PUT at R2 *without a signature* fails with
+"No 'Access-Control-Allow-Origin' header is present", which reads exactly like broken bucket
+CORS. It is not — R2's **error** responses carry no CORS headers, so an unsigned probe always
+looks like a CORS failure. Preflight the OPTIONS separately to tell them apart.
+The only failure in the record is post `97ab9dc1` (29 Aug 15:18), `awaiting_bytes` with no
+`ingest.processing` — a slot claimed and bytes never delivered, **dated before** the CORS and
+CSP fixes. It will sit there forever because `reap_stale_ingests()` is one of the three things
+§6 holds until the deployed-worker probe lands.
+**What could not be tested:** a full signed upload from a browser. That needs a member
+password and a real Turnstile token, and neither is available headlessly.
+
+**3 · `INSERT … ON CONFLICT DO UPDATE SET draft = excluded.draft`** — which is what PostgREST
+sends for `Prefer: resolution=merge-duplicates` — requires SELECT on `draft`, because
+`EXCLUDED` is the target's rowtype. 0015 withholds exactly that column, so every Save and
+every Publish on the copy screen failed `42501` **before RLS ran**, and had since M3. Do not
+follow Postgres' own HINT: `content_blocks_select` is `using (true)`, so granting SELECT on
+`draft` would hand every unpublished paragraph to every signed-in member. 0055 adds
+`save_content_block()` instead, mirroring the read-side accessor. `34_content_block_save`
+asserts the upsert stays refused and says why beside it.
+**`posts` was fine** — an admin edit succeeds and §5's trigger resets `status` to `pending`
+rather than refusing. There is also no post-text editor in `admin.js` to refuse it.
+
+**4 · Comments now publish on insert** (0054), overriding §1 for comments only, recorded in
+§1 and §3 in the same commit. **`pending` was not a queue, it was a hole:** no comments panel
+was ever built in `admin.js`, so no comment written since M1 could ever become visible. Three
+places said `pending` — the column default, 0014's authorship trigger and 0019's policy — and
+**the trigger is the one that decides**. Changing only two produces a comment box that refuses
+every comment, which is how it was caught.
+
+**5 · The gazetteer was empty.** `places.json` was `{"items":[],"total":0}`, so the map drew
+geometry and no text — by design, since §2 renders the basemap without its own label layers.
+Three Ramallah entries were seeded through `save_place` and both locales verified in Chromium.
+They are a floor, not a gazetteer; Dashboard → Places owns them.
+
+## Found on the way, NOT fixed, and worth a decision
+
+- **`public.profiles` is EMPTY while `auth.users` has 11 rows.** No signup path — client or
+  trigger — has ever created a profile. So §7's "handle is user-chosen and mandatory, avatar
+  mandatory" is unimplemented, every public byline renders as "A member", every
+  `profile/{handle}.json` shard is absent, and `/u/{handle}` resolves to nothing. The
+  `reserved_handles` table exists, so the design was there and the flow was not. This is real
+  M3 work, not a bugfix, which is why it was left.
+- **`moderation_actions` cannot record a `content_blocks` edit.** Its `target_id` is
+  `uuid not null` and that table's key is `(key, locale)`. 0055 writes `audit_log` only
+  (its `target_id` is nullable and `target_type` is text, by 0010's design) and says so.
+  §4 asks for both tables. The fix is either a synthetic uuid that joins to nothing or
+  relaxing the not-null — a governance change, so it is yours.
+- The confirmation email's `redirect_to` is still `http://localhost:3000`.
+- `CLOUDFLARE_ZONE_ID` / `CLOUDFLARE_PURGE_TOKEN` still unset, so §8's CDN purge is a no-op.
+  Harmless on `r2.dev`; a real hole the day a cached custom domain goes in front.
 
 ## Still gated on Amro — do not touch
 
-1. **`/item/*` route on the site origin.** M3's unmet exit criterion. Re-measured 29 Aug:
-   the site origin returns 200 with **zero** `og:` tags while the CDN copy has ten. Needs
-   the production host.
-2. **The service-role JWT for `scripts/m1-deployed.ts`.** M1's exit criterion is still
-   unproven — a 4K master surviving in `originals/` while only renditions are CDN-reachable
-   has been shown for the *image* path through a browser, not for video through the harness.
-3. **GoTrue IP-log retention.** `auth.audit_log_entries` records IPs; §7 says do not store
-   them. A policy decision, unmade.
-
-## Open, not gated, and nobody has picked them up
-
-- **The confirmation email's `redirect_to` is `http://localhost:3000`.** A real member
-  confirming from their mail client lands on a host that does not exist for them. Supabase
-  Auth Site URL setting, not code. Found by actually signing up.
-- **Auto-publish on approval is still unwired** — vault entries `rma_publish_url` and
-  `rma_publish_secret` are unset, so approving content does not publish. Manual invocation
-  works. Carried since 25 Aug.
-- **`CLOUDFLARE_ZONE_ID` / `CLOUDFLARE_PURGE_TOKEN` unset**, so §8's CDN purge is a no-op.
-  Harmless while the origin is `r2.dev` (no edge caching, delete visible at t+0s); becomes
-  a real hole the day a custom domain with caching goes in front of R2.
-- **Test data left in place deliberately**, as the evidence for the E2E run: post
-  `1ad4e709-fd89-46b4-a88d-f334ac78da7d` (status `withdrawn`, set by its own author) and
-  member `a12af40e-adc6-4acc-ae82-e36fa362e61f`. It could not be removed through §8's
-  takedown path — that is moderator-only and correctly refused a member 403. Its derivative
-  bytes are still in `public/`; only takedown deletes those.
-
-## Reading CI failures without log access
-
-The Actions **logs** endpoint returns 403 unauthenticated even on this public repo, and
-there is no `gh` CLI here. The pgTAP step deliberately emits its diagnosis as GitHub
-**annotations**, and those ARE readable:
-
-    GET /repos/amrohass/nostaligia/actions/runs?per_page=5        → find the run id
-    GET /repos/amrohass/nostaligia/actions/runs/{id}/jobs         → find the failing job id
-    GET /repos/amrohass/nostaligia/check-runs/{job_id}/annotations
-
-That is how every failure on 30 Aug was diagnosed. **Unauthenticated GitHub API is 60
-requests/hour** — polling a run every 30s burns it in minutes and then you are blind for
-the rest of the hour. Poll at 60s or longer.
+1. **`/item/*` route on the site origin.** M3's unmet exit criterion; needs the production host.
+2. **The service-role JWT for `scripts/m1-deployed.ts`.** M1's exit criterion is unproven for
+   the video path.
+3. **GoTrue IP-log retention.** `auth.audit_log_entries` records IPs; §7 says do not store them.
+4. **Backups + one tested restore** (§11 gate 3) — outlined, not built, waiting on three
+   decisions: where the self-held copy lives, whether the cadence amendments stand, and
+   whether the restore target is local Docker or a scratch project. `supabase db dump`
+   excludes `auth`, `vault`, `cron`, `extensions` and `storage` by default — three dumps are
+   needed, not one.
+5. **Seed importer** — needs Amro's ~300 items. Nothing in the repo is seed data.
 
 ## Credentials — a standing note
 
-Amro pasted a Cloudflare API token and an **admin-scoped** R2 key pair into the 30 Aug chat
-and decided against rotating them. They are in no repo file, no scratch file, no shell
-history and no `.dev.vars`; they are in that session's transcript at
-`~/.claude/projects/…/2fdc6961-….jsonl` in plaintext, and that file is not synced, not
-backed up and not indexed by content. Whether shadow copies hold it could not be determined
-without elevation. The R2 pair is admin-scoped — it can read and write bucket configuration,
-unlike the object-scoped pair in `.dev.vars`.
+The previous handoff recorded a Cloudflare API token and an admin-scoped R2 key pair sitting
+in a 30 Aug transcript, unrotated by decision. Still true. Additionally, on 30 Aug a `grep`
+for `PUBLISH_SECRET` printed the old `.dev.vars` value into a transcript; that secret was
+rotated in the same session and the printed value is dead. **`.dev.vars` holds live secrets —
+grep it for names, never for values** (`sed -E 's/=.*/=<redacted>/'`).

@@ -56,12 +56,25 @@ and one was CI's own diagnostics:
   nothing else. Its failing lines are annotations now, like the lifecycle job's — GitHub's
   job logs need admin rights, and annotations do not.
 
-**The map draws no text.** Every name on it comes from `places.json` — the confirmed
-gazetteer, published into each release — rather than from the tiles' own label layers,
-which are deliberately not rendered. That is what makes an Arabic-first map possible: an
-extract carries whatever names its renderer baked in, usually Latin, and no amount of
-styling turns them into Arabic. It also removes a glyph atlas and an Arabic shaping engine
-from the work, since the browser's own text engine shapes and joins correctly for free.
+**The map draws no text of its own.** Every name on it comes from `places.json` — the
+confirmed gazetteer, published into each release — rather than from the tiles' own label
+layers, which are deliberately not rendered. That is what makes an Arabic-first map
+possible: an extract carries whatever names its renderer baked in, usually Latin, and no
+amount of styling turns them into Arabic. It also removes a glyph atlas and an Arabic
+shaping engine from the work, since the browser's own text engine shapes and joins
+correctly for free.
+
+> **30 Aug 2026 — and until that date the map therefore had NO labels at all**, because
+> `public.places` had zero rows and `places.json` was `{"items":[],"total":0}`. That reads
+> as a broken renderer and is not one: the pipeline is complete end to end — shard →
+> `ARCHIVE.places()` → `map.setPlaces()` → canvas `fillText`, locale-picked `name_ar` /
+> `name_en`, halo, no external glyph CDN — and it was drawing an empty list correctly. The
+> extract itself does carry names (`places`, `pois`, `roads`, `water` all have `name`,
+> `name:ar`, `name:en`); we deliberately do not read them.
+> Three Ramallah entries were seeded through the dashboard's own `save_place` path so the
+> map is not textless: **المنارة / Al-Manara Square**, **البلدة القديمة / Old Town**,
+> **رام الله التحتا / Lower Ramallah**. They are a floor, not a gazetteer — edit, extend or
+> delete them in Dashboard → Places, which is the screen that owns them.
 
 **Vector rather than raster**, decided 21 Aug 2026 and recorded in CLAUDE.md §2. Raster
 would have been ~150 lines of client code instead of ~900. It was refused because no
