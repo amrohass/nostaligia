@@ -215,7 +215,13 @@ update expected e set outcome = v.outcome from (values
   ('member','posts','update','allow'),
   ('member','media_assets','select','allow'),
   ('member','comments','select','allow'),   ('member','comments','insert','allow'),
-  ('member','comments','update','allow'),
+  -- 'empty', not 'allow', since 0054. A comment is published the moment it is written, and
+  -- 0019's "an author may fix their own while it is still in the queue" branch went with the
+  -- queue. A member who could edit a live comment could write something ordinary and rewrite
+  -- it afterwards, which would empty the reactive moderation that replaced prior review.
+  -- The probe still SELECTs the row (`comments','select','allow'` above), so this is the
+  -- policy refusing rather than the member being unable to see what they wrote.
+  ('member','comments','update','empty'),
   ('member','likes','select','allow'),      ('member','likes','insert','allow'),
   ('member','likes','delete','allow'),
   ('member','saves','select','allow'),      ('member','saves','insert','allow'),

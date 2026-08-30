@@ -18,6 +18,31 @@ diaspora contribute and browse photos, video, voice notes, and events, pinned to
 era on a map. Content is user- and admin-submitted; **everything user-submitted is reviewed
 before it is public.** Browsing is open; all engagement requires sign-in.
 
+- **Amended 30 Aug 2026 — COMMENTS ARE THE ONE EXCEPTION, and it is the only one.** A
+  comment is published the moment it is written; a post is not, and nothing about this
+  reaches posts, media, events or profiles. Migration 0054 is where it lives.
+  The reason is not a change of mind about review. Review of comments was never happening
+  and structurally could not: 0019 pinned an insert to `pending` and gave a moderator the
+  UPDATE that lifts it, and **no screen was ever built that calls it** — `admin.js` has a
+  queue, an archive register, events, places, members, reports and copy, and no comments
+  panel. So the real choice was between a comment box that silently discards and one that
+  works. Every comment written on the deployed system before this date was invisible from
+  the moment it was submitted, to everyone including its author's readers.
+  **What does NOT change:** sign-in is still required, you may still only comment on an
+  approved and non-taken-down post, `created_by` is still stamped by trigger, bidi stripping
+  (§6) still runs before the row lands and is now the ONLY filter between a hostile string
+  and a shard, and the Turnstile and rate limits on the write path are untouched.
+  **Moderation becomes reactive:** §4's "view / delete comments" is unchanged, a moderator
+  still hides or removes any comment, and `reports` still takes a member's flag. What is
+  gone is prior restraint on a remark — not the ability to act on one.
+  One cost, recorded rather than discovered later: a published comment bumps the CONTENT
+  revision, and §2's amendment says content is never throttled, so a comment now costs an
+  archive rebuild where §6's hour floor bounds a like. The single-writer lease is what keeps
+  that from being a storm — a concurrent dispatch is answered `held` without building
+  anything, and 0042's follow-up collects the rest — so N comments in a window cost roughly
+  one release, not N. If that stops being true the answer is §2's deferred incremental diff,
+  not a throttle that would make a comment appear an hour after it was written.
+
 Scale: ~300 items at launch, low thousands within a year. Tens of thousands of users
 worldwide. Read-dominated. Solo maintainer. Grant-funded — predictable low cost is a
 requirement, not a preference.
@@ -215,6 +240,11 @@ media_assets(id, post_id → posts,
 
 places(id, name_ar/en, aliases text[], location geography, geohash, unconfirmed bool)
 comments(id, post_id, body, lang, status, created_by, created_at)
+   -- status DEFAULTS TO 'published' and the insert trigger stamps 'published' (0054,
+   -- 30 Aug 2026) — §1's review exception. 'pending' remains in the enum and is now
+   -- unreachable on the write path; 'hidden' and 'removed' are moderator decisions and are
+   -- the whole of comment moderation. Do not restore prior review here without building the
+   -- queue screen that was always missing.
 likes(user_id, post_id, created_at, UNIQUE(user_id, post_id))
 saves(user_id, post_id, created_at, UNIQUE(user_id, post_id))
 content_blocks(key, locale, draft, published, version, updated_by, updated_at)

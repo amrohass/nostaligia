@@ -12,12 +12,15 @@
    scheduled for M3, against §5: "unapproved content must be UNREADABLE by non-moderators at
    the policy level, not hidden in the client."
 
-   What actually changes: a comment written here lands with status='pending' — stamped by
-   the trigger in 0014, not chosen here — and is invisible to everyone but its author and a
-   moderator until somebody approves it. The client cannot publish it, cannot read anyone
-   else's pending one, and cannot set the status column, because 0015 does not grant it and
-   0019's WITH CHECK refuses it. The screen shows "awaiting review" because that is true,
-   not to be polite about a write that already happened.
+   What actually changes: a comment written here lands with a status this file does not
+   choose and cannot override — 0014's trigger stamps it, 0015 does not grant the column, and
+   0019's WITH CHECK would refuse a client that tried anyway. §5's line holds whichever value
+   that is.
+
+   Since 0054 that value is 'published': §1's "reviewed before it is public" carries an
+   exception for comments, taken 30 Aug 2026 and written into §1 and §3. Moderation of
+   comments is reactive — a moderator hides or removes, and `reports` below is how a member
+   raises one. Posts are unchanged and still wait for approval.
 
    ── Counts are baked; your own state is live ────────────────
 
@@ -159,10 +162,12 @@
    * Published comments come from the item shard — §9 puts them there and §2 requires it, so
    * a signed-out visitor can read the thread with no database at all. This call exists for
    * the one thing a shard structurally cannot carry: the comment you just wrote, which is
-   * pending and which nobody else may see.
+   * live in the database and not yet in any release.
    *
    * Without it the archive would take a member's comment, tell them nothing, and show them a
-   * thread that does not contain it — which reads as the comment having been lost.
+   * thread that does not contain it — which reads as the comment having been lost. That was
+   * true when the gap was a moderator's queue (0019) and it is still true now the gap is one
+   * publish cycle (0054); only its length changed. public.js decides what to merge, by id.
    */
   function myComments(postId) {
     var uid = signedInUserId();
@@ -174,7 +179,7 @@
   }
 
   /**
-   * Write a comment. It arrives pending; nothing here can change that.
+   * Write a comment. It arrives published (0054); nothing here can change that either way.
    *
    * `status` and `created_by` are not sent and could not be honoured if they were: 0015's
    * INSERT grant on comments is (post_id, body, lang) and nothing else, and 0014's trigger

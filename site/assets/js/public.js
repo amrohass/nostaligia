@@ -625,7 +625,7 @@
                 el('span.comment__name', null, bdi(name)))
             : el('span.comment__name', null, bdi(name || t('comments.someone'))),
           el('span.comment__when', { text: comment.day || '' }),
-          comment.pending ? el('span.privacy-flag', { text: t('comments.awaiting') }) : null
+          comment.justPosted ? el('span.privacy-flag', { text: t('comments.justPosted') }) : null
         ]),
         el('p.comment__body', null, bdi(comment.body))
       ])
@@ -636,23 +636,38 @@
    * The thread.
    *
    * Published comments come from the item shard, so a signed-out visitor reads them with no
-   * database at all (§2). A signed-in member additionally sees their OWN pending ones,
-   * flagged — because a comment that vanished on submit reads as a comment that was lost,
-   * and §1's "reviewed before it is public" is a promise the interface should keep out loud.
+   * database at all (§2). A signed-in member additionally sees their own comments that the
+   * shard does not carry YET — because a comment that vanished on submit reads as a comment
+   * that was lost.
+   *
+   * That gap changed shape in 0054 and the filter had to change with it. It used to be
+   * "status is not published", which was the same set as "not in the shard" while a comment
+   * waited for a moderator. A comment is published on insert now, so that test selects
+   * nothing at all, and the member's own remark would disappear from the thread for as long
+   * as it takes the next release to reach the CDN.
+   *
+   * The honest test is the one the sentence above actually says: not present in the shard,
+   * by id. It closes on its own when the release lands, it does not double-render a comment
+   * that IS in the shard, and it deliberately keeps hidden and removed ones out — a
+   * moderator's decision must not be undone for the author by a local merge.
    */
   function commentsPanel(entry) {
     var item = state.items[entry.id];
     var rows = (item && item.comments) || [];
     var mine = (item && item._mine) || [];
 
-    var all = rows.concat(mine.filter(function (m) { return m.status !== 'published'; })
-      .map(function (m) {
-        return {
-          id: m.id, body: m.body, day: m.created_on,
-          author: { handle: null, display_name: t('comments.you') },
-          pending: true
-        };
-      }));
+    var inShard = {};
+    rows.forEach(function (r) { if (r && r.id) inShard[r.id] = true; });
+
+    var all = rows.concat(mine.filter(function (m) {
+      return m.status === 'published' && !inShard[m.id];
+    }).map(function (m) {
+      return {
+        id: m.id, body: m.body, day: m.created_on,
+        author: { handle: null, display_name: t('comments.you') },
+        justPosted: true
+      };
+    }));
 
     var list = all.length
       ? el('ul.comments__list', null, all.map(commentRow))
