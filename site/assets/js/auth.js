@@ -66,7 +66,13 @@
     email_exists: 'auth.err.emailTaken',
     user_already_exists: 'auth.err.emailTaken',
     weak_password: 'auth.err.weakPassword',
-    over_email_send_rate_limit: 'auth.err.rateLimit',
+    /* Two different events, and they were mapped to one message until 31 Aug 2026.
+       over_request_rate_limit IS about this caller: they sent too many requests.
+       over_email_send_rate_limit is a PROJECT-WIDE cap on outbound mail per hour — with
+       Supabase's built-in sender it is a very small number — so it fires on the first
+       attempt of somebody who has never been here, and telling them they tried too often
+       sends them away to wait for a cooldown that is not theirs. */
+    over_email_send_rate_limit: 'auth.err.mailLimit',
     over_request_rate_limit: 'auth.err.rateLimit',
     email_not_confirmed: 'auth.err.unconfirmed',
     validation_failed: 'auth.err.invalidEmail'

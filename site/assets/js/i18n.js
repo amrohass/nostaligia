@@ -104,6 +104,13 @@
                                 en: 'That password is too short — eight characters at least.' },
     'auth.err.rateLimit':     { ar: 'محاولات كثيرة خلال وقت قصير. انتظر قليلًا ثم أعد المحاولة.',
                                 en: 'Too many attempts just now. Wait a little and try again.' },
+    // Separate from rateLimit above, because the two are not the same event and the
+    // difference is the visitor's to know. over_email_send_rate_limit is a cap on how many
+    // messages the SITE may send per hour, counted across everybody — so it fires for a
+    // person who has never been here before, on their first attempt, and the message above
+    // would tell them they had tried too often. It is ours, and it says so.
+    'auth.err.mailLimit':     { ar: 'تعذّر إرسال رسالة التأكيد الآن — الحد المسموح به من الرسائل من جهتنا. أعد المحاولة بعد قليل.',
+                                en: 'We could not send the confirmation email just now — a sending limit on our side, not something you did. Please try again shortly.' },
     'auth.err.unconfirmed':   { ar: 'فعِّل حسابك من رسالة التأكيد التي وصلتك أولًا.',
                                 en: 'Activate your account from the confirmation email first.' },
     'auth.err.invalidEmail':  { ar: 'تحقّق من صيغة البريد الإلكتروني.',

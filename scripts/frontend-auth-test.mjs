@@ -133,6 +133,12 @@ console.log('# auth.js — where the session lives');
     [422, { error_code: 'email_exists' }, 'auth.err.emailTaken'],
     [422, { error_code: 'weak_password' }, 'auth.err.weakPassword'],
     [429, { error_code: 'over_request_rate_limit' }, 'auth.err.rateLimit'],
+    /* The two 429s must NOT collapse to one message. over_email_send_rate_limit is the
+       one a real new member actually hits — it is a cap on the site's outbound mail per
+       hour, counted across every visitor, so it fires on a first-ever attempt — and it was
+       reported as "too many attempts just now" until 31 Aug 2026. Pinned as a pair so a
+       later tidy-up cannot merge them back. */
+    [429, { error_code: 'over_email_send_rate_limit' }, 'auth.err.mailLimit'],
     [400, { msg: 'Invalid login credentials' }, 'auth.err.credentials'],
     [429, {}, 'auth.err.rateLimit'],
     [500, { msg: 'internal database error: relation posts does not exist' }, 'auth.err.generic']
@@ -349,7 +355,8 @@ console.log('# db.js — the bucket rule');
     keys.add('up.stage.' + stage);
   }
   for (const k of ['auth.err.credentials', 'auth.err.emailTaken', 'auth.err.weakPassword',
-                   'auth.err.rateLimit', 'auth.err.unconfirmed', 'auth.err.invalidEmail',
+                   'auth.err.rateLimit', 'auth.err.mailLimit',
+                   'auth.err.unconfirmed', 'auth.err.invalidEmail',
                    'auth.err.generic', 'auth.err.offline', 'auth.err.notConfigured',
                    'auth.err.signedOut', 'auth.confirmSent', 'auth.working',
                    'up.err.robotUnavailable', 'up.err.noFile',
