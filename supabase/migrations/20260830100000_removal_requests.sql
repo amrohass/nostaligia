@@ -47,8 +47,20 @@ alter table public.reports
   add column kind public.report_kind not null default 'abuse';
 
 -- 0015 grants this table column by column; a column absent from the grant is one PostgREST
--- refuses with `permission denied` regardless of what the policy says.
+-- refuses with `permission denied` regardless of what the policy says. BOTH are needed and
+-- the SELECT is the one that is easy to forget: without it the moderator dashboard's
+-- `select=id,kind,…` is refused outright, so the queue that this whole migration exists to
+-- inform would not load at all.
+--
+-- 0015's own comment is the authority for the read: "Rows are restricted by RLS to the
+-- reporter and moderators, which is the whole protection... Within those rows every column
+-- is legitimate." `kind` is such a column.
+--
+-- No UPDATE grant. What somebody asked for is not something a later hand should be able to
+-- reclassify — a removal request quietly becoming an abuse report is how an obligation
+-- disappears. Status is the field that moves; kind is fixed at filing.
 grant insert (kind) on public.reports to authenticated;
+grant select (kind) on public.reports to authenticated;
 
 -- Moderators open this queue filtered, and `status` alone does not narrow it. Partial,
 -- because a closed removal request is history rather than work.
