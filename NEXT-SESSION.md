@@ -63,8 +63,11 @@ Still gated, untouched: the `/item/*` route on the site origin, the service-role
 - **`now()` does not advance inside a transaction**, so `order by created_at desc limit 1`
   is nondeterministic between rows written in the same batch. It made a correct `before`/
   `after` audit row look like a §4 violation for ten minutes.
-- **In a JavaScript `String.replace` *replacement*, `$$` means a literal `$`.** It turned
-  `$$delete …$$` into `$delete …$` in a SQL file.
+- **Never use `String.replace` with a string replacement to edit a document.** The
+  replacement is scanned for `$$`, `$&`, `` $` `` and `$'`. `$$` turned `$$delete …$$` into
+  `$delete …$` in a SQL file, and then `` $` `` — which expands to *everything before the
+  match* — silently **tripled `docs/audit-2026-08-31.md`** when the replacement text happened
+  to contain a `$` followed by a backtick. Use `split(anchor).join(replacement)`.
 - **A mechanical rewrite over SQL must be quote-aware.** `05_matrix` stores probe statements
   as dollar-quoted text, so a naive match hit the denial matrix's own data.
 
