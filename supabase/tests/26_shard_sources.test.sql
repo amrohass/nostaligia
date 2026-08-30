@@ -153,9 +153,20 @@ select is(
 --
 -- Three profiles exist and two of them contributed, so a function that returned every row
 -- would answer 3. That difference is the assertion.
-select is(
-  (select count(*)::int from jsonb_array_elements(public.publishable_profiles())),
-  2,
+-- Scoped to this file's own three fixtures. Unscoped this counted every publishable profile
+-- in the database, which was 2 only because no real contributor HAD a profile — 0057 gives
+-- every account one, and the same assertion then answers 6 on the deployed archive. So the
+-- count was really "this archive has exactly two contributors", which is not what the line
+-- claims and is false the moment anyone contributes.
+--
+-- The discriminating half is unchanged and is now said outright rather than inferred from a
+-- number: of these three, exactly the two that contributed are named and `silenthandle` is
+-- not. A function that ignored its WHERE clause would return all three and fail here.
+select set_eq(
+  $q$ select h.v ->> 'handle'
+        from jsonb_array_elements(public.publishable_profiles()) h(v)
+       where h.v ->> 'handle' in ('openhandle', 'quiethandle', 'silenthandle') $q$,
+  array['openhandle', 'quiethandle'],
   'only profiles the archive actually names get a shard — the silent one has none');
 
 select is(
