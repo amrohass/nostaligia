@@ -13,8 +13,8 @@
 begin;
 create extension if not exists pgtap;
 
--- 4 structure · 2 limits · 3 guards · 7 bytes · 2 counts · 2 role · 2 timezone
-select plan(22);
+-- 4 structure · 2 limits · 3 guards · 7 bytes · 2 counts · 5 role · 2 timezone
+select plan(25);
 
 -- ── Fixtures ─────────────────────────────────────────────────
 -- A separate user per scenario. Sharing one would make each assertion depend on the
@@ -170,6 +170,37 @@ select is(
 select is(
   (select (public.claim_upload_quota(4294967296) ->> 'allowed')::boolean), true,
   'a 4 GB master is inside a moderator''s daily budget — §6''s cap, not a member''s');
+reset role;
+
+-- ═══ …and a claim that DISAGREES with the table loses ════════
+--
+-- The assertion above says "not from any claim", and until 31 Aug 2026 it could not have
+-- caught that: its token carries no role claim at all, so a function that preferred the
+-- claim would have passed it for want of anything to prefer. §5's rule is specifically
+-- about a token the attacker controls the contents of — "authorization lives in RLS
+-- policies and Edge Functions, nowhere else" — so the case worth pinning is a MEMBER whose
+-- token says otherwise, loudly, in both of the claim names the access-token hook could
+-- plausibly use.
+--
+-- Verified live against the deployed database the same day, as the real harness member.
+set local role authenticated;
+set local request.jwt.claims to
+  '{"sub":"00000000-0000-0000-0000-0000000000c1","role":"authenticated","user_role":"admin","app_role":"admin"}';
+
+-- CONTROL, and this file would be lying without it: if the claims never reached the
+-- session the two assertions below would pass because there was no forgery to ignore,
+-- which is the same shape as the bug they replace.
+select is(
+  current_setting('request.jwt.claims', true)::jsonb ->> 'user_role', 'admin',
+  'CONTROL: the forged admin claim really is on the session the function runs in');
+
+select is(
+  public.claim_upload_quota(4294967296) ->> 'role', 'member',
+  'a member whose token CLAIMS admin is still a member to the quota');
+
+select is(
+  public.claim_upload_quota(4294967296) ->> 'reason', 'over_daily_bytes',
+  '...so the 4 GB a moderator was just granted is refused for them');
 reset role;
 
 -- ═══ The day is UTC, whatever the session says ═══════════════

@@ -56,6 +56,7 @@ function makeWindow(overrides = {}) {
       removeItem: k => localStore.delete(k)
     },
     setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: id => clearTimeout(id),
     fetch: () => Promise.reject(new Error('no fetch stubbed')),
     _session: store,
     _local: localStore,
@@ -416,6 +417,85 @@ console.log('# db.js — the bucket rule');
     .then(() => null, e => e);
   ok(noCaptcha && noCaptcha.key === 'up.err.robot',
      'and a missing Turnstile token is refused before the upload starts (§6)');
+}
+
+console.log('# turnstile.js — every path out of token() settles');
+
+// ── 8b · the silent-hang paths ──────────────────────────────────────────────
+//
+// §6 puts Turnstile on signup and submit, so token() sits between the member pressing the
+// button and anything happening. Until 31 Aug 2026 it had three ways to never settle, and
+// all three present to the member as the same thing: the dialog stays on its working state
+// forever, with no message and nothing to retry. Found by pointing a real browser at the
+// live origin, where Turnstile rendered the widget, opened no challenge frame, and called
+// back NEITHER success nor error for 45 seconds — which is Turnstile behaving as designed
+// against automation, and indistinguishable at this layer from a widget that is broken.
+{
+  // A widget whose callbacks this test holds, so each path can be driven deliberately.
+  function stubWidget() {
+    const cbs = {};
+    const win = makeWindow({
+      turnstile: {
+        render: (_el, opts) => { Object.assign(cbs, opts); return 'w1'; },
+        reset: () => {},
+        remove: () => {}
+      }
+    });
+    load('site/assets/js/turnstile.js', win);
+    const handle = win.TURNSTILE.mount({});
+    return { win, cbs, handle };
+  }
+
+  const settled = p => Promise.race([
+    p.then(v => ({ state: 'resolved', v }), e => ({ state: 'rejected', e: e.message })),
+    new Promise(r => setTimeout(() => r({ state: 'PENDING FOREVER' }), 150))
+  ]);
+
+  // CONTROL first: the happy path must be untouched by any of this.
+  const good = stubWidget();
+  const goodP = settled(good.handle.token());
+  await new Promise(r => setTimeout(r, 10));
+  good.cbs.callback('a-real-token');
+  const goodR = await goodP;
+  ok(goodR.state === 'resolved' && goodR.v === 'a-real-token',
+    'CONTROL: a widget that produces a token still resolves with it');
+
+  const errW = stubWidget();
+  const errP = settled(errW.handle.token());
+  await new Promise(r => setTimeout(r, 10));
+  errW.cbs['error-callback']('110200');
+  const errR = await errP;
+  ok(errR.state === 'rejected' && errR.e === 'up.err.robotUnavailable',
+    "error-callback rejects the pending token() instead of clearing `current` and walking away");
+
+  const toW = stubWidget();
+  const toP = settled(toW.handle.token());
+  await new Promise(r => setTimeout(r, 10));
+  toW.cbs['timeout-callback']();
+  const toR = await toP;
+  ok(toR.state === 'rejected' && toR.e === 'up.err.robotUnavailable',
+    'timeout-callback rejects it too — an expired challenge is an answer, not silence');
+
+  const rmW = stubWidget();
+  const rmP = settled(rmW.handle.token());
+  await new Promise(r => setTimeout(r, 10));
+  rmW.handle.remove();
+  const rmR = await rmP;
+  ok(rmR.state === 'rejected' && rmR.e === 'up.err.robotUnavailable',
+    'remove() rejects outstanding waiters — closing the dialog does not strand its caller');
+
+  // The one that has no callback at all. `setTimeout` fires immediately here, so the
+  // deadline is reached without the test waiting 30 seconds for it; whenReady() never
+  // uses it, because window.turnstile is already present and it resolves synchronously.
+  const cbsQuiet = {};
+  const quietWin = makeWindow({
+    turnstile: { render: (_el, o) => { Object.assign(cbsQuiet, o); return 'w1'; }, reset: () => {}, remove: () => {} },
+    setTimeout: fn => setTimeout(fn, 0)
+  });
+  load('site/assets/js/turnstile.js', quietWin);
+  const quietR = await settled(quietWin.TURNSTILE.mount({}).token());
+  ok(quietR.state === 'rejected' && quietR.e === 'up.err.robotUnavailable',
+    'a widget that renders and then says NOTHING is refused on the deadline, not awaited forever');
 }
 
 console.log('# config — the one credential permitted in the client');
