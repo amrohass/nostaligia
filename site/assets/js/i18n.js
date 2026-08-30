@@ -159,6 +159,14 @@
     'up.err.offline':    { ar: 'لا يوجد اتصال. تحقّق من الشبكة وأعد المحاولة.',
                            en: 'No connection. Check the network and try again.' },
     'up.err.generic':    { ar: 'تعذّر إتمام الرفع. أعد المحاولة.', en: 'The upload did not go through. Try again.' },
+    /* M5's precision floor. The message names what to do rather than what went wrong: a
+       contributor who chose a sharp precision and then moved to a dropped pin has not made
+       a mistake, they have changed a thing the other setting depended on. */
+    'up.err.precisionTooPrecise': {
+      ar: 'الدقّة المختارة أعلى ممّا يسمح به الموقع الذي حدّدته. اختر دقّة أقلّ، أو اختر مكانًا من الفهرس.',
+      en: 'That precision is sharper than the location you picked allows. Choose a looser one, or pick a place from the index.' },
+    'up.err.precisionUnknown': {
+      ar: 'قيمة الدقّة غير معروفة.', en: 'That precision is not a value we recognise.' },
 
     // ── Upload progress ─────────────────────────────────────
     'up.stage.probing':    { ar: 'نقرأ الملف…', en: 'Reading the file…' },
@@ -178,6 +186,13 @@
     'share.fPlace': { ar: 'المكان',        en: 'Place' },
     'share.fPlacePh': { ar: 'اختر من الخريطة أو اكتب اسمه', en: 'Pick from the map or type its name' },
     'share.fDecade':{ ar: 'العقد',         en: 'Decade' },
+    /* §7's precision control (M5). The label asks what to PUBLISH rather than what the
+       coordinate is, because those are different questions and only the first is the
+       contributor's to answer. */
+    'share.fPrecision': { ar: 'دقّة الموقع المنشور', en: 'Published location precision' },
+    'share.fPrecisionNote': {
+      ar: 'يمكنك دائمًا نشر موقع أقلّ دقّة ممّا حدّدت — لا أدقّ. الإحداثيّة الأصليّة تبقى محفوظة ولا تُنشر.',
+      en: 'You can always publish something vaguer than you picked — never sharper. The original coordinate is kept and never published.' },
     'share.fStory': { ar: 'القصة',         en: 'The story' },
     'share.fStoryPh': { ar: 'ما الذي تذكره — أو تذكره عائلتك — من هذه اللحظة؟',
                         en: 'What do you — or your family — remember of this moment?' },
@@ -542,6 +557,18 @@
 
     // ── Share sheet (M3) ────────────────────────────────────
     'share.fDecadeUnknown': { ar: 'العقد غير معروف', en: 'Decade unknown' },
+    /* The same four enum values as `precision.*` above, in the OTHER register — and a
+       separate namespace rather than a second definition of the same keys, which is what
+       this was first written as. A duplicate key in an object literal silently wins, so
+       the contributor's wording would have replaced the moderator's everywhere the
+       dashboard renders it, and nothing would have said so.
+       `precision.*` is terse, for a moderator scanning a queue. These are a choice a
+       contributor is making about their own safety, so they describe what a READER of the
+       archive will end up seeing. */
+    'share.precision.exact':  { ar: 'الموقع بالضبط',      en: 'The exact spot' },
+    'share.precision.street': { ar: 'الشارع أو الحارة',   en: 'Street or block' },
+    'share.precision.area':   { ar: 'المنطقة العامّة',     en: 'General area' },
+    'share.precision.hidden': { ar: 'لا تنشر الموقع',     en: 'Do not publish a location' },
     // ── M4: the place, the pin, and what each publishes ─────
     'share.fPlaceHint':     { ar: 'اختياريّ. المكان المعروف يُنشر كما هو؛ الدبّوس يُنشر بدقّة حيّ تقريبًا.',
                               en: 'Optional. A known place is published as it stands; a pin is published to about a block.' },
@@ -619,6 +646,21 @@
     'ar.takedownBlurb': { ar: 'تُحذف الملفات فورًا — المشتقّات والنسخة الأصلية معًا — ويُسجَّل القرار. لا رجعة.',
                           en: 'The files are deleted immediately — derivatives and the archival master alike — and the decision is logged. This cannot be undone.' },
     'ar.takedownNote':   { ar: 'سبب الإزالة', en: 'Reason for removal' },
+    /* M5's report kinds (migration 0053). Two different obligations, and a queue that
+       rendered both as "report" would invite the second to be triaged at the speed of
+       the first. */
+    'rp.kind.abuse':   { ar: 'بلاغ', en: 'Report' },
+    'rp.kind.removal': { ar: 'طلب إزالة', en: 'Removal request' },
+    /* The same two words on the contributor's side of the dialog, plus what each one
+       actually does — because "report" and "removal request" are not self-explanatory to
+       somebody who has just found a photograph of themselves. */
+    'report.kind': { ar: 'نوع الطلب', en: 'What are you asking for?' },
+    'report.kindNote.abuse': {
+      ar: 'يراجع المشرفون المادة ويقرّرون ما إذا كانت تخالف قواعد الأرشيف.',
+      en: 'A moderator will review the material and decide whether it breaks the archive’s rules.' },
+    'report.kindNote.removal': {
+      ar: 'لطلب إزالة مادّة تخصّك — كأن تكون أنت في الصورة. يصل الطلب إلى مسؤول محدّد ويُسجَّل في السجلّ الدائم، دون نصّ طلبك.',
+      en: 'For material that concerns you — if you are in the photograph, for instance. It reaches a named person and is entered in the permanent record; what you write here is not.' },
     'ar.takedownNotePh': { ar: 'يُسجَّل في سجلّ الإدارة', en: 'Recorded in the moderation log' },
     'ar.takedownNoteRequired': { ar: 'اكتب سبب الإزالة.', en: 'Give a reason.' },
     'ar.takedownConfirm': { ar: 'إزالة نهائية', en: 'Remove permanently' },

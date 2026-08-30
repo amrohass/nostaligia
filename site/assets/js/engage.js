@@ -214,7 +214,7 @@
    * report readable only by its reporter and by moderators, because showing a reporter to
    * the person they reported is how retaliation happens.
    */
-  function report(targetType, targetId, reason) {
+  function report(targetType, targetId, reason, kind) {
     if (!signedInUserId()) return needSession();
     var text = String(reason || '').trim();
     if (!text) return Promise.reject(EngageError('report.err.empty'));
@@ -222,8 +222,21 @@
     return global.DB.insert('reports', {
       target_type: targetType,
       target_id: targetId,
-      reason: text
+      reason: text,
+      /* M5's removal request (migration 0053). Defaulted here rather than left undefined
+         so the column is always sent explicitly: 'abuse' is also the database default, so
+         a caller that omits it files the same row either way, and a caller that MEANT
+         'removal' cannot get 'abuse' by forgetting a truthiness check somewhere. */
+      kind: kind === 'removal' ? 'removal' : 'abuse'
     });
+  }
+
+  /* §7's right to withdraw, for material the asker does not control.
+     The author of a post can withdraw it themselves (0018's policy); this is for everyone
+     else — most importantly the person IN the photograph. It raises a request; §8's
+     takedown, which is a moderator's, is what removes the bytes. */
+  function requestRemoval(targetType, targetId, reason) {
+    return report(targetType, targetId, reason, 'removal');
   }
 
   global.ENGAGE = {
@@ -233,6 +246,7 @@
     setSave: setSave,
     myComments: myComments,
     comment: comment,
-    report: report
+    report: report,
+    requestRemoval: requestRemoval
   };
 })(window);

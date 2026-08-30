@@ -862,10 +862,28 @@
     });
   }
 
-  /** §4 gives moderators "review reports"; until M3 nothing could create one. */
+  /* §4 gives moderators "review reports"; until M3 nothing could create one.
+     M5 adds the second kind beside it (migration 0053): a removal request.
+
+     The same dialog rather than a second one, because to the person opening it these are
+     one question — "this should not be here" — and the difference is which obligation it
+     creates on the other side, not which form they fill in. It is a chooser rather than
+     two entry points for the same reason §7 gives about who asks: the person with the
+     strongest claim over a photograph is often not its uploader, and they will not go
+     looking for a specially-named control. */
   function openReport(targetType, targetId) {
     var scrim;
     function close() { closeOverlay(scrim); }
+
+    var kindSelect = el('select.input', { 'aria-label': t('report.kind') },
+      ['abuse', 'removal'].map(function (id) {
+        return el('option', { value: id, selected: id === 'abuse' ? true : null,
+                              text: t('rp.kind.' + id) });
+      }));
+    var kindNote = el('p.field__hint', { text: t('report.kindNote.abuse') });
+    kindSelect.addEventListener('change', function () {
+      kindNote.textContent = t('report.kindNote.' + kindSelect.value);
+    });
 
     var reason = el('textarea.input', {
       rows: '3', required: true, placeholder: t('report.placeholder'), 'aria-label': t('report.reason')
@@ -876,7 +894,7 @@
       onsubmit: function (event) {
         event.preventDefault();
         note.hidden = true;
-        ENGAGE.report(targetType, targetId, reason.value).then(function () {
+        ENGAGE.report(targetType, targetId, reason.value, kindSelect.value).then(function () {
           close();
           UI.toast(t('report.sent'));
         }).catch(function (err) {
@@ -891,6 +909,11 @@
           el('p.dialog__blurb', { text: t('report.blurb') })
         ]),
         el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+      ]),
+      el('div.field', null, [
+        el('label.field__label', { text: t('report.kind') }),
+        kindSelect,
+        kindNote
       ]),
       reason,
       note,
@@ -1198,7 +1221,7 @@
      `authenticated` and to nobody else: §2's "zero database reads for public visitors" is
      not softened by autocomplete being useful. */
 
-  function placePicker() {
+  function placePicker(onChange) {
     var chosen = null;         // { id, name } from the gazetteer
     var pin = null;            // { lat, lon } a contributor placed
     var timer = null;
@@ -1236,6 +1259,9 @@
         summary.hidden = true;
         summary.textContent = '';
       }
+      /* The precision select's options depend on which of the three branches above is
+         live, and this is the single point all three pass through. */
+      if (onChange) onChange();
     }
 
     function choose(place) {
@@ -1337,6 +1363,17 @@
         if (chosen) return { place_id: chosen.id };
         if (pin) return { lat: String(pin.lat.toFixed(6)), lon: String(pin.lon.toFixed(6)) };
         return {};
+      },
+      /* The sharpest precision this location's SOURCE justifies — migration 0049's rule,
+         mirrored here so the sheet can offer only the values the server will accept.
+
+         It is a mirror and not the boundary. 0052's trigger is the boundary; this exists
+         so a contributor is never offered a choice that would be refused, which is a
+         different job from stopping one that would. */
+      justified: function () {
+        if (chosen) return 'exact';
+        if (pin) return 'street';
+        return 'hidden';
       }
     };
   }
@@ -1528,7 +1565,40 @@
 
     var consentBox = el('input', { type: 'checkbox', required: true });
 
-    var place = placePicker();
+    /* ── §7's precision control (M5, migration 0052) ──────────
+
+       One direction only: a contributor may publish something VAGUER than the coordinate's
+       source justifies, never sharper. 0049 fixes what the source justifies — a gazetteer
+       place is already public in places.json so it justifies 'exact'; a dropped pin is a
+       coordinate nobody curated and most plausibly a home, so it justifies 'street'.
+
+       The select therefore REBUILDS whenever the place changes, offering only the values
+       at or below what is now justified. It is not the boundary — 0052's trigger is, and
+       upload.js maps `precision_too_precise` for the window where the two disagree — but a
+       control that offered a choice the server refuses would be a privacy setting that
+       lies, which is worse than not offering it. */
+    var PRECISIONS = ['exact', 'street', 'area', 'hidden'];
+    var precisionSelect = el('select.input', { 'aria-label': t('share.fPrecision') });
+    var precisionNote = el('p.field__hint', { text: t('share.fPrecisionNote') });
+
+    function rebuildPrecision() {
+      var floor = place.justified();
+      var allowed = PRECISIONS.slice(PRECISIONS.indexOf(floor));
+      /* Keep what they chose if it survives the new floor. Silently resetting a privacy
+         setting the contributor deliberately tightened would be the wrong default: when
+         the old choice is gone, fall back to the SAFEST remaining value rather than the
+         sharpest, which is `hidden` in every case. */
+      var previous = precisionSelect.value;
+      var keep = allowed.indexOf(previous) >= 0 ? previous : allowed[allowed.length - 1];
+      mount(precisionSelect, allowed.map(function (id) {
+        return el('option', { value: id, selected: id === keep ? true : null,
+                              text: t('share.precision.' + id) });
+      }));
+      precisionSelect.value = keep;
+    }
+
+    var place = placePicker(rebuildPrecision);
+    rebuildPrecision();
 
     var busy = false;
 
@@ -1562,6 +1632,10 @@
            pair of numbers that arrived beside an id. */
         var where = place.read();
         Object.keys(where).forEach(function (key) { draft[key] = where[key]; });
+        /* Sent always, including 'hidden'. Saying nothing would let 0049's source rule
+           decide, and the whole point of the control is that the contributor now has a
+           say — including the say that publishes no coordinate at all. */
+        draft.location_precision = precisionSelect.value;
 
         /* §7. Only `granted` is sent — granted_at is stamped by the database, because a
            timestamp evidencing that someone agreed at a moment is worthless if the person
@@ -1626,6 +1700,11 @@
          in M3 because a free-text place that resolves to nothing is a question asked for no
          reason. This is what M4 replaces it with: the gazetteer, then a pin. */
       place.node,
+      el('div.field', null, [
+        el('label.field__label', { text: t('share.fPrecision') }),
+        precisionSelect,
+        precisionNote
+      ]),
       field(t('share.fStory'), { multiline: true, placeholder: t('share.fStoryPh'), rows: '3' }),
       el('label.dropzone', null, [
         ICONS.upload(),

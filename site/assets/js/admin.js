@@ -1468,7 +1468,13 @@
                 onclick: function () { work.reportSelected = row.id; render(); }
               }, [
                 el('span.queue-item__title', null, bdi(row.reason.slice(0, 80))),
-                el('span.queue-item__sub', { text: t('rp.on.' + row.target_type) + ' · ' + String(row.created_at || '').slice(0, 10) })
+                /* The kind LEADS the line. An abuse report asks whether a rule was broken
+                   and may legitimately be answered no; a removal request is somebody
+                   asserting a right over material about themselves and starts §8's clock.
+                   A moderator has to tell them apart before reading the reason. */
+                el('span.queue-item__sub', { text: t('rp.kind.' + (row.kind || 'abuse'))
+                  + ' · ' + t('rp.on.' + row.target_type)
+                  + ' · ' + String(row.created_at || '').slice(0, 10) })
               ]);
             })
           : [panelState(p, 'rp.empty')]),
@@ -1694,7 +1700,7 @@
         return DB.select('moderation_actions', 'select=action,created_at&order=created_at.desc&limit=20');
       });
       loadPanel('reports', function () {
-        return DB.select('reports', 'select=id,target_type,target_id,reason,status,created_at&order=created_at.desc&limit=100');
+        return DB.select('reports', 'select=id,kind,target_type,target_id,reason,status,created_at&order=kind.desc,created_at.desc&limit=100');
       });
     },
     archive: loadArchive,
@@ -1716,7 +1722,7 @@
     },
     reports: function () {
       loadPanel('reports', function () {
-        return DB.select('reports', 'select=id,target_type,target_id,reason,status,created_at&order=created_at.desc&limit=100');
+        return DB.select('reports', 'select=id,kind,target_type,target_id,reason,status,created_at&order=kind.desc,created_at.desc&limit=100');
       });
     },
     copy: loadCopy

@@ -197,6 +197,14 @@ select set_eq(
     -- publishable_posts beside it.
     ('publishable_places() -> service_role'),
 
+    -- M5's precision floor (0052). The only non-trigger function it adds, and both grants
+    -- are load-bearing rather than habitual: posts_enforce_precision_floor is SECURITY
+    -- INVOKER and calls this as the member whose write fired it, so `authenticated` is
+    -- what stops the trigger failing inside an allowed UPDATE. `service_role` is for M5's
+    -- importer, which must ask the same question rather than answer it a second way.
+    ('justified_precision(p_place_id uuid, p_location geography) -> authenticated'),
+    ('justified_precision(p_place_id uuid, p_location geography) -> service_role'),
+
     -- Withdrawal (0051). `authenticated` may CALL it, exactly like request_takedown: the
     -- check is inside the function, so a member aiming at somebody else gets a named
     -- refusal and the audit row names them rather than the service key. `anon` gets

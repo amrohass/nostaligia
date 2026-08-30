@@ -100,6 +100,13 @@
     invalid_place: 'up.err.place',
     unknown_place: 'up.err.place',
     invalid_coordinates: 'up.err.coordinates',
+    /* M5's precision control (migration 0052). Unlike the three above, `precision_too_precise`
+       IS reachable from the form — not by choosing a bad value, but by choosing a sharp one
+       and then changing the location underneath it: pick a gazetteer place, select 'exact',
+       then switch to a dropped pin. The select re-floors itself when the place changes, so
+       the sheet closes that window, and this is what catches the moment it does not. */
+    precision_too_precise: 'up.err.precisionTooPrecise',
+    invalid_precision: 'up.err.precisionUnknown',
     duplicate_object_key: 'up.err.generic',
     quota_check_failed: 'up.err.generic',
     signing_failed: 'up.err.generic',
