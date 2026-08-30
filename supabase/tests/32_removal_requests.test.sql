@@ -32,10 +32,17 @@ insert into public.user_roles (user_id, role, granted_by)
 values ('00000000-0000-0000-0000-00000000e0c3', 'moderator',
         '00000000-0000-0000-0000-00000000e0c3');
 
--- Somebody else's post: the case the control exists for.
-insert into public.posts (id, kind, title_en, body_en, status, created_by)
+-- Somebody else's post, APPROVED: the case the control exists for, since an author can
+-- already withdraw their own (0018) and the person with the claim usually is not the author.
+--
+-- license and provenance are not decoration here: posts_approved_has_rights refuses an
+-- approved row without both, which is 0032's whole subject.
+insert into public.posts (id, kind, title_en, body_en, status, created_by,
+                          license, provenance, consent)
 values ('00000000-0000-0000-0000-00000000ef01', 'media', 'a photograph', 'of a street',
-        'approved', '00000000-0000-0000-0000-00000000e0c1');
+        'approved', '00000000-0000-0000-0000-00000000e0c1',
+        'CC-BY-SA-4.0', 'family album',
+        jsonb_build_object('granted', true, 'may_withdraw', true));
 
 create function pg_temp.audit_rows(p_action text) returns integer
 language sql stable security definer as $fn$
