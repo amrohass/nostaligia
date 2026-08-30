@@ -1,173 +1,130 @@
-Ramallah Memory Atlas — finish the probe, then deploy the worker.
+Ramallah Memory Atlas — M5 is half built. Two items wait on Amro.
 
 Read CLAUDE.md fully before touching anything; it governs this repo and overrides your
-defaults. Then read `docs/session-report-2026-08-24.md` (what happened and why),
-`worker/README.md` → Deploy and "What the heartbeat probe measured", and
-`worker/scripts/probe/README.md` (how to run the two experiments).
+defaults. Then read `docs/closeout-audit-2026-08-29.md` — including both addenda, which
+correct claims the audit's own tables make.
+
+**This file replaces the 24 Aug handoff, which was describing a system that no longer
+exists** (it said no worker was deployed, the write path was dead and the archive held 0
+posts; all three stopped being true on 28–30 Aug).
 
 ## Where this stands in one paragraph
 
-The staging deployment serves a **correct, live read path**: `nostaligia.pages.dev` resolves
-the archive from R2, every shard 200s, the CSP is enforced and green. The **write path is
-dead at one hop** — no worker is deployed anywhere, so `complete-upload` returns 503. The
-archive is empty (0 posts). Two probe samples are owed before `docs/probe-results.md` can be
-generated, and the generator is written and verified.
+M0–M4 are complete and audited against the deployed system. M5 items 1–3 shipped on
+30 Aug — the contributor precision control, the removal request, and the Dublin Core
+export — and CI run 61 is green on all six jobs. The contribution lifecycle has been run
+end to end **through a browser on the live origin**: real signup, real Turnstile, real
+confirmation email, a real 4 MB photograph, `ingest_state: ready`, and every §6 bucket
+invariant checked afterwards. What remains in M5 is the seed importer (needs Amro's data)
+and backups + one tested restore (§11 gate 3, outlined and awaiting three decisions).
 
-## Two things to do FIRST, before trusting anything below
+## Do these FIRST, before trusting anything below
 
-1. `supabase migration list` — the hosted DB was **26 migrations behind** on 24 Aug and
-   nothing else being green implied it. Two seconds, and it would have wasted an entire probe
-   run: `complete_ingest` did not exist remotely, so a job would have transcoded the full
-   ladder and then failed at the final RPC.
-2. Start Docker Desktop **and confirm it stays up**. It failed to start once on 24 Aug
-   (needed `wsl --shutdown` + restart), and it **died mid-sample later**, taking a
-   90-minute encode with it. If a long sweep is planned, check the daemon is healthy first.
+1. `supabase migration list` — two migrations landed on 30 Aug (0052, 0053). The hosted DB
+   was 26 migrations behind once before and nothing else being green implied it.
+2. **Check Docker actually starts.** It was wedged for the whole 30 Aug session — `docker
+   info` hung to a 124 timeout rather than erroring, and `wsl --shutdown` hung too. No
+   pgTAP ran locally all session; CI was the only executor. If it is still wedged, expect
+   to iterate through CI, and see "Reading CI failures" below.
 
-## Verified live on 24 Aug 2026 — re-verify, do not trust this list
+## What is true as of 30 Aug 2026 — re-verify, do not trust this list
 
-- **All four Edge Functions ACTIVE** — `request-upload`, `complete-upload`, `publish`,
-  `takedown`; `verify_jwt` matches `config.toml` on each; all four refuse unauthenticated.
-- **`publish` works end to end** — 200, builds the release, flips `manifest.json`. Verified
-  twice, second run recorded the previous release correctly.
-- **Read path live** — `manifest.json`, `redactions.json`, `content.json`, `index.json`,
-  `feed/page-1.json` all 200 from `https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev`
-  with `Access-Control-Allow-Origin: https://nostaligia.pages.dev`.
-- **Front end green** — CSP 14/14, view 46/46, budget **80.8 KiB** against §9's 150 KiB.
-- **R2 11/11**, including delete-then-read-back-404.
-- **`MEDIA_WORKER_JWT`** — 404 on a nonexistent RPC, 401 on a one-char corruption, so the
-  check discriminates. Expires 2027-08-24.
-- **Scaleway ready** — account validated, quotas cleared, `rma-media` registry AND container
-  namespaces exist in `nl-ams` (container namespace-id
-  `987959e9-d1cb-4ba6-b996-4e74502ac705`), docker logged in to `rg.nl-ams.scw.cloud`.
-- **Worker image builds clean** — 946 MB, ffmpeg 7.1.5 on trixie, deno 2.1.4.
+- **The upload path works from a browser.** It had never worked on the deployed site.
+  Three independent causes, each sufficient alone, all surfacing as the same Arabic
+  sentence (`up.err.offline`, "لا يوجد اتصال"): `apikey` missing from the Edge Functions'
+  `Access-Control-Allow-Headers`; `connect-src` omitting the R2 S3 endpoint so the page
+  blocked its own PUT; and the `quarantine` bucket having no CORS policy at all. All three
+  fixed and verified in Chromium against the live origin.
+- **Five Edge Functions ACTIVE** — `request-upload`, `complete-upload`, `publish`,
+  `takedown`, and `delete-account` (deployed 30 Aug; its migration had been applied since
+  29 Aug with nothing serving it).
+- **R2 CORS now exists on two buckets.** `quarantine`: PUT + `content-type`, both allowed
+  origins. `public`: the pre-existing GET rule merged with `HEAD`, `range` and a 3600s
+  max-age, applied as a strict superset so read traffic could not regress. Verified after:
+  ranged GET still 206, map still draws, `originals/` still 404 through the CDN.
+  **R2 takes ~10s to propagate a bucket CORS change** — a successful PutBucketCors followed
+  by a 403 preflight is propagation, not failure.
+- **Bucket sizes**, measured: `originals` 4 objects / 22.1 MB; `public` 59 objects /
+  176.4 MB of which **173.9 MB is the basemap**; `quarantine` 0 objects. The archive's own
+  published bytes are ~2.5 MB.
+- CI: 33 pgTAP files, 622 assertions. Front end: CSP 14, cors 6, auth 36, view 46, map 46,
+  budget 84.6 KiB against §9's 150 KiB.
 
-### Not working
+## M5 — what is left
 
-- **`complete-upload`** — `MEDIA_WORKER_URL` unset → 503 `worker_not_configured`. It
-  releases the ingest slot first, so it fails cleanly; it simply has nowhere to dispatch.
-- **The worker** — not deployed. Blocked on the decision below.
-- **Auto-publish on approval** — the trigger dispatches via vault entries `rma_publish_url`
-  and `rma_publish_secret`; **neither is set**, so approving content does not publish.
-  Manual invocation works (bearer = `PUBLISH_SECRET` from `supabase/functions/.dev.vars`).
-- **`takedown`'s CDN purge is a no-op** — `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_PURGE_TOKEN`,
-  `CDN_ORIGIN` all unset. It deletes R2 bytes and purges nothing. **§8 step 2 unsatisfied —
-  this is a launch gate.**
+**Seed importer** — not started, needs Amro's ~300 items. Nothing in the repo is seed data.
 
-## The decision to get from Amro at kickoff — do not guess
+**Backups + one tested restore (§11 gate 3)** — outlined in full at the end of the 30 Aug
+session, not built, waiting on three decisions from Amro:
+  1. **Where** the self-held copy lives — second R2 under a different account / local
+     encrypted disk / third-party cold storage / hybrid. Jurisdiction is a real input here,
+     not a footnote (`reconciled-plan.md` F29).
+  2. Whether the **cadence amendments** stand: weekly full DB + *incremental* originals
+     rather than weekly-full media, plus snapshots pinned forever at pre-launch and
+     immediately after the seed import — because a weekly cycle can lose the entire import.
+  3. Whether the **restore target** is local Docker or a scratch Supabase project.
 
-**How the worker runs in production.** The liveness probe settled that `min-scale=0` does
-NOT survive post-response work: the instance that answered 202 was gone by minute 45, and a
-different instance — cold-started seven seconds after the next request — served the report.
-That removed one option and chose nothing:
+Three findings from that outline that will bite whoever builds it:
+  - **`supabase db dump` excludes the `auth` schema by default** (also `vault`, `cron`,
+    `extensions`, `storage`). A default dump restores a `posts` table whose every
+    `created_by` points at a user that does not exist, and `user_roles` — where §4's
+    authorization actually lives — keyed to nobody. Three dumps are needed, not one.
+  - **`public` is 98.6% basemap.** The irreplaceable set is `originals/` plus Postgres.
+    `quarantine` must NOT be backed up: it holds uploads that have not passed magic-byte
+    validation and is purged at 30 days.
+  - **`supabase db dump` mints its own temporary login role**, so a dump from a logged-in
+    machine needs no database password. Headless in CI it needs the DB password or a CLI
+    access token — and that token can manage the whole project. That is the local-vs-CI
+    decision, and it is a security decision rather than a convenience one.
 
-- `min-scale=1` — works; bills continuously for a container idle almost all the time. §6
-  calls that the largest avoidable line on a grant-funded budget, and with the ~300 launch
-  items transcoded offline the real load is a handful of uploads a day.
-- **Serverless Jobs** — 24 h, 6 vCPU, 16 GB, but API-triggered → a Scaleway credential in
-  Supabase secrets.
+## Still gated on Amro — do not touch
 
-**Say this part out loud to Amro:** that second option is the *same trade* that moved this
-worker off Cloud Run. If a platform credential in Supabase secrets is acceptable now, then
-Cloud Run's `--no-cpu-throttling` with `min-scale=0` — which solves precisely this problem
-and was abandoned over precisely this objection — deserves reconsidering on the merits
-rather than being treated as settled.
+1. **`/item/*` route on the site origin.** M3's unmet exit criterion. Re-measured 29 Aug:
+   the site origin returns 200 with **zero** `og:` tags while the CDN copy has ten. Needs
+   the production host.
+2. **The service-role JWT for `scripts/m1-deployed.ts`.** M1's exit criterion is still
+   unproven — a 4K master surviving in `originals/` while only renditions are CDN-reachable
+   has been shown for the *image* path through a browser, not for video through the harness.
+3. **GoTrue IP-log retention.** `auth.audit_log_entries` records IPs; §7 says do not store
+   them. A policy decision, unmade.
 
-Whatever production becomes, **the measurement rig should be `min-scale=1` and deleted
-afterwards.** §6's scale-to-zero requirement governs the production deployment, not a
-temporary rig, and a few hours of an always-on instance is rounding error.
+## Open, not gated, and nobody has picked them up
 
-## Ordered plan
+- **The confirmation email's `redirect_to` is `http://localhost:3000`.** A real member
+  confirming from their mail client lands on a host that does not exist for them. Supabase
+  Auth Site URL setting, not code. Found by actually signing up.
+- **Auto-publish on approval is still unwired** — vault entries `rma_publish_url` and
+  `rma_publish_secret` are unset, so approving content does not publish. Manual invocation
+  works. Carried since 25 Aug.
+- **`CLOUDFLARE_ZONE_ID` / `CLOUDFLARE_PURGE_TOKEN` unset**, so §8's CDN purge is a no-op.
+  Harmless while the origin is `r2.dev` (no edge caching, delete visible at t+0s); becomes
+  a real hole the day a custom domain with caching goes in front of R2.
+- **Test data left in place deliberately**, as the evidence for the E2E run: post
+  `1ad4e709-fd89-46b4-a88d-f334ac78da7d` (status `withdrawn`, set by its own author) and
+  member `a12af40e-adc6-4acc-ae82-e36fa362e61f`. It could not be removed through §8's
+  takedown path — that is moderator-only and correctly refused a member 403. Its derivative
+  bytes are still in `public/`; only takedown deletes those.
 
-1. **Finish the probe. Two samples are owed.**
-   - `حوالي ال20 دقيقة.mp4` (786 MB, 18m15s, 1920x1080) — **never completed**; Docker died
-     ~65 minutes in and the output was lost. Expect roughly 1.5 h; it makes only 3 rungs
-     (1440p is skipped, source height is 1080).
-   - `4k.mp4` (2730x1440, 52s) — the banked figure is **CONTAMINATED**: concurrent Docker
-     builds stole CPU. Re-run it. Contamination is invisible in the output; it just looks
-     like a slow sample.
+## Reading CI failures without log access
 
-   Append to the existing file rather than starting over — 21 good samples are already in
-   `docs/probe-samples.ndjson`. Then:
-   ```bash
-   deno run --allow-read --allow-write worker/scripts/probe/report.ts \
-     --in docs/probe-samples.ndjson --out docs/probe-results.md \
-     --host "Intel i5-4210U @ 1.70GHz (2 cores / 4 threads, 15 W, 2014)" \
-     --ffmpeg "ffmpeg 7.1.5 on trixie" --commit "$(git rev-parse --short HEAD)"
-   ```
-   The generator is committed and verified against the 21 banked samples. **Delete the
-   contaminated 2730x1440 line before regenerating**, or it will appear twice.
-   **Run nothing else CPU-heavy during a sweep.**
+The Actions **logs** endpoint returns 403 unauthenticated even on this public repo, and
+there is no `gh` CLI here. The pgTAP step deliberately emits its diagnosis as GitHub
+**annotations**, and those ARE readable:
 
-2. **Deploy the worker as a disposable rig.** Commands are current in `worker/README.md` →
-   Deploy; three corrections already landed there (namespace minimum name length,
-   `memory-limit-bytes` needs `G`/`GB`, and `R2_BUCKET_PREFIX` must be in the container env
-   or every signed request gets `NoSuchBucket`). Then set `MEDIA_WORKER_URL` on the function
-   side. **Confirm the endpoint answers 401 to an unsigned `POST /jobs` — that is the
-   correct healthy response, not a failure.**
+    GET /repos/amrohass/nostaligia/actions/runs?per_page=5        → find the run id
+    GET /repos/amrohass/nostaligia/actions/runs/{id}/jobs         → find the failing job id
+    GET /repos/amrohass/nostaligia/check-runs/{job_id}/annotations
 
-3. **Drive one real job end to end.** `complete-upload` needs a signed-in user and a real
-   Turnstile token, so the cheaper path for a measurement is to sign a job body with
-   `MEDIA_WORKER_SECRET` and POST it to the worker exactly as `complete-upload` does — but
-   **the row must exist in `awaiting_bytes` first**, or `complete_ingest` fails at the very
-   end, after the transcode.
+That is how every failure on 30 Aug was diagnosed. **Unauthenticated GitHub API is 60
+requests/hour** — polling a run every 30s burns it in minutes and then you are blind for
+the rest of the hour. Poll at 60s or longer.
 
-4. **Append the deployed numbers** to `docs/probe-results.md` as a second section. The file
-   already states what it is missing — the host CPU factor and real-R2 transfer. Do not
-   rewrite the container-local numbers; they are the baseline the factor is measured against.
+## Credentials — a standing note
 
-5. **Then, and only then, the constants.** `JOB_DEADLINE_MS`, `c_ingest_lease` and
-   `expect_by` are Amro's to set once real numbers exist.
-
-## The trap that cost this session — recognise it, do not re-derive it
-
-**Supabase now injects the NEW key formats into the reserved names.** `SUPABASE_ANON_KEY`
-arrives as `sb_publishable_…` (46 chars) and `SUPABASE_SERVICE_ROLE_KEY` as `sb_secret_…`
-(41), where a legacy anon JWT is 208. PostgREST parses a JWT out of `Authorization: Bearer`,
-so it answered `401 PGRST301 "Expected 3 parts in JWT; got 1"`. Every `Db` method turns a
-non-2xx into a throw and the handler has no try/catch, so it surfaced as a **bare 500 with
-no body** — and only remotely, because a laptop still has the legacy JWT there.
-**Works locally, 500s remotely, no log** is the signature. Fixed in `e422d8b`
-(`serviceRoleJwt()` prefers an unreserved `SERVICE_ROLE_JWT`); `supabase secrets set`
-refuses anything starting with `SUPABASE_`, which is why a code change was needed.
-
-**How to diagnose a bare 500 fast** — this order took minutes after an hour of guessing:
-call each RPC directly with the service key (all 200 → database is fine); claim and release
-the lease (granted → it died before that point); then deploy a throwaway function reporting
-env var **names and lengths only, never values**. That last step exposed the 41- and
-46-character keys instantly. Delete it afterwards. Note `supabase functions logs` does not
-exist in CLI 2.115, and the access token is not at `~/.supabase/access-token` on Windows —
-its absence is a false negative; test with `supabase projects list`.
-
-## Deviations to undo before launch
-
-- **The Edge Functions and the worker share ONE R2 token.** The hosted functions' R2 pair was
-  never valid; they were pointed at the worker's verified token to unblock. This costs the
-  independent revocation `worker/README.md` argues for and over-grants `request-upload`,
-  which needs quarantine write and now carries `originals` and `public` too. **Mint a scoped
-  functions token and re-split before the pen test.**
-- **`r2.dev` is the CDN origin** — rate-limited, not for production. Replace with a custom
-  domain. `domains.site` is still `PLACEHOLDER_DOMAIN`, which is harmless: nothing in the
-  front end reads `origins.site`.
-
-## Still broken on purpose — do not "fix" it
-
-**The fonts.** `fonts.googleapis.com` and `fonts.gstatic.com` are blocked by the CSP and
-remain in `config/site.json`'s `known_violations`, `removed_by: M6`. Do **not** add them to
-the CSP to make the page look right. §9 wants a self-hosted subset, and the file records the
-sharper reason: Google Fonts leaks reader IPs to a third party, which for this archive is a
-§7 exposure rather than a styling preference. The ratchet exists to stop that shortcut. The
-page falls back to system fonts and is legible.
-
-## Hard constraints
-
-- Do NOT touch `JOB_DEADLINE_MS`, `c_ingest_lease`, `expect_by`, the `ESTIMATE, NOT MEASURED`
-  tag, or CLAUDE.md. Those are Amro's calls once the numbers exist.
-- Do not put a capability-bearing secret anywhere client-visible, and never print one to
-  stdout — `scw config info` echoes the Scaleway secret key; pipe it, never echo it.
-- `.dev.vars` files are git-ignored at every depth and blocked from force-add. Verify before
-  writing, never commit. `PUBLISH_SECRET` was generated 24 Aug and lives in
-  `supabase/functions/.dev.vars`.
-- `fottage/` is git-ignored — 1.2 GB of real footage, never commit it. Two gaps in it to
-  carry as caveats: **no true 3840x2160 source**, and **no audio file at all**, so the
-  Opus-normalize and waveform path is entirely unmeasured.
-- Smallest change that satisfies the task. Do not build M5 features while finishing this.
+Amro pasted a Cloudflare API token and an **admin-scoped** R2 key pair into the 30 Aug chat
+and decided against rotating them. They are in no repo file, no scratch file, no shell
+history and no `.dev.vars`; they are in that session's transcript at
+`~/.claude/projects/…/2fdc6961-….jsonl` in plaintext, and that file is not synced, not
+backed up and not indexed by content. Whether shadow copies hold it could not be determined
+without elevation. The R2 pair is admin-scoped — it can read and write bucket configuration,
+unlike the object-scoped pair in `.dev.vars`.
