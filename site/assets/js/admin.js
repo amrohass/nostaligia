@@ -1629,14 +1629,34 @@
     function write(publish) {
       var value = pair.read();
       note.hidden = true;
-      /* One upsert per locale. `resolution=merge-duplicates` handles a key that exists in
-         one language and not the other — which is the state an editor creates the moment
-         they add a block, and which two separate INSERT/UPDATE paths would get wrong in
-         opposite directions. */
+      /* save_content_block(), not an upsert on the table — and the reason is the same one
+         that put the READ behind content_blocks_draft() twelve lines below.
+
+         PostgREST sends `resolution=merge-duplicates` as INSERT … ON CONFLICT DO UPDATE SET
+         draft = excluded.draft, and EXCLUDED is the target's rowtype, so that statement
+         needs SELECT on `draft`. 0015 withholds exactly that column from `authenticated`,
+         because 0020's select policy is `using (true)` and the grant is the only thing
+         keeping unpublished prose away from every signed-in member. So the upsert was
+         refused 42501 before RLS ever ran, and every Save and every Publish on this screen
+         failed from M3 until 0055 — a privilege error, so nothing recorded that an admin
+         had tried. One call per locale still, for the reason the old comment gave: a key
+         that exists in Arabic and not yet in English is the ordinary state of adding a
+         block. */
       return Promise.all(['ar', 'en'].map(function (locale) {
-        var body = { key: key, locale: locale, draft: value[locale] };
-        if (publish) body.published = value[locale];
-        return DB.insert('content_blocks', body, { merge: true });
+        return DB.rpc('save_content_block', {
+          p_key: key, p_locale: locale, p_draft: value[locale], p_publish: Boolean(publish)
+        }).then(function (out) {
+          if (!out || out.saved !== true) {
+            /* The database's own reason, named — as on the places screen. "denied" is the
+               one a moderator sees, and it is a different thing from being signed out.
+               An Error carrying `.key`, because that is the shape db.js throws and the
+               catch below already reads. */
+            var refused = new Error('cp.err.' + ((out && out.reason) || 'generic'));
+            refused.key = refused.message;
+            throw refused;
+          }
+          return out;
+        });
       })).then(function () {
         delete work.copyDirty[key];
         panel('copy').loaded = false;

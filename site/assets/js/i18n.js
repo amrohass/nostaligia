@@ -486,14 +486,17 @@
     // ── Comments (M3) ───────────────────────────────────────
     'comments.someone':    { ar: 'عضو', en: 'A member' },
     'comments.you':        { ar: 'أنت', en: 'You' },
-    // §1: everything user-submitted is reviewed before it is public. A member's own pending
-    // comment is shown to them, flagged — a comment that vanished on submit reads as lost.
-    'comments.awaiting':   { ar: 'بانتظار المراجعة', en: 'awaiting review' },
+    // A comment is published the moment it is written — §1's review exception for comments,
+    // migration 0054. It still takes one publish cycle to reach the item shard everyone else
+    // reads from, so the author sees their own straight away, flagged for that gap only. The
+    // flag says "not there yet for others", NOT "waiting for a person", which is what the
+    // string it replaced said.
+    'comments.justPosted': { ar: 'يظهر للجميع بعد لحظات', en: 'visible to everyone shortly' },
     'comments.placeholder':{ ar: 'اكتب ما تذكره…', en: 'Write what you remember…' },
     'comments.send':       { ar: 'إرسال', en: 'Send' },
-    'comments.sent':       { ar: 'وصل تعليقك. سيظهر بعد المراجعة.',
-                             en: 'Your comment arrived. It appears after review.' },
-    'comments.reviewNote': { ar: 'كل تعليق يُراجع قبل نشره', en: 'Every comment is reviewed before it appears' },
+    'comments.sent':       { ar: 'نُشر تعليقك.', en: 'Your comment is posted.' },
+    'comments.reviewNote': { ar: 'يظهر تعليقك مباشرة — وللمشرفين إزالته، ولك الإبلاغ عن غيره',
+                             en: 'Your comment appears right away — moderators can remove one, and you can report one' },
     'comments.err.empty':  { ar: 'اكتب شيئًا قبل الإرسال.', en: 'Write something first.' },
     'comments.err.tooLong':{ ar: 'التعليق أطول من ٤٠٠٠ حرف.', en: 'That is longer than 4000 characters.' },
 
@@ -743,7 +746,17 @@
     'cp.draftPending': { ar: 'مسوّدة غير منشورة', en: 'unpublished draft' },
     'cp.unsaved':    { ar: 'تعديلات غير محفوظة', en: 'unsaved changes' },
     'cp.empty':      { ar: 'لا نصوص — أو ليست لديك صلاحية تحريرها (§٤).',
-                       en: 'No copy — or you may not edit it (§4).' }
+                       en: 'No copy — or you may not edit it (§4).' },
+
+    /* save_content_block()'s named refusals. `denied` is the one a moderator meets, and it
+       says which of the two things happened: not signed out, not allowed. */
+    'cp.err.denied':         { ar: 'تحرير نصوص الموقع للمشرف العام وحده (§٤).',
+                               en: 'Editing site copy is admin-only (§4).' },
+    'cp.err.invalid_key':    { ar: 'مفتاح النصّ غير صالح.', en: 'That copy key is not valid.' },
+    'cp.err.invalid_locale': { ar: 'لغة غير معروفة.', en: 'Unknown locale.' },
+    'cp.err.empty_publish':  { ar: 'لا يمكن نشر نصّ فارغ — احفظه مسوّدة بدل ذلك.',
+                               en: 'An empty block cannot be published — save it as a draft instead.' },
+    'cp.err.generic':        { ar: 'تعذّر حفظ النصّ.', en: 'The copy could not be saved.' }
   };
 
   var lang = read();

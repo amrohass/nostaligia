@@ -219,6 +219,15 @@ select set_eq(
     -- erasure from the only place anyone would look for it.
     ('mark_account_auth_scrubbed(p_user_id uuid) -> service_role'),
 
+    -- Site copy's write path (0055). `authenticated` is the role PostgREST arrives as and
+    -- the admin check is INSIDE the function, so this grant is not the authorization -- it
+    -- is what lets a moderator receive a named refusal instead of a 403 they cannot tell
+    -- apart from being signed out. SECURITY DEFINER is unavoidable here: the statement it
+    -- runs needs SELECT on `draft`, which 0015 withholds from every browser role on purpose,
+    -- so the function has to hold the privilege the caller must not.
+    ('save_content_block(p_key text, p_locale text, p_draft text, p_publish boolean) -> authenticated'),
+    ('save_content_block(p_key text, p_locale text, p_draft text, p_publish boolean) -> service_role'),
+
 
     -- ── Still on the PUBLIC default, each for a reason ────────
     --
