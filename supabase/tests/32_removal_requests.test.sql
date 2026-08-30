@@ -51,7 +51,9 @@ values ('00000000-0000-0000-0000-00000000ef01', 'media', 'a photograph', 'of a s
         'approved', '00000000-0000-0000-0000-00000000e0c1',
         'CC-BY-SA-4.0', 'family album',
         jsonb_build_object('granted', true, 'may_withdraw', true),
-        '00000000-0000-0000-0000-00000000e0c3', now(), 'fixture-hash');
+        '00000000-0000-0000-0000-00000000e0c3', now(),
+        -- posts_content_hash_is_sha256_hex: 64 lowercase hex, not a label.
+        '15df9d67f8e90a98014647411681314ce17bf434981db443bf36cae14532a677');
 
 create function pg_temp.audit_rows(p_action text) returns integer
 language sql stable security definer as $fn$
