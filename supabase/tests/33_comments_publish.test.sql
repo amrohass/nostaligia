@@ -51,9 +51,12 @@ values ('00000000-0000-0000-0000-00000000cf01', 'media', 'an approved photograph
         '00000000-0000-0000-0000-00000000c0a3', now(),
         '15df9d67f8e90a98014647411681314ce17bf434981db443bf36cae14532a677');
 
-insert into public.posts (id, kind, title_en, status, created_by)
+-- body_en is not decoration: posts_has_a_description requires one side of it, exactly as
+-- posts_has_a_title requires one side of the title. §9's "required description field on
+-- upload (frame it as archival metadata)" written as a CHECK.
+insert into public.posts (id, kind, title_en, body_en, status, created_by)
 values ('00000000-0000-0000-0000-00000000cf02', 'media', 'still in the queue',
-        'pending', '00000000-0000-0000-0000-00000000c0a1');
+        'not yet reviewed', 'pending', '00000000-0000-0000-0000-00000000c0a1');
 
 -- SECURITY DEFINER readers: `authenticated` holds a column subset on comments (0015), so a
 -- test that read status through the member's own role would fail on the grant rather than on
