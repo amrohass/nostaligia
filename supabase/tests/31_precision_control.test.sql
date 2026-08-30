@@ -70,6 +70,19 @@ language sql stable security definer as $fn$
    where q.user_id = '00000000-0000-0000-0000-00000000d0c1';
 $fn$;
 
+/* The post's id, looked up through a definer function.
+
+   0015 grants `authenticated` a COLUMN SUBSET on posts and `ingest_object_key` is not in
+   it, so `update ... where ingest_object_key = '…'` is refused `42501: permission denied
+   for table posts` before any policy or trigger is consulted — which is exactly how the
+   first version of assertions 10-12 failed, and it would have been easy to misread as the
+   trigger doing its job. `id` IS granted, so the UPDATEs below key on that. */
+create function pg_temp.pid(p_key text) returns uuid
+language sql stable security definer as $fn$
+  select p.id from public.posts p
+   where p.ingest_object_key = '00000000-0000-0000-0000-00000000d0c1/' || p_key;
+$fn$;
+
 set local role authenticated;
 set local request.jwt.claims to
   '{"sub":"00000000-0000-0000-0000-00000000d0c1","role":"authenticated"}';
@@ -77,43 +90,43 @@ set local request.jwt.claims to
 -- ═══ 1–3 · A gazetteer place justifies 'exact' ═══════════════
 -- Its point is already public in places.json, so the contributor may keep it — or bury it.
 
+do $$ begin perform pg_temp.claim('a', '{"place_id":"00000000-0000-0000-0000-00000000be01",
+                                            "location_precision":"exact"}'); end $$;
 select is(
   (pg_temp.claimed('a')).location_precision::text,
   'exact',
-  'asking for the precision the source justifies is accepted'
-) from (select pg_temp.claim('a', '{"place_id":"00000000-0000-0000-0000-00000000be01",
-                                    "location_precision":"exact"}')) _;
+  'asking for the precision the source justifies is accepted');
 
+do $$ begin perform pg_temp.claim('b', '{"place_id":"00000000-0000-0000-0000-00000000be01",
+                                            "location_precision":"area"}'); end $$;
 select is(
   (pg_temp.claimed('b')).location_precision::text,
   'area',
-  'a contributor may publish a gazetteer place VAGUELY'
-) from (select pg_temp.claim('b', '{"place_id":"00000000-0000-0000-0000-00000000be01",
-                                    "location_precision":"area"}')) _;
+  'a contributor may publish a gazetteer place VAGUELY');
 
 -- 'hidden' is the strongest form of the control and the one §7 cares about most: the item
 -- is still in the archive, and it is nowhere on the map.
+do $$ begin perform pg_temp.claim('c', '{"place_id":"00000000-0000-0000-0000-00000000be01",
+                                            "location_precision":"hidden"}'); end $$;
 select is(
   (pg_temp.claimed('c')).location_precision::text
     || ' ' || coalesce((pg_temp.claimed('c')).location_public::text, 'null'),
   'hidden null',
-  '...or ask for it to carry no coordinate at all, and then none is published'
-) from (select pg_temp.claim('c', '{"place_id":"00000000-0000-0000-0000-00000000be01",
-                                    "location_precision":"hidden"}')) _;
+  '...or ask for it to carry no coordinate at all, and then none is published');
 
 -- ═══ 4–8 · A dropped pin justifies only 'street' ═════════════
 
+do $$ begin perform pg_temp.claim('d', '{"lat":"31.9","lon":"35.2","location_precision":"street"}'); end $$;
 select is(
   (pg_temp.claimed('d')).location_precision::text,
   'street',
-  'a pin at the precision its source justifies is accepted'
-) from (select pg_temp.claim('d', '{"lat":"31.9","lon":"35.2","location_precision":"street"}')) _;
+  'a pin at the precision its source justifies is accepted');
 
+do $$ begin perform pg_temp.claim('e', '{"lat":"31.9","lon":"35.2","location_precision":"area"}'); end $$;
 select is(
   (pg_temp.claimed('e')).location_precision::text,
   'area',
-  'a pin may be published vaguer still'
-) from (select pg_temp.claim('e', '{"lat":"31.9","lon":"35.2","location_precision":"area"}')) _;
+  'a pin may be published vaguer still');
 
 -- THE assertion. A pin is a coordinate nobody curated and most plausibly a home (§7).
 -- Relabelling it 'exact' would make "fuzzing is default-on" an opt-out.
@@ -155,12 +168,12 @@ select is(
 -- that never admitted this member.
 select lives_ok(
   $$ update public.posts set location_precision = 'area'
-      where ingest_object_key = '00000000-0000-0000-0000-00000000d0c1/d' $$,
+      where id = pg_temp.pid('d') $$,
   'CONTROL: the member really can write location_precision directly — so 11 can only fail on the trigger');
 
 select throws_ok(
   $$ update public.posts set location_precision = 'exact'
-      where ingest_object_key = '00000000-0000-0000-0000-00000000d0c1/d' $$,
+      where id = pg_temp.pid('d') $$,
   '23514',
   null,
   'the member cannot sharpen it past what the pin justifies, even bypassing the RPC');
@@ -173,7 +186,7 @@ set local request.jwt.claims to
 
 select lives_ok(
   $$ update public.posts set location_precision = 'exact'
-      where ingest_object_key = '00000000-0000-0000-0000-00000000d0c1/d' $$,
+      where id = pg_temp.pid('d') $$,
   'a moderator is exempt — §7 leaves the correction to them');
 
 reset role;
