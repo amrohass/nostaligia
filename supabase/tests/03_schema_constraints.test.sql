@@ -174,6 +174,12 @@ select throws_ok(
   '23514', null, 'SVG is refused at the column (§6)');
 
 -- ── releases: exactly one active ─────────────────────────────
+-- The fixture below has to be the ONLY active release, and on a database that has ever
+-- published, it is not — the insert hits releases_only_one_active and takes the whole file
+-- down before this section's first assertion. That is why this file could not be run
+-- against the deployed database. On a fresh one this updates nothing, and either way the
+-- transaction rolls back.
+update public.releases set active = false;
 insert into public.releases (path, active) values ('/v/2026-08-11T09:00:00Z/', true);
 select throws_ok(
   $q$ insert into public.releases (path, active) values ('/v/2026-08-11T09:05:00Z/', true) $q$,

@@ -142,9 +142,14 @@ select ok(
 
 -- The two axes stay orthogonal: ingest_state must not be doing status's job. If a ready
 -- ingest implied a pending decision, the approved row above would be back in the queue.
+-- Scoped to this file's own fixtures. Unscoped it counted every ready+approved row in the
+-- database, which is 1 on a fresh one and 5 on the deployed one — so the assertion was
+-- really "the archive holds exactly one approved item", which is not what it is about and
+-- is false the moment anything is published.
 select is(
   (select count(p.id)::integer from public.posts p
-    where p.ingest_state = 'ready' and p.status = 'approved'), 1,
+    where p.ingest_state = 'ready' and p.status = 'approved'
+      and p.id::text like '00000000-0000-0000-0000-%'), 1,
   'ready and approved coexist — ingest_state is not a moderation state (0025)');
 
 -- ═══ 7–9 · Approving, and what it requires first ═════════════

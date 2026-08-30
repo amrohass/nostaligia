@@ -1,4 +1,4 @@
--- The authorization matrix: 4 roles × 16 tables × 4 operations = 256 cells.
+-- The authorization matrix: 4 roles × 18 tables × 4 operations = 288 cells.
 --
 -- Every cell is attempted for real and compared against an expectation derived from
 -- the policy files, not from a previous run. Outcomes are three-valued, because
@@ -13,13 +13,13 @@
 -- recorded as a pass by any suite asserting only "anon cannot read". It was a broken
 -- policy that no browser role could evaluate.
 --
--- One set_eq rather than 256 assertions: on failure pgTAP prints precisely which
+-- One set_eq rather than 288 assertions: on failure pgTAP prints precisely which
 -- cells differ, which is the diff you want, and a missing cell is as loud as a wrong one.
 
 begin;
 create extension if not exists pgtap;
 
-select plan(3);
+select plan(4);
 
 -- ── Fixtures ─────────────────────────────────────────────────
 insert into auth.users (id,email) values
@@ -60,6 +60,13 @@ delete from public.content_blocks;
 insert into public.content_blocks (key,locale,draft,published) values ('hero.line','ar','د','ن');
 insert into public.reports (id,target_type,target_id,reason,reported_by,status) values
  ('00000000-0000-0000-0000-0000000000f1','post','00000000-0000-0000-0000-0000000000b1','سبب','00000000-0000-0000-0000-0000000000a1','open');
+-- Same reasoning as content_blocks above, and the omission is what stopped THIS file — the
+-- §11 gate-1 denial matrix — from running against the deployed database at all:
+-- releases_only_one_active is a non-deferrable partial unique index, so the fixture below
+-- collides with the real active release the moment a database has published anything, and
+-- the file aborts on line 1 of its fixtures with 23505 rather than asserting a single
+-- denial. On a fresh database this updates nothing. Cleared inside the transaction.
+update public.releases set active = false;
 insert into public.releases (path,active) values ('/v/2026-08-11T09:00:00Z/',true);
 insert into public.upload_quota (user_id,day,count,bytes) values ('00000000-0000-0000-0000-0000000000a1',current_date,1,10);
 
@@ -285,12 +292,27 @@ select is(
 -- what makes a leaked anon key uninteresting.
 select is(
   (select count(*) from actual where role='anon' and outcome <> 'deny'), 0::bigint,
-  'all 64 anon cells are deny — the anon key reaches nothing at all');
+  'all 72 anon cells are deny — the anon key reaches nothing at all');
 
 select set_eq(
   'select role||''|''||tbl||''|''||op||''|''||outcome from actual',
   'select role||''|''||tbl||''|''||op||''|''||outcome from expected',
-  '256 cells: every allow, empty and deny matches the policy files');
+  '288 cells: every allow, empty and deny matches the policy files');
+
+-- CONTROL, and the reason this file needed a fourth assertion. set_eq compares two SETS,
+-- and two EMPTY sets are equal: if `stmts` were ever emptied — a bad merge, a deleted
+-- block, an edit that moved the INSERT below the probe — every assertion above would pass
+-- over nothing and this file would report the database secure without probing a single
+-- policy. The first two assertions do not close it either; both are `count(...) = 0`, and
+-- zero rows satisfy them trivially.
+--
+-- The number is written out rather than derived from `stmts`, which is the opposite of the
+-- rule CI follows for its own counts, and deliberately: a count derived from the input
+-- cannot detect the input vanishing, which is the entire failure being guarded against.
+-- Coverage shrinking should cost one deliberate edit here.
+select is(
+  (select count(*) from actual), 288::bigint,
+  '288 cells were actually probed — 72 statements across four roles, not an empty matrix');
 
 select * from finish();
 rollback;

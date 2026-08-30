@@ -138,8 +138,14 @@ reset role;
 
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000a2","role":"authenticated"}';
+-- The two privileged cases are scoped to this file's fixtures; the two member cases above
+-- deliberately are NOT. That asymmetry is the point: a member seeing one row too many is
+-- the defect this file exists to catch, so their sets stay exact, whereas a moderator sees
+-- the whole archive by design and an unscoped set_eq here asserts nothing about
+-- authorization — only that the deployed database has exactly four posts in it.
 select set_eq(
-  $q$ select id::text from public.posts_full() $q$,
+  $q$ select id::text from public.posts_full()
+       where id::text like '00000000-0000-0000-0000-%' $q$,
   array['00000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-0000000000b2',
         '00000000-0000-0000-0000-0000000000b3','00000000-0000-0000-0000-0000000000b4'],
   'posts_full: a moderator gets all four');
@@ -148,7 +154,8 @@ reset role;
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000a3","role":"authenticated"}';
 select set_eq(
-  $q$ select id::text from public.posts_full() $q$,
+  $q$ select id::text from public.posts_full()
+       where id::text like '00000000-0000-0000-0000-%' $q$,
   array['00000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-0000000000b2',
         '00000000-0000-0000-0000-0000000000b3','00000000-0000-0000-0000-0000000000b4'],
   'posts_full: an admin gets all four');

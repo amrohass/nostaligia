@@ -68,9 +68,15 @@ values ('00000000-0000-0000-0000-0000000000d1', 'thumb',
        ('00000000-0000-0000-0000-0000000000d1', 'master',
         '00000000-0000-0000-0000-00000000fa01/original', 'originals', 'image/jpeg');
 
+-- Scoped to this file's own fixtures. publishable_posts() returns the WHOLE archive, so
+-- unscoped the count assertion below read "the deployed archive holds exactly two
+-- publishable posts" rather than "of these six fixtures, exactly these two qualify" — true
+-- on an empty database and false on any real one. Every assertion in this file is about
+-- which of ITS rows the predicate admits, so the filter belongs here, once.
 create function pg_temp.ids() returns setof text
 language sql stable as $fn$
-  select item ->> 'id' from jsonb_array_elements(public.publishable_posts()) item;
+  select item ->> 'id' from jsonb_array_elements(public.publishable_posts()) item
+   where item ->> 'id' like '00000000-0000-0000-0000-%';
 $fn$;
 
 create function pg_temp.one(p_id text) returns jsonb

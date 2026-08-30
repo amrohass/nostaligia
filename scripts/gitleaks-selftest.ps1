@@ -30,7 +30,15 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $gl   = Join-Path $root '.tools/gitleaks.exe'
-if (-not (Test-Path $gl)) { $gl = (Get-Command gitleaks -ErrorAction SilentlyContinue)?.Source }
+# Null-conditional (?.) is PowerShell 7 only, and Windows PowerShell 5.1 is what a
+# Windows maintainer has on PATH as `powershell.exe` -- there, this line was a PARSE
+# error, so the whole script died before its first assertion. CI (pwsh on ubuntu) never
+# saw it. Written the long way so the self-test runs on both.
+if (-not (Test-Path $gl)) {
+  $cmd = Get-Command gitleaks -ErrorAction SilentlyContinue
+  $gl  = $null
+  if ($cmd) { $gl = $cmd.Source }
+}
 if (-not $gl) { throw 'gitleaks not found. Run: pwsh -File scripts/install-gitleaks.ps1' }
 
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ('gitleaks_selftest_' + [guid]::NewGuid().ToString('N').Substring(0,8))
@@ -88,13 +96,33 @@ Set-Content -NoNewline -Path (Join-Path $work 'client_config_ok.js') -Value $cli
 Set-Content -NoNewline -Path (Join-Path $work 'client_config_poisoned.js') -Value `
   ($clientCfg -replace "SUPABASE_ANON_KEY = '[^']+'", "SUPABASE_ANON_KEY = '$(MakeJwt 'service_role' '')'")
 
+# Windows PowerShell 5.1 turns ANY stderr line from a native exe into a NativeCommandError
+# ErrorRecord, and with $ErrorActionPreference = Stop that TERMINATES the script -- even
+# though gitleaks exited 0. gitleaks writes its INF progress lines to stderr, so every
+# invocation below tripped it and the script died before assertion 1. pwsh on the CI image
+# does not do this, which is why CI was green while the script could not run on a Windows
+# maintainer machine at all. Every native call goes through here.
+function RunGl([string[]]$glArgs) {
+  $ErrorActionPreference = 'Continue'   # function-scoped; reverts on return
+  & $gl @glArgs 2>$null | Out-String
+}
+
 # Run gitleaks and return a set of "file|ruleid" strings.
-function Scan([string]$cfg) {
+function Scan([string]$cfg, [string]$target) {
+  if ([string]::IsNullOrWhiteSpace($target)) { $target = $work }
   # `-r -` writes the report to stdout. `-r /dev/stdout` silently produces an EMPTY
   # report on Windows, which reads exactly like a clean scan. Do not "simplify" this.
-  $json = & $gl dir $work -c $cfg --no-banner --redact -f json -r - --exit-code 0 2>$null | Out-String
+  $json = RunGl @('dir', $target, '-c', $cfg, '--no-banner', '--redact', '-f', 'json', '-r', '-', '--exit-code', '0')
   if ([string]::IsNullOrWhiteSpace($json.Trim())) { return @() }
-  return @($json | ConvertFrom-Json | ForEach-Object { "$([IO.Path]::GetFileName($_.File))|$($_.RuleID)" })
+  # PS 5.1 hands the whole JSON array down the pipeline as ONE object where PS 7
+  # enumerates it, so a bare `| ForEach-Object` sees a single item and string
+  # interpolation flattens every finding into one space-joined line -- which reads as
+  # ONE finding named after the first file, and turns every "is caught" assertion red
+  # while every "is not a finding" assertion stays green. Explicit @() forces the
+  # enumeration; the Where-Object drops the lone $null that 5.1 yields for an empty
+  # report where 7 yields an empty array.
+  $parsed = @(ConvertFrom-Json $json) | Where-Object { $null -ne $_ }
+  return @($parsed | ForEach-Object { "$([IO.Path]::GetFileName($_.File))|$($_.RuleID)" })
 }
 
 $cfg     = Join-Path $root '.gitleaks.toml'
@@ -122,11 +150,10 @@ function Assert([bool]$cond, [string]$msg) {
 # Assertion 16 scans this repo's own scripts/ and .githooks/ — the files that must
 # discuss secrets in order to test for them. Kept as a real scan rather than a promise
 # in a comment, because "the test file is clean" is a claim with a short half-life.
-$selfScan = @(& $gl dir (Join-Path $root 'scripts') -c $cfg --no-banner --redact -f json -r - --exit-code 0 2>$null | Out-String)
-$selfScan += @(& $gl dir (Join-Path $root '.githooks') -c $cfg --no-banner --redact -f json -r - --exit-code 0 2>$null | Out-String)
-$selfFindings = @($selfScan | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Trim()) } |
-                  ForEach-Object { $_ | ConvertFrom-Json } |
-                  ForEach-Object { "$([IO.Path]::GetFileName($_.File))|$($_.RuleID)" })
+# Routed through Scan so there is exactly ONE place that parses a gitleaks report --
+# the second copy is what quietly disagreed with the first about an empty result.
+$selfFindings = @(Scan $cfg (Join-Path $root 'scripts')) + @(Scan $cfg (Join-Path $root '.githooks'))
+$selfFindings = @($selfFindings)
 
 Write-Host "1..16"
 foreach ($a in 0,1,2) {

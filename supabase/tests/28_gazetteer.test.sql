@@ -32,6 +32,18 @@ insert into public.user_roles (user_id, role, granted_by)
 values ('00000000-0000-0000-0000-00000000ba01', 'moderator',
         '00000000-0000-0000-0000-00000000ba01');
 
+-- Cleared inside the transaction, the same way 05_matrix clears content_blocks and for a
+-- sharper reason. The gazetteer was seeded on 30 Aug 2026 with real Ramallah entries, and
+-- two of them carry the same names as the fixtures below — so on the deployed database
+-- every search assertion here read `المنارة,المنارة` and eight of eighteen failed.
+--
+-- Post-filtering the results by fixture id would NOT have fixed it: search_places applies
+-- its LIMIT in the database, so a seeded row can push a fixture out of a two-row result
+-- before this file ever sees it, and assertion 5 — which exists to catch an ORDER BY that
+-- lands after the LIMIT — would then be comparing a truncated list and passing or failing
+-- for reasons unrelated to ordering. The rows have to be gone before the search runs.
+delete from public.places where id::text not like '00000000-0000-0000-0000-%';
+
 -- Three real places and one that nobody has located. Coordinates are Ramallah's, so the
 -- distances below are metres a person could walk rather than arbitrary numbers.
 insert into public.places (id, name_ar, name_en, aliases, location, unconfirmed)

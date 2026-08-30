@@ -361,6 +361,17 @@ select is(
 
 -- 23 · Pending, and no secrets configured — the state of every local stack and every fresh
 -- project. It fails CLOSED, names why, and still says what it would have done.
+--
+-- THIS ASSERTION AND 24 ARE RED WHEN RUN AGAINST A CONFIGURED DEPLOYMENT, and that is the
+-- assertion being right rather than a defect. Tests 14, 23 and 24 describe a database that
+-- has never published and has no Vault entries; the staging project has both since 28 Aug
+-- 2026, so publish_tick() takes the configured branch, `would_publish_because` is absent
+-- (NULL), and each tick queues a real dispatch — test 23 calls publish_tick() twice, so
+-- test 24 then counts q+3 where a virgin database gives q+1. Left as-is deliberately:
+-- making them pass on a deployed database would mean deleting live vault.secrets rows
+-- inside a test transaction, and a test file that can destroy the publish credential if it
+-- ever runs outside one is a worse trade than three known-red assertions.
+-- See scripts/pgtap-deployed.mjs and docs/audit-2026-08-31.md.
 select pg_temp.approve('00000000-0000-0000-0000-0000000000c5');
 
 select is(
