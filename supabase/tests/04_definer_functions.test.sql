@@ -36,7 +36,11 @@ insert into public.profiles (id, handle, display_name, bio, visibility) values
    '{"bio":"public","personalInfo":"public","contributions":"public","comments":"public"}'),
   -- bio PRIVATE — the row every profile_view assertion turns on
   ('00000000-0000-0000-0000-0000000000a4', 'other_one', 'آخر', 'نبذة خاصة',
-   '{"bio":"private","personalInfo":"private","contributions":"private","comments":"private"}');
+   '{"bio":"private","personalInfo":"private","contributions":"private","comments":"private"}')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle, display_name = excluded.display_name, bio = excluded.bio, visibility = excluded.visibility;
+
 
 insert into public.posts
   (id, kind, title_ar, body_ar, status, created_by, location, location_precision,
@@ -188,16 +192,31 @@ select isnt((select location from public.posts_full()
 reset role;
 
 -- ═══ profile_view() — the visibility map ═════════════════════
+-- anon cannot reach this function AT ALL since 0058. It used to be anon-callable, and the
+-- five assertions here used to run as anon; they now run as a signed-in stranger, which is
+-- the caller the visibility map is actually for. The public projection a signed-out visitor
+-- gets is profile/{handle}.json, built at publish time (§2) — not this.
 set local role anon;
 set local request.jwt.claims to '';
+select throws_ok(
+  $q$ select public.profile_view('member_one') $q$, '42501', null,
+  'profile_view: anon cannot execute it at all (0058) — the shard is the public projection');
+reset role;
+
+-- A signed-in stranger: a4 looking at member_one, whose bio is public.
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000a4","role":"authenticated"}';
 select isnt((select bio from public.profile_view('member_one')), null,
-  'profile_view: anon sees a bio marked public');
-select is((select bio from public.profile_view('other_one')), null,
-  'profile_view: anon does NOT see a bio marked private');
+  'profile_view: a stranger sees a bio marked public');
+reset role;
+
+-- ...and a1 looking at other_one, whose everything is private.
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000a1","role":"authenticated"}';
 select is((select visibility from public.profile_view('other_one')), null,
-  'profile_view: anon never sees the visibility map itself');
+  'profile_view: a stranger never sees the visibility map itself');
 select is((select is_own from public.profile_view('other_one')), false,
-  'profile_view: is_own is false for anon');
+  'profile_view: is_own is false for someone else''s profile');
 select is((select handle from public.profile_view('other_one')), 'other_one',
   'profile_view: handle is always public (§7) even when everything else is private');
 reset role;
@@ -252,10 +271,15 @@ select is((select draft from public.content_blocks_draft() where key='hero.line'
 reset role;
 
 -- ═══ post_like_count() — counts without exposing who ═════════
+-- Also revoked from anon in 0058, and for a duller reason than profile_view: no client
+-- code calls it in any role, and the counts the front end shows are baked into the shards
+-- at publish time (§2). A visitor gets like counts from a file, not from a round trip.
 set local role anon;
 set local request.jwt.claims to '';
-select is(public.post_like_count('00000000-0000-0000-0000-0000000000b1'), 1,
-  'post_like_count: anon gets the count for an approved post');
+select throws_ok(
+  $q$ select public.post_like_count('00000000-0000-0000-0000-0000000000b1') $q$,
+  '42501', null,
+  'post_like_count: anon cannot execute it at all (0058) — counts are baked into shards');
 reset role;
 
 set local role authenticated;

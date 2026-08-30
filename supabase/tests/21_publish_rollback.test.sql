@@ -61,7 +61,11 @@ insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000da02', 'rollback-mod@t.local');
 
 insert into public.profiles (id, handle) values
-  ('00000000-0000-0000-0000-00000000da01', 'rollback_author');
+  ('00000000-0000-0000-0000-00000000da01', 'rollback_author')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle;
+
 
 -- An approved post, so publish_revision.content_revision is above zero. Without it the
 -- rolled-back release's stamped revision and the live one would both be 0 and test 13 would

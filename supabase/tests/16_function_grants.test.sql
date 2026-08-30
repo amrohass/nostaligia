@@ -91,10 +91,13 @@ select set_eq(
     ('content_blocks_draft() -> service_role'),
     ('posts_full() -> authenticated'),
     ('posts_full() -> service_role'),
-    ('post_like_count(p_post_id uuid) -> anon'),
     ('post_like_count(p_post_id uuid) -> authenticated'),
     ('post_like_count(p_post_id uuid) -> service_role'),
-    ('profile_view(p_handle text) -> anon'),
+    -- 0058 removed `-> anon` from both of the next two. profile_view returned the account
+    -- uuid and answered for accounts with no public presence at all, which is a membership
+    -- oracle keyed by handle; the PUBLIC projection is the shard (§2). post_like_count had
+    -- no caller in any role. Removing a row here is the assertion -- if either grant comes
+    -- back, this set_eq fails.
     ('profile_view(p_handle text) -> authenticated'),
     ('profile_view(p_handle text) -> service_role'),
 

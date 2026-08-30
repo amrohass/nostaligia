@@ -46,7 +46,11 @@ insert into public.profiles (id, handle, display_name, bio, visibility) values
   -- "every profile gets a shard" both produce 2, and the assertion would pass against a
   -- function that ignored its WHERE clause entirely.
   ('00000000-0000-0000-0000-0000000000e2', 'silenthandle', 'Silent Moderator', null,
-   '{"bio":"public","personalInfo":"public","contributions":"public","comments":"public"}');
+   '{"bio":"public","personalInfo":"public","contributions":"public","comments":"public"}')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle, display_name = excluded.display_name, bio = excluded.bio, visibility = excluded.visibility;
+
 
 create function pg_temp.content_rev() returns bigint
 language sql stable as $fn$

@@ -63,7 +63,11 @@ insert into public.profiles (id, handle, display_name, avatar_path, bio, visibil
   ('00000000-0000-0000-0000-0000000000a3', 'admin_one', 'مدير', null, null,
    '{"bio":"public","personalInfo":"public","contributions":"public","comments":"public"}'),
   ('00000000-0000-0000-0000-0000000000a4', 'other_one', 'آخر', 'avatars/a4.webp', 'نبذة أخرى',
-   '{"bio":"public","personalInfo":"public","contributions":"public","comments":"public"}');
+   '{"bio":"public","personalInfo":"public","contributions":"public","comments":"public"}')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle, display_name = excluded.display_name, avatar_path = excluded.avatar_path, bio = excluded.bio, visibility = excluded.visibility;
+
 
 -- An APPROVED post by the member who is about to withdraw. Everything about "the archive
 -- survives" turns on this row.

@@ -20,7 +20,11 @@ insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000fa02', 'pub-mod@t.local');
 
 insert into public.profiles (id, handle, display_name)
-values ('00000000-0000-0000-0000-00000000fa01', 'pub_author', 'صاحب الصورة');
+values ('00000000-0000-0000-0000-00000000fa01', 'pub_author', 'صاحب الصورة')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle, display_name = excluded.display_name;
+
 
 insert into public.places (id, name_ar, name_en, location)
 values ('00000000-0000-0000-0000-00000000fb01', 'المنارة', 'Al-Manara',

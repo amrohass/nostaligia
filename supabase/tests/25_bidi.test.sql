@@ -105,7 +105,11 @@ insert into public.profiles (id, handle, display_name, bio)
 values ('00000000-0000-0000-0000-0000000000d1',
         'bidi' || pg_temp.controls() || 'user',
         'Display' || pg_temp.controls(),
-        'A bio' || pg_temp.controls());
+        'A bio' || pg_temp.controls())
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle, display_name = excluded.display_name, bio = excluded.bio;
+
 
 select ok(
   not pg_temp.has_controls(

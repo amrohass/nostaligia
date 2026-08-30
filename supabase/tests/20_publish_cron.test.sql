@@ -48,7 +48,11 @@ insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000ca03', 'cron-liker@t.local');
 
 insert into public.profiles (id, handle, display_name, bio) values
-  ('00000000-0000-0000-0000-00000000ca01', 'cron_author', 'صاحب الصورة', 'سيرة');
+  ('00000000-0000-0000-0000-00000000ca01', 'cron_author', 'صاحب الصورة', 'سيرة')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle, display_name = excluded.display_name, bio = excluded.bio;
+
 
 insert into public.places (id, name_ar, name_en, location) values
   ('00000000-0000-0000-0000-00000000cb01', 'المنارة', 'Al-Manara',

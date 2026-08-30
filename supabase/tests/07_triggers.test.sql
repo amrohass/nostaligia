@@ -18,7 +18,11 @@ insert into auth.users (id,email) values
 insert into public.user_roles (user_id,role) values ('00000000-0000-0000-0000-0000000000a2','moderator');
 insert into public.profiles (id,handle) values
  ('00000000-0000-0000-0000-0000000000a1','member_one'),
- ('00000000-0000-0000-0000-0000000000a2','mod_one');
+ ('00000000-0000-0000-0000-0000000000a2','mod_one')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle;
+
 
 create function pg_temp.mk_approved(p_id uuid) returns void language sql as $fn$
   -- date_earliest is seeded because the sweep sets date_precision, and

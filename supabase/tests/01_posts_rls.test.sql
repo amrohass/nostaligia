@@ -23,7 +23,11 @@ insert into public.user_roles (user_id, role) values
 insert into public.profiles (id, handle) values
   ('00000000-0000-0000-0000-00000000a001', 'member_one'),
   ('00000000-0000-0000-0000-00000000a002', 'mod_one'),
-  ('00000000-0000-0000-0000-00000000a003', 'other_one');
+  ('00000000-0000-0000-0000-00000000a003', 'other_one')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle;
+
 
 -- The BEFORE INSERT stamp trigger returns early when auth.uid() is null, so these
 -- land exactly as written — which is what lets us build an approved row directly.

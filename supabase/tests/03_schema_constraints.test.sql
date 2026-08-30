@@ -18,7 +18,11 @@ select plan(29);
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-00000000e001', 'schema@test.local');
 insert into public.profiles (id, handle) values
-  ('00000000-0000-0000-0000-00000000e001', 'schema_user');
+  ('00000000-0000-0000-0000-00000000e001', 'schema_user')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle;
+
 insert into public.places (id, name_ar, name_en, location) values
   ('00000000-0000-0000-0000-0000000000d1', 'ميدان المنارة', 'Al-Manara Square',
    st_setsrid(st_makepoint(35.2034, 31.9038), 4326)::geography);

@@ -59,7 +59,11 @@ insert into auth.users (id, email) values
 
 insert into public.profiles (id, handle) values
   ('00000000-0000-0000-0000-0000000000f1', 'boundary_owner'),
-  ('00000000-0000-0000-0000-0000000000f2', 'boundary_stranger');
+  ('00000000-0000-0000-0000-0000000000f2', 'boundary_stranger')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle;
+
 
 -- Identity arguments, not just names: an overload is a separate grant and a separate
 -- boundary, and record_release has had three live signatures in this repository.

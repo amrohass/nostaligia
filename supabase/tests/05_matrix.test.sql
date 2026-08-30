@@ -35,7 +35,11 @@ insert into public.profiles (id,handle) values
  ('00000000-0000-0000-0000-0000000000a1','member_one'),
  ('00000000-0000-0000-0000-0000000000a2','mod_one'),
  ('00000000-0000-0000-0000-0000000000a3','admin_one'),
- ('00000000-0000-0000-0000-0000000000a4','other_one');
+ ('00000000-0000-0000-0000-0000000000a4','other_one')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle;
+
 insert into public.places (id,name_ar,location) values
  ('00000000-0000-0000-0000-0000000000c1','ميدان',st_setsrid(st_makepoint(35.2,31.9),4326)::geography);
 insert into public.posts (id,kind,title_ar,body_ar,status,created_by,location_precision,
@@ -157,7 +161,8 @@ insert into stmts values
 ('publish_hold','select','select count(*) from public.publish_hold'),
 ('publish_hold','insert',$$insert into public.publish_hold(id,reason,held_by) values (true,'x','00000000-0000-0000-0000-0000000000a9')$$),
 ('publish_hold','update',$$update public.publish_hold set reason='y' where true$$),
-('publish_hold','delete',$$delete from public.publish_hold where true$$);
+('publish_hold','delete',$q$delete from public.publish_hold where true$q$);
+
 
 -- Each probe runs in a subtransaction that is always rolled back — plpgsql variables
 -- survive that rollback, so the outcome is preserved while the write is not.

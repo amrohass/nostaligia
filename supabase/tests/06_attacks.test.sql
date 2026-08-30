@@ -15,7 +15,11 @@ insert into public.user_roles (user_id,role) values ('00000000-0000-0000-0000-00
 insert into public.profiles (id,handle) values
  ('00000000-0000-0000-0000-0000000000a1','member_one'),
  ('00000000-0000-0000-0000-0000000000a2','mod_one'),
- ('00000000-0000-0000-0000-0000000000a4','other_one');
+ ('00000000-0000-0000-0000-0000000000a4','other_one')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle;
+
 
 insert into public.posts (id,kind,title_ar,body_ar,status,created_by,location_precision,
                           license,provenance,approved_by,approved_at,content_hash) values
@@ -111,7 +115,11 @@ reset role;
 
 -- ── Handle forging ───────────────────────────────────────────
 insert into auth.users (id,email) values ('00000000-0000-0000-0000-0000000000a9','h@t');
-insert into public.profiles (id,handle) values ('00000000-0000-0000-0000-0000000000a9','محمد');
+insert into public.profiles (id,handle) values ('00000000-0000-0000-0000-0000000000a9','محمد')
+  -- 0057 provisions a profile on the auth.users insert above, so this is an UPSERT:
+  -- the fixture handle this file asserts on must win over the generated placeholder.
+  on conflict (id) do update set handle = excluded.handle;
+
 
 select throws_ok(
   $q$ update public.profiles set handle='admin' where id='00000000-0000-0000-0000-0000000000a1' $q$,
