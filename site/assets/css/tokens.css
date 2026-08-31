@@ -78,6 +78,10 @@
   --map-road-major: #FFFDF6;
   --map-boundary: #8A9268;
   --map-label: #26281F;
+  /* The street, POI and neighbourhood names the basemap extract carries (M4, 31 Aug 2026).
+     Lighter than --map-label on purpose: a locality and the archive's own gazetteer are the
+     names a reader is looking for, and a street name is context under them. */
+  --map-label-minor: #4C5142;
   --map-label-halo: #F7F4EC;
   --map-pin: #C05B3E;
   --map-pin-ink: #F7F4EC;

@@ -87,9 +87,236 @@
     }
   ];
 
-  /** Every layer the style touches — what mvt.js is asked to decode, and nothing else. */
-  var WANTED = STYLE.map(function (rule) { return rule.layer; })
+  /* ── The names the extract already carries ──────────────────
+   *
+   * Added 31 Aug 2026, and it REVERSES a decision rather than filling a gap, so the reason
+   * belongs here and not only in a commit message.
+   *
+   * mvt.js's header used to say this map renders no text from tile data, because "a basemap
+   * extract carries whatever names its renderer baked in, usually Latin". That is true of a
+   * RASTER extract and false of this one — which is the same argument §2 makes for choosing
+   * vector, followed one step further than it was followed at the time. A vector tile
+   * carries name attributes, plural and per language, and the deployed Palestine extract
+   * carries `name:ar` throughout. Measured over Al-Manara at z14: 146 of 163 roads named,
+   * 125 of 126 POIs, every place — in Arabic, from OpenStreetMap contributors who live here.
+   *
+   * So the old rule produced the opposite of what it wanted. `places.json` holds THREE rows
+   * — a floor a moderator typed for the pin and the autocomplete, and no more than that —
+   * and a map of Ramallah with three labels on it reads as a city nobody has named.
+   *
+   * The gazetteer does not lose anything: it is drawn FIRST and wins every collision, so a
+   * name a moderator confirmed always beats the extract's for the same spot.
+   *
+   * Ordered, and the order is the priority — an earlier rule claims its space first.
+   *
+   * `minZoom` is the VIEW zoom, and it must be at or below `view.maxZoom` or the rule never
+   * fires — not later, never, in complete silence. The first draft of this table put POIs and
+   * minor roads at 16 when the view stopped at 15, and they simply did not exist: no error
+   * anywhere, and a map that read as deliberately sparse. The ceiling is the archive's own
+   * maxZoom plus create()'s three levels of overzoom — 18 for the Palestine extract — and the
+   * test pins it as a literal so it cannot drift out from under this table unnoticed.
+   */
+  var LABELS = [
+    {
+      layer: 'places', kind: 'point', minZoom: 9, token: '--map-label',
+      match: { key: 'kind', values: ['country', 'region', 'locality', 'city', 'town'] },
+      size: 13, weight: '700'
+    },
+    {
+      layer: 'places', kind: 'point', minZoom: 13, token: '--map-label',
+      match: { key: 'kind', values: ['neighbourhood', 'suburb', 'quarter', 'village', 'hamlet'] },
+      size: 11.5, weight: '600'
+    },
+    {
+      // The streets that carry the shape of the city, from the zoom their geometry thickens.
+      layer: 'roads', kind: 'line', minZoom: 14, token: '--map-label-minor',
+      match: { key: 'kind', values: ['highway', 'major_road'] },
+      size: 11, weight: '600'
+    },
+    {
+      // Everything else with a name on it. `exclude` rather than a second `match` list: the
+      // rule above has already drawn the majors, and without this every one of them would be
+      // a second candidate competing with its own label.
+      layer: 'roads', kind: 'line', minZoom: 16, token: '--map-label-minor',
+      exclude: { key: 'kind', values: ['highway', 'major_road'] },
+      size: 10.5, weight: '500'
+    },
+    {
+      /* Landmarks, at street zoom.
+       *
+       * The `match` list is the whole point of this rule and is not a performance measure.
+       * Nine z15 tiles over the centre carry 1,600 named POIs, and the largest kinds are
+       * restaurant (167), supermarket (137), cafe (69), pharmacy (64) and bank (50) — draw
+       * them all and Ramallah becomes a business directory that is out of date the year it
+       * ships. What is listed below is what a person navigates a city by and what a heritage
+       * archive is actually about: worship, schooling, medicine, government, transport,
+       * parks, cemeteries, monuments and the camp. A shop is not a landmark.
+       */
+      layer: 'pois', kind: 'point', minZoom: 16, token: '--map-label-minor',
+      match: {
+        key: 'kind',
+        values: [
+          'place_of_worship', 'monastery', 'religious',
+          'hospital', 'clinic',
+          'school', 'secondary', 'college', 'university', 'kindergarten',
+          'library', 'museum', 'gallery', 'arts_centre', 'theatre',
+          'townhall', 'police', 'fire_station', 'post_office', 'military',
+          'bus_station', 'marketplace', 'refugee_camp',
+          'park', 'garden', 'playground', 'sports_centre', 'stadium', 'pitch',
+          'cemetery', 'memorial', 'monument', 'artwork', 'attraction', 'viewpoint',
+          'spring', 'fountain'
+        ]
+      },
+      size: 10.5, weight: '500'
+    }
+  ];
+
+  /** Every layer either table touches — what mvt.js is asked to decode, and nothing else. */
+  var WANTED = STYLE.concat(LABELS).map(function (rule) { return rule.layer; })
     .filter(function (name, i, all) { return all.indexOf(name) === i; });
+
+  /* At most this many labels in a frame, whatever the zoom asks for. The collision test is
+     O(n) per candidate against everything already placed, so an uncapped dense z16 view is
+     quadratic in the one place §10 measures — a mid-range Android. */
+  var LABEL_BUDGET = 140;
+
+  /* The type stack per language. Same two values as --font-ar / --font-en in tokens.css;
+     a canvas takes a font string, not a var(). The glyphs are whatever the device has —
+     there is no atlas and no font fetched from anywhere, which is what keeps this inside a
+     CSP whose font-src is 'self'. */
+  var FAMILY = {
+    ar: "'IBM Plex Sans Arabic', system-ui, sans-serif",
+    en: "'Inter', system-ui, sans-serif"
+  };
+
+  /**
+   * Bidi controls — U+202A–202E and U+2066–2069 — stripped exactly as §6 strips them on
+   * ingest. This is third-party text drawn straight onto a canvas, and an override left in
+   * it reverses a label.
+   *
+   * A code-point loop rather than a regex literal, deliberately: a character class holding
+   * these is a pair of INVISIBLE characters in the source, which nobody can review and no
+   * diff can show. This repository has already lost an afternoon to a mechanical rewrite
+   * over characters that did not appear on the screen.
+   */
+  function stripBidi(text) {
+    var out = '';
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charCodeAt(i);
+      if ((c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069)) continue;
+      out += text.charAt(i);
+    }
+    return out;
+  }
+
+  /** Hebrew, U+0590–U+05FF. The one script a default `name` may not fall back to — see
+      labelText. Written the same way and for the same reason as stripBidi. */
+  function hasHebrew(text) {
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charCodeAt(i);
+      if (c >= 0x0590 && c <= 0x05FF) return true;
+    }
+    return false;
+  }
+
+  function docLang() { return doc.documentElement.lang === 'en' ? 'en' : 'ar'; }
+
+  /**
+   * What to write on a feature, in the language the page is in.
+   *
+   * `name:ar` / `name:en` first, then the feature's own default `name` — which in this
+   * extract is the local name and is usually already the Arabic one.
+   *
+   * The one exclusion: a default `name` in HEBREW script is never used. It is not a
+   * translation of the Arabic, it is a different name for the same point, and an
+   * Arabic-first archive of Ramallah that quietly labels its map in Hebrew wherever a
+   * settlement carries no `name:ar` would be doing something nobody asked it for. Where that
+   * happens the feature keeps its geometry and gets no label — which is already what happens
+   * to the 17 roads in a central tile that carry no name at all. It is one line to reverse
+   * if that judgement is wrong, and it is deliberately not silent about being a judgement.
+   */
+  function labelText(feature, lang) {
+    var text = MVT.attribute(feature, lang === 'ar' ? 'name:ar' : 'name:en');
+    if (!text) {
+      var plain = MVT.attribute(feature, 'name');
+      if (plain && !hasHebrew(plain)) text = plain;
+    }
+    if (typeof text !== 'string') return null;
+    text = stripBidi(text).trim();
+    return text ? text : null;
+  }
+
+  /* How far a run of segments may turn and still count as one straight stretch: cos 30°.
+     Tighter and a gently curved street never gets a name at all; looser and the text lies
+     across a bend instead of along the road. */
+  var STRAIGHT = 0.866;
+
+  /** A point feature's coordinate, in tile space. */
+  function pointAnchor(feature) {
+    var ring = feature.rings[0];
+    if (!ring || ring.length < 2) return null;
+    return { tx: ring[0], ty: ring[1], dx: 0, dy: 0, span: 0 };
+  }
+
+  /**
+   * The longest straight RUN of a line, which is where its name goes.
+   *
+   * Not the centroid: a road's centroid can sit off the road entirely wherever it bends, and
+   * a street name floating in the block beside its street is worse than no street name. A run
+   * is always ON the line, and its chord is the angle to set the text at.
+   *
+   * Runs, and deliberately not the longest single SEGMENT, which is what this measured first
+   * and which put almost no names on the map. OSM geometry is densely noded — a straight
+   * street is a couple of dozen collinear segments, not one — so the longest segment of a real
+   * street is short, and every one of them then failed drawLabels' "is there room for this
+   * name" test. The symptom was a city with three street names on it, and nothing about it
+   * looked like a measurement problem.
+   */
+  function lineAnchor(feature) {
+    var best = null;
+    var bestLen = 0;
+
+    /** One finished run, from where it started to where it ended. */
+    function consider(x0, y0, x1, y1) {
+      var dx = x1 - x0;
+      var dy = y1 - y0;
+      // The chord, not the distance walked: a run that curves has less straight room for text
+      // than its arc length claims, and overstating that is how a label ends up sticking out
+      // past both ends of the street it names.
+      var len = Math.sqrt(dx * dx + dy * dy);
+      if (len <= bestLen) return;
+      bestLen = len;
+      best = { tx: (x0 + x1) / 2, ty: (y0 + y1) / 2, dx: dx, dy: dy, span: len };
+    }
+
+    for (var r = 0; r < feature.rings.length; r++) {
+      var ring = feature.rings[r];
+      var ax = 0, ay = 0;      // where the current run started
+      var px = 0, py = 0;      // the last vertex it reached
+      var rdx = 0, rdy = 0;    // the direction it set out in
+      var open = false;
+
+      for (var i = 0; i + 3 < ring.length; i += 2) {
+        var dx = ring[i + 2] - ring[i];
+        var dy = ring[i + 3] - ring[i + 1];
+        var len = Math.sqrt(dx * dx + dy * dy);
+        if (!len) continue;
+
+        var turned = open &&
+          (rdx * dx + rdy * dy) / (Math.sqrt(rdx * rdx + rdy * rdy) * len) < STRAIGHT;
+
+        if (!open || turned) {
+          if (open) consider(ax, ay, px, py);
+          ax = ring[i]; ay = ring[i + 1];
+          rdx = dx; rdy = dy;
+          open = true;
+        }
+        px = ring[i + 2]; py = ring[i + 3];
+      }
+      if (open) consider(ax, ay, px, py);
+    }
+    return best;
+  }
 
   /**
    * Every colour the map uses, read from tokens.css once.
@@ -111,6 +338,7 @@
       '--map-road-major': '#FFFFFF',
       '--map-boundary': '#8A9268',
       '--map-label': '#26281F',
+      '--map-label-minor': '#4C5142',
       '--map-label-halo': '#F7F4EC',
       '--map-pin': '#C05B3E',
       '--map-pin-ink': '#F7F4EC'
@@ -158,6 +386,9 @@
       zoom: options.zoom || 14,
       minZoom: 8,
       maxZoom: 18,
+      // The deepest zoom the archive itself has tiles for; everything above it is overzoom.
+      // fit() stops here — see the note there.
+      archiveMaxZoom: 18,
       width: 0,
       height: 0,
       dpr: 1
@@ -169,6 +400,7 @@
     var markers = [];      // screen positions, rebuilt each draw, used for hit testing
     var tiles = {};        // key -> {layers} | 'pending' | 'empty'
     var order = [];        // tile keys, oldest first — the cache eviction order
+    var labelCache = {};   // key -> {lang, list} — one tile's labels, in TILE space
     var TILE_CACHE = 64;
     var frame = null;
     var dead = false;
@@ -230,6 +462,7 @@
           break;
         }
         delete tiles[oldest];
+        delete labelCache[oldest];
       }
     }
 
@@ -313,53 +546,184 @@
     }
 
     /**
+     * One tile's label candidates, in TILE space, decoded once and kept.
+     *
+     * Once, and not once per frame: MVT.attribute is a linear scan of a feature's tag list,
+     * a z15 tile over the centre carries about five hundred named features, and repeating
+     * that for every tile on every pan frame is the difference between a map that moves and
+     * one that stutters — on the mid-range Android §10 names as M4's exit criterion.
+     *
+     * What legitimately changes per frame is where these land on the screen, and that is
+     * arithmetic (collectLabels). What changes rarely is the language, which is why the
+     * cached entry carries the `lang` it was built for rather than trusting a cache clear
+     * to happen somewhere else.
+     */
+    function tileLabels(layers, key) {
+      var lang = docLang();
+      var cached = labelCache[key];
+      if (cached && cached.lang === lang) return cached;
+
+      var list = [];
+      for (var r = 0; r < LABELS.length; r++) {
+        var rule = LABELS[r];
+        var layer = layers[rule.layer];
+        if (!layer || !layer.features.length) continue;
+
+        for (var f = 0; f < layer.features.length; f++) {
+          var feature = layer.features[f];
+          if (!feature.rings || !feature.rings.length) continue;
+          if (rule.match) {
+            var kind = MVT.attribute(feature, rule.match.key);
+            if (rule.match.values.indexOf(kind) === -1) continue;
+          }
+          if (rule.exclude) {
+            var not = MVT.attribute(feature, rule.exclude.key);
+            if (rule.exclude.values.indexOf(not) > -1) continue;
+          }
+          var anchor = rule.kind === 'line' ? lineAnchor(feature) : pointAnchor(feature);
+          if (!anchor) continue;
+          var text = labelText(feature, lang);
+          if (!text) continue;
+
+          anchor.rule = r;
+          anchor.text = text;
+          anchor.extent = layer.extent;
+          list.push(anchor);
+        }
+      }
+
+      cached = { lang: lang, list: list };
+      labelCache[key] = cached;
+      return cached;
+    }
+
+    /** The screen position of one tile's candidates, appended to `out`. */
+    function collectLabels(layers, key, z, x, y, out) {
+      var size = worldSize();
+      var n = Math.pow(2, z);
+      var originX = (x / n - view.center.x) * size + view.width / 2;
+      var originY = (y / n - view.center.y) * size + view.height / 2;
+      var list = tileLabels(layers, key).list;
+
+      for (var i = 0; i < list.length; i++) {
+        var cand = list[i];
+        if (view.zoom < LABELS[cand.rule].minZoom) continue;
+
+        var scale = size / (n * cand.extent);
+        var sx = originX + cand.tx * scale;
+        var sy = originY + cand.ty * scale;
+        if (sx < -80 || sy < -20 || sx > view.width + 80 || sy > view.height + 20) continue;
+
+        var angle = 0;
+        if (cand.span) {
+          angle = Math.atan2(cand.dy, cand.dx);
+          // Upright. A line at 170° and one at -10° are the same line, and only one of the
+          // two readings of it is text a person can read.
+          if (angle > Math.PI / 2) angle -= Math.PI;
+          else if (angle < -Math.PI / 2) angle += Math.PI;
+        }
+
+        out.push({
+          rule: cand.rule, text: cand.text,
+          x: sx, y: sy, angle: angle, span: cand.span * scale
+        });
+      }
+    }
+
+    /**
      * Labels, with a box test so two do not land on top of each other.
      *
-     * Ours, not the tile's — see mvt.js's header. Drawn with the browser's own text engine,
-     * which means Arabic is shaped and joined correctly and mixed strings get the bidi
-     * algorithm for free. `direction` is set from the document so a label sits the right way
-     * round in either language.
+     * Drawn with the browser's own text engine, which means Arabic is shaped and joined
+     * correctly and mixed strings get the bidi algorithm for free — the reason mvt.js
+     * decodes name STRINGS and stops there rather than growing a glyph atlas and a shaper.
+     * `direction` is set from the document so a label sits the right way round in either
+     * language.
+     *
+     * Two passes, and the order is the whole policy: the archive's own gazetteer first, so a
+     * name a moderator confirmed claims its space before the extract offers another for the
+     * same spot, then the extract's own names in LABELS order.
      */
-    function drawLabels() {
+    function drawLabels(candidates) {
       var taken = [];
-      var lang = doc.documentElement.lang === 'en' ? 'en' : 'ar';
+      var seen = {};
+      var drawn = 0;
+      var lang = docLang();
+
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = '600 12px ' + (lang === 'ar'
-        ? "'IBM Plex Sans Arabic', system-ui, sans-serif"
-        : "'Inter', system-ui, sans-serif");
       ctx.direction = lang === 'ar' ? 'rtl' : 'ltr';
 
-      for (var i = 0; i < places.length; i++) {
-        var place = places[i];
-        var name = lang === 'ar'
-          ? (place.name_ar || place.name_en)
-          : (place.name_en || place.name_ar);
-        if (!name) continue;
+      /** One label, if there is room for it and nothing by this name is on screen already. */
+      function place(text, x, y, angle, size, ink) {
+        if (drawn >= LABEL_BUDGET) return;
+        // By NAME, across the whole frame: a road runs through four tiles and a POI sits in
+        // the buffer of its neighbour, so the same string arrives several times per draw.
+        // Dropping repeats is also what stops a single street being labelled six times.
+        if (seen[text]) return;
+        if (x < -80 || y < -20 || x > view.width + 80 || y > view.height + 20) return;
 
-        var at = toScreen(place.lat, place.lon);
-        if (at.x < -80 || at.y < -20 || at.x > view.width + 80 || at.y > view.height + 20) continue;
+        var w = ctx.measureText(text).width;
+        var h = size + 4;
+        var cos = Math.abs(Math.cos(angle));
+        var sin = Math.abs(Math.sin(angle));
+        // The axis-aligned box around a rotated one. Cheap, slightly generous, and generous
+        // in the right direction — it spaces rotated street names apart rather than letting
+        // them touch.
+        var hw = (w / 2) * cos + (h / 2) * sin + 3;
+        var hh = (w / 2) * sin + (h / 2) * cos + 2;
+        var box = { x1: x - hw, y1: y - hh, x2: x + hw, y2: y + hh };
 
-        var half = ctx.measureText(name).width / 2 + 4;
-        var box = { x1: at.x - half, y1: at.y - 9, x2: at.x + half, y2: at.y + 9 };
-        var collides = false;
         for (var t = 0; t < taken.length; t++) {
           var other = taken[t];
-          if (box.x1 < other.x2 && box.x2 > other.x1 && box.y1 < other.y2 && box.y2 > other.y1) {
-            collides = true;
-            break;
-          }
+          if (box.x1 < other.x2 && box.x2 > other.x1 && box.y1 < other.y2 && box.y2 > other.y1) return;
         }
-        if (collides) continue;
         taken.push(box);
+        seen[text] = true;
+        drawn++;
 
+        if (angle) { ctx.save(); ctx.translate(x, y); ctx.rotate(angle); }
+        var px = angle ? 0 : x;
+        var py = angle ? 0 : y;
         // A halo rather than a plate: a filled rectangle behind every label turns a map of a
         // dense city into a wall of boxes.
         ctx.lineWidth = 3;
         ctx.strokeStyle = colors['--map-label-halo'];
-        ctx.strokeText(name, at.x, at.y);
-        ctx.fillStyle = colors['--map-label'];
-        ctx.fillText(name, at.x, at.y);
+        ctx.strokeText(text, px, py);
+        ctx.fillStyle = ink;
+        ctx.fillText(text, px, py);
+        if (angle) ctx.restore();
+      }
+
+      ctx.font = '600 12px ' + FAMILY[lang];
+      for (var i = 0; i < places.length; i++) {
+        var gazetteer = places[i];
+        var name = lang === 'ar'
+          ? (gazetteer.name_ar || gazetteer.name_en)
+          : (gazetteer.name_en || gazetteer.name_ar);
+        if (!name) continue;
+        var at = toScreen(gazetteer.lat, gazetteer.lon);
+        place(name, at.x, at.y, 0, 12, colors['--map-label']);
+      }
+
+      if (!candidates || !candidates.length) return;
+
+      // Grouped by rule rather than walked once: setting ctx.font invalidates the text
+      // measurement cache, and the alternative is doing it per label.
+      for (var r = 0; r < LABELS.length && drawn < LABEL_BUDGET; r++) {
+        var rule = LABELS[r];
+        if (view.zoom < rule.minZoom) continue;
+        ctx.font = rule.weight + ' ' + rule.size + 'px ' + FAMILY[lang];
+        var ink = colors[rule.token];
+
+        for (var c = 0; c < candidates.length; c++) {
+          var cand = candidates[c];
+          if (cand.rule !== r) continue;
+          // A name wider than the road it names is not a label, it is a line of text lying
+          // across the city. Points have no span and are never held to this.
+          if (cand.span && cand.span < ctx.measureText(cand.text).width) continue;
+          place(cand.text, cand.x, cand.y, cand.angle, rule.size, ink);
+          if (drawn >= LABEL_BUDGET) break;
+        }
       }
     }
 
@@ -417,6 +781,11 @@
       ctx.fillStyle = colors['--map-canvas'];
       ctx.fillRect(0, 0, view.width, view.height);
 
+      // Gathered across every tile and drawn in one pass afterwards, because collision is a
+      // property of the SCREEN: a per-tile pass would let a name at the edge of one tile land
+      // on top of a name at the edge of the next.
+      var labels = [];
+
       if (headerCache) {
         var z = tileZoom(headerCache);
         var n = Math.pow(2, z);
@@ -437,12 +806,15 @@
         for (var x = x0; x <= x1; x++) {
           for (var y = y0; y <= y1; y++) {
             var got = requestTile(z, x, y);
-            if (got && got !== 'pending' && got !== 'empty') drawTile(got, z, x, y);
+            if (got && got !== 'pending' && got !== 'empty') {
+              drawTile(got, z, x, y);
+              collectLabels(got, z + '/' + x + '/' + y, z, x, y, labels);
+            }
           }
         }
       }
 
-      drawLabels();
+      drawLabels(labels);
       drawMarkers();
       drawPin();
     }
@@ -635,7 +1007,18 @@
     var ready = archive.header().then(function (header) {
       headerCache = header;
       view.minZoom = Math.max(header.minZoom, 4);
-      view.maxZoom = Math.max(header.maxZoom, view.minZoom);
+      /* Three levels past the deepest zoom the archive was built to — OVERZOOM, which is a
+         thing a vector archive can do and a raster one cannot: tileZoom() already clamps the
+         tile it asks for, so beyond the archive's own maximum the same tile is drawn larger
+         rather than a new one fetched. Geometry scales; it does not blur.
+         Before this the view stopped dead at the header's maxZoom, which for the Palestine
+         extract is 15 — and a z15 view at 992px is nearly four kilometres across, a scale at
+         which no street name has room to be written and every POI in the city arrives at
+         once. Both of M4's label problems were this one line. Three and not more because
+         overzoom is free in bytes and not in honesty: at some point the map is claiming a
+         precision the extract never had. */
+      view.maxZoom = Math.max(header.maxZoom + 3, view.minZoom);
+      view.archiveMaxZoom = Math.max(header.maxZoom, view.minZoom);
       view.zoom = clamp(view.zoom, view.minZoom, view.maxZoom);
       schedule();
       return header;
@@ -677,7 +1060,12 @@
         var spanY = Math.abs(b.y - a.y) || 1e-6;
         // 0.8 leaves a margin, so the outermost item is not against the frame.
         var fitZoom = Math.log2(Math.min(view.width / (256 * spanX), view.height / (256 * spanY)) * 0.8);
-        view.zoom = clamp(fitZoom, view.minZoom, view.maxZoom);
+        /* Stops at the archive's own maxZoom rather than at view.maxZoom, so the OPENING view
+           never lands inside the overzoom range. Four items a few streets apart otherwise
+           frame to z18 and the map opens on one block with no neighbourhood, no city and no
+           context — the reader is somewhere in Ramallah without being told where. A reader
+           who wants that close can zoom; a map should not start there. */
+        view.zoom = clamp(fitZoom, view.minZoom, Math.min(view.maxZoom, view.archiveMaxZoom));
         schedule();
       },
 
@@ -696,6 +1084,10 @@
     project: project,
     unproject: unproject,
     STYLE: STYLE,
-    WANTED: WANTED
+    LABELS: LABELS,
+    WANTED: WANTED,
+    // For the tests, which check the naming rule without standing up a canvas.
+    labelText: labelText,
+    lineAnchor: lineAnchor
   };
 })(window);

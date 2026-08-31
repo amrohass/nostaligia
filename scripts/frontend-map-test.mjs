@@ -437,7 +437,7 @@ console.log('# map.js — the arithmetic that decides where things land');
   win.document = { documentElement: {}, createElement: () => ({ style: {}, setAttribute() {}, addEventListener() {} }) };
   win.getComputedStyle = () => ({ getPropertyValue: () => '' });
   new Function('window', read('site/assets/js/map.js'))(win);
-  const { project, unproject, STYLE, WANTED } = win.MAP;
+  const { project, unproject, STYLE, LABELS, WANTED } = win.MAP;
 
   const centre = project(0, 0);
   ok(Math.abs(centre.x - 0.5) < 1e-9 && Math.abs(centre.y - 0.5) < 1e-9,
@@ -453,16 +453,125 @@ console.log('# map.js — the arithmetic that decides where things land');
   ok(project(32.5, 35.2).y < project(31.5, 35.2).y, 'y increases southward');
   ok(project(31.9, 36.0).x > project(31.9, 35.0).x, 'x increases eastward');
 
-  // The list mvt.js is asked to decode is DERIVED from the style rather than written twice.
-  // A style rule for a layer nobody decodes draws nothing, silently, forever.
-  const styled = [...new Set(STYLE.map((r) => r.layer))].sort();
+  // The list mvt.js is asked to decode is DERIVED from the two rule tables rather than
+  // written a third time. A rule for a layer nobody decodes draws nothing, silently, forever
+  // — which is exactly how a label rule would fail: no error, just a map with no names.
+  const styled = [...new Set([...STYLE, ...LABELS].map((r) => r.layer))].sort();
   eq(WANTED.slice().sort().join(','), styled.join(','),
-     'every styled layer is decoded, and no other');
+     'every styled or labelled layer is decoded, and no other');
   ok(STYLE.some((r) => r.layer === 'water') && STYLE.some((r) => r.layer === 'roads'),
      'CONTROL: the style has the layers a city basemap needs');
+  ok(LABELS.some((r) => r.layer === 'roads') && LABELS.some((r) => r.layer === 'places')
+     && LABELS.some((r) => r.layer === 'pois'),
+     'CONTROL: the label rules read the three layers this extract carries names on');
+  /* Every label rule is gated on the VIEW zoom, and create() caps view.maxZoom at the
+     archive's own maxZoom PLUS three levels of overzoom — 15 + 3 for the Palestine extract on
+     R2. A rule above that ceiling is not a rule that shows later, it is a rule that shows
+     NEVER, in complete silence: no error, no warning, just a map that looks deliberately
+     sparse. The first draft of LABELS put POIs and minor roads at 16 while the view still
+     stopped at 15, and neither ever drew one label.
+     Both numbers are written out rather than read back off map.js, for the reason 05_matrix's
+     cell count is: a bound derived from the thing it bounds cannot detect that thing moving.
+     If the extract is ever rebuilt to a different depth, this line is the one to change. */
+  const EXTRACT_MAX_ZOOM = 15;
+  const OVERZOOM = 3;
+  const unreachable = LABELS.filter((r) => !(r.minZoom >= 8 && r.minZoom <= EXTRACT_MAX_ZOOM + OVERZOOM));
+  ok(unreachable.length === 0,
+     `every label rule can be reached at a zoom the map can actually show${unreachable.length ? ' — ' + unreachable.map((r) => `${r.layer}@z${r.minZoom}`).join(', ') : ''}`);
+  ok(new RegExp(`header\\.maxZoom \\+ ${OVERZOOM}`).test(read('site/assets/js/map.js')),
+     `CONTROL: map.js really does allow ${OVERZOOM} levels of overzoom past the archive — the ceiling above is not a number this test invented`);
 }
 
-/* ═══ 5 · the wiring the front end depends on ═════════════════════════════ */
+/* ═══ 5 · the names on the map ════════════════════════════════════════════ */
+
+console.log('# map.js — which name a feature is labelled with, and where a street name sits');
+
+{
+  // U+202E, built rather than typed: an override pasted into a source file is invisible in
+  // every diff and every review, which is the whole reason §6 strips it.
+  const RLO = String.fromCharCode(0x202E);
+  const NAMED = vectorTile([
+    layer({
+      name: 'roads',
+      keys: ['kind', 'name', 'name:ar', 'name:en'],
+      values: [
+        'major_road',           // 0
+        'شارع الإرسال',           // 1
+        'Sharia Al-Irsal',      // 2
+        'גבעת זאב',              // 3  a default name in Hebrew script
+        'شارع' + RLO + ' ركب'   // 4  a name carrying a bidi override
+      ],
+      features: [
+        // Both language tags, and a default name as well.
+        feature({ type: 2, tags: [0, 0, 1, 1, 2, 1, 3, 2],
+                  geometry: [command(1, 1), zig(5), zig(5), command(2, 1), zig(20), zig(0)] }),
+        // Nothing but a Hebrew default name.
+        feature({ type: 2, tags: [0, 0, 1, 3],
+                  geometry: [command(1, 1), zig(5), zig(9), command(2, 1), zig(20), zig(0)] }),
+        // The same Hebrew default, WITH an Arabic tag beside it — the control.
+        feature({ type: 2, tags: [0, 0, 1, 3, 2, 1],
+                  geometry: [command(1, 1), zig(5), zig(13), command(2, 1), zig(20), zig(0)] }),
+        // Only a default name, and it is already Arabic — the common case in this extract.
+        feature({ type: 2, tags: [0, 0, 1, 1],
+                  geometry: [command(1, 1), zig(5), zig(17), command(2, 1), zig(20), zig(0)] }),
+        // An override inside the Arabic name.
+        feature({ type: 2, tags: [0, 0, 2, 4],
+                  geometry: [command(1, 1), zig(5), zig(21), command(2, 1), zig(20), zig(0)] }),
+        // A road as OSM actually stores one: a straight stretch cut into three collinear
+        // segments, then a right-angle turn into a shorter one. The name belongs on the
+        // stretch — all 60 units of it — and the turn is what ends it.
+        feature({ type: 2, tags: [0, 0, 2, 1],
+                  geometry: [command(1, 1), zig(0), zig(0),
+                             command(2, 4), zig(10), zig(0), zig(20), zig(0), zig(30), zig(0),
+                                            zig(0), zig(30)] })
+      ]
+    })
+  ]);
+
+  const win = mapWindow(buildArchive({}));
+  win.document = { documentElement: {}, createElement: () => ({ style: {}, setAttribute() {}, addEventListener() {} }) };
+  win.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  new Function('window', read('site/assets/js/map.js'))(win);
+  const { labelText, lineAnchor } = win.MAP;
+  const roads = win.MVT.decodeTile(NAMED, ['roads']).roads.features;
+
+  eq(labelText(roads[0], 'ar'), 'شارع الإرسال', 'Arabic reads name:ar');
+  eq(labelText(roads[0], 'en'), 'Sharia Al-Irsal', 'English reads name:en');
+
+  // The whole point of the exclusion, and the assertion that would go green again the moment
+  // somebody "simplifies" the fallback to `name:ar || name`.
+  eq(labelText(roads[1], 'ar'), null,
+     'a feature whose only name is Hebrew gets NO Arabic label rather than a Hebrew one');
+  eq(labelText(roads[1], 'en'), null, 'and no English one either — it is not a translation');
+  eq(labelText(roads[2], 'ar'), 'شارع الإرسال',
+     'CONTROL: the same Hebrew default WITH an Arabic tag is labelled, so the rule is about the fallback and not about the feature');
+
+  eq(labelText(roads[3], 'ar'), 'شارع الإرسال',
+     'a default name in Arabic IS used when there is no name:ar — most of this extract');
+  eq(labelText(roads[3], 'en'), 'شارع الإرسال',
+     'and in English too: the Arabic name is the only name there is');
+
+  const stripped = labelText(roads[4], 'ar');
+  ok(stripped.indexOf(RLO) === -1, 'a bidi override in a tile name is stripped (§6)');
+  ok(stripped.indexOf('شارع') > -1 && stripped.indexOf('ركب') > -1,
+     'and both words survive the stripping — it removes the control, not the text');
+
+  /* A street name is set along the street, on its longest straight RUN — because a road's
+     centroid can sit off the road wherever it bends, and because the longest single SEGMENT
+     of a densely-noded real street is far too short to write a name on. This fixture
+     discriminates between all three readings: the longest segment is 30, the whole polyline
+     end to end is 67, and the straight run is 60. */
+  const anchor = lineAnchor(roads[5]);
+  eq(anchor.span, 60, 'collinear segments are ONE run — not the longest segment (30)');
+  eq(anchor.tx, 30, 'the anchor is the midpoint of that run');
+  eq(anchor.ty, 0, 'and it sits on the road, not beside it');
+  eq(anchor.dy, 0, 'the angle comes from the run’s own direction — the turn is excluded');
+
+  eq(lineAnchor(win.MVT.decodeTile(TILE, ['water']).water.features[0]).span, 10,
+     'CONTROL: lineAnchor measures a real geometry rather than returning a constant');
+}
+
+/* ═══ 6 · the wiring the front end depends on ═════════════════════════════ */
 
 console.log('# the map is loaded on demand, and the budget depends on that');
 

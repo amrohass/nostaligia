@@ -100,6 +100,35 @@ after first paint. Client filters against a short-TTL `redactions.json`.
   the map is a row a moderator typed rather than whatever an extract's renderer baked in —
   which is the only way an Arabic-first archive gets an Arabic-first map, and it puts the
   map's text through §9's "all content comes from the store" like every other string.
+
+  - **Amended 31 Aug 2026 — the paragraph above was half right, and the half that was
+    wrong made the map look unnamed.** `places.json` stands exactly as described: it is the
+    confirmed gazetteer, it is a shard, and it is drawn FIRST so a moderator's name wins
+    every collision. What does not stand is "rendered WITHOUT its label layers". That rule
+    was written for a *raster* extract, where names are baked into the pixels in one
+    language and no styling recovers them. This archive is vector, chosen for exactly that
+    reason, and a vector tile carries name attributes per language: the deployed Palestine
+    extract carries `name:ar` on 146 of the 163 roads in a central z14 tile, on 125 of 126
+    POIs, and on every place. So the rule produced the opposite of what it wanted — three
+    gazetteer rows meant three labels, and Ramallah rendered as a city nobody had named.
+    `map.js` now draws the extract's own `name:ar` / `name:en` beneath the gazetteer.
+    Three things fixed in the same breath, recorded because each was silent:
+    **(a)** a default `name` in HEBREW script is never used as a fallback — it is a
+    different name for the same point, not a translation, and an Arabic-first archive of
+    Ramallah must not label its map in Hebrew wherever a settlement carries no `name:ar`.
+    The feature keeps its geometry and gets no label. One line in `labelText`, and a
+    judgement rather than a mechanism, so it is marked as one;
+    **(b)** the view stopped dead at the archive's own maxZoom (15), a scale at which no
+    street name has room to be written. Vector tiles OVERZOOM — the same tile drawn larger,
+    not a new one fetched — so the view now goes three levels past it. `fit()` deliberately
+    does not, so the map never OPENS inside the overzoom range;
+    **(c)** POI labels are restricted to landmark kinds. Nine z15 tiles over the centre
+    carry 1,600 named POIs whose largest classes are restaurant, supermarket, cafe, pharmacy
+    and bank — drawing them all turns a heritage archive into a business directory that is
+    out of date the year it ships.
+    Bidi stripping (§6) runs on every string that comes off a tile, for the same reason it
+    runs on ingest. No glyph atlas and no font is fetched: canvas's own text engine shapes
+    the Arabic, which is why `font-src 'self'` is untouched by any of this.
   The object is the basemap itself: one `.pmtiles` archive in the `public` bucket, named by
   `basemap.path` in `config/site.json` and read with HTTP **Range** requests. It is not part
   of a release and does not move with one — it changes when somebody rebuilds the extract,

@@ -4,23 +4,35 @@
    holding a geometry encoded as a little stack machine over zig-zag varints. This file turns
    those bytes into arrays of numbers. It draws nothing and knows no colours.
 
-   ── Why geometry only ────────────────────────────────────────
+   ── Geometry, and the names beside it ────────────────────────
 
-   The map renders NO text from tile data. Every label on the screen comes from the archive's
-   own gazetteer — places.json, written by the publisher from rows a moderator typed in both
-   languages (§9: "All content comes from the store"). That is what makes an Arabic-first map
-   possible: a basemap extract carries whatever names its renderer baked in, usually Latin,
-   and no amount of styling turns them into Arabic.
+   No glyphs. This file decodes geometry and it decodes attribute STRINGS, and the second of
+   those is where the labels come from — map.js reads `name:ar` / `name:en` / `name` off the
+   roads, places and POI layers and draws them with the browser's own text engine.
 
-   It also removes most of the work. Label rendering from vector tiles means glyph atlases,
-   collision detection across tile boundaries, and a shaping engine — which for Arabic means
-   a shaping engine that is CORRECT, since a naive one renders disconnected letterforms that
-   read as broken to anyone who can read them. Drawing our own labels with the browser's own
-   text engine gets correct shaping for free.
+   **Amended 31 Aug 2026.** This header used to say the map renders NO text from tile data,
+   because "a basemap extract carries whatever names its renderer baked in, usually Latin".
+   That is true of a RASTER extract and false of this one, and getting it wrong made the
+   deployed map look like a city nobody had named: `places.json` holds three rows, and three
+   labels is what Ramallah had. The Palestine extract carries `name:ar` throughout — 146 of
+   163 roads in a central z14 tile, 125 of 126 POIs, every place. Drawing those is what makes
+   the map Arabic-first, not what stops it being.
 
-   So `attributes` here is a lookup, not a materialised object per feature: the styles need
-   one or two keys on the roads layer and nothing anywhere else, and building a props object
-   for every building in Ramallah would be the largest allocation in the frame.
+   What is still true is the reason for stopping at strings. Label rendering the way a tile
+   renderer does it means glyph atlases, cross-tile collision, and a shaping engine — which
+   for Arabic means a shaping engine that is CORRECT, since a naive one renders disconnected
+   letterforms that read as broken to anyone who can read them. Handing the strings to
+   canvas's own text engine gets correct shaping, joining and bidi for free, and it is why
+   this file has no glyph in it and needs no font fetched from anywhere.
+
+   The archive's own gazetteer has not moved and has not lost: places.json is still published
+   from rows a moderator typed in both languages (§9: "All content comes from the store"), and
+   map.js draws it FIRST so a confirmed name always beats the extract's for the same spot.
+
+   So `attributes` here is a lookup, not a materialised object per feature: a style rule needs
+   one key and a label needs two, and building a props object for every building in Ramallah
+   would be the largest allocation in the frame. map.js reads each tile's labels once and
+   caches them, for the same reason.
 
    ── Coordinates ──────────────────────────────────────────────
 
