@@ -75,6 +75,22 @@ correctly for free.
 > map is not textless: **المنارة / Al-Manara Square**, **البلدة القديمة / Old Town**,
 > **رام الله التحتا / Lower Ramallah**. They are a floor, not a gazetteer — edit, extend or
 > delete them in Dashboard → Places, which is the screen that owns them.
+>
+> **Amended 31 Aug 2026 — "we deliberately do not read them" is no longer true**, and the
+> paragraph above is why: three rows is three labels, and the map read as a city nobody had
+> named. `map.js` now draws the extract's own `name:ar` / `name:en` beneath the gazetteer,
+> which still wins every collision. See CLAUDE.md §2's 31 Aug amendment.
+>
+> **Two of the three seeded coordinates were wrong and were corrected the same day**, found
+> by `scripts/gazetteer-audit.mjs` — which asks the extract where each name is, because the
+> map cannot answer: it draws a gazetteer label by projecting the gazetteer's own coordinate,
+> so the picture always agrees with itself. المنارة was **594 m** south of the roundabout
+> (OSM's lion-statue artwork and the roundabout way agree to five decimals); رام الله التحتا
+> was **5,756 m** from the `places/neighbourhood` of the same name. البلدة القديمة was left
+> alone: the extract has no counterpart for it, and nothing contradicts it.
+> Not cosmetic — §7's 21 Aug amendment publishes a gazetteer choice as `exact`, so an item
+> pinned to one of these is published at that coordinate as a precise claim.
+> Re-run the audit after adding a place: `node scripts/gazetteer-audit.mjs`.
 
 **Vector rather than raster**, decided 21 Aug 2026 and recorded in CLAUDE.md §2. Raster
 would have been ~150 lines of client code instead of ~900. It was refused because no
