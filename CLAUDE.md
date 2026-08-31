@@ -278,7 +278,11 @@ likes(user_id, post_id, created_at, UNIQUE(user_id, post_id))
 saves(user_id, post_id, created_at, UNIQUE(user_id, post_id))
 content_blocks(key, locale, draft, published, version, updated_by, updated_at)
 reports(id, target_type, target_id, reason, reported_by, status, created_at)
-moderation_actions(id, actor, action, target_type, target_id, note, created_at)
+moderation_actions(id, actor, action, target_type, target_id, target_key, note, created_at)
+   -- target_id is NULLABLE (0059, 31 Aug 2026) and target_key carries the composite key of a
+   -- target that is not keyed by uuid, as "<type>:<key>" — content_blocks is (key, locale),
+   -- which is why §4's "moderation_actions AND audit_log" was unmet for a site-copy edit
+   -- until then. A row must still name a target: exactly what the old NOT NULL was for.
 audit_log(id, actor, action, target_type, target_id, before jsonb, after jsonb, created_at)
 releases(id, path, created_at, active bool)
 upload_quota(user_id, day date, count, bytes, PRIMARY KEY(user_id, day))
