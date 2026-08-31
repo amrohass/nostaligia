@@ -116,11 +116,22 @@ Do not remove either half.
    people actually use — which is still true now that the local stack works again. It proved to
    discriminate before being trusted: it reports red both for a failing assertion and for a
    file that stops short of its own `plan()`.
-3. **Docker is UP again** (server 29.7.2, 1 Sep, after six sessions down), so the LOCAL stack
-   works: `supabase start`, `supabase db reset`, `supabase test db`. It takes MINUTES to
-   launch — do not conclude it is wedged from one short wait — and never call bare
-   `docker version` inside a compound command while it is down, because the CLI blocks on the
-   named pipe and takes the whole command with it.
+3. **Docker is UP again** (server 29.7.2, 1 Sep, after six sessions down) and the LOCAL suite
+   runs: **37 files, 669 tests, Result: PASS, 16 wallclock seconds.** Three things learned
+   getting there, each of which cost a cycle:
+   - it takes MINUTES to launch. Do not conclude it is wedged from one short wait.
+   - never call bare `docker version` inside a compound command while the daemon is down —
+     the CLI blocks on the named pipe and takes the whole command with it.
+   - **`supabase db reset` killed the db container** (`LegacyDbSetupError` at "Initialising
+     schema"), and `stop --no-backup` then LEFT THE VOLUME, so the next `start` collided on
+     `schema_migrations_pkey`. What works: `stop --no-backup`, `docker volume rm` the
+     `supabase_db_*` volume, then `start` — which applies all 59 migrations to a genuinely
+     fresh database — then `supabase test db`.
+
+   **Worth knowing:** the 3 assertions that are deliberately red against the DEPLOYED database
+   (`20_publish_cron` 14, 23, 24) are GREEN on a fresh one. That is the classification
+   confirming itself — they describe a database that has never published and has no Vault
+   entries, which is exactly what a fresh local database is.
 4. `node scripts/write-report.mjs --selftest` and `--check docs/*.md`, which CI now runs too.
 
 ## What changed on 31 Aug, evening
