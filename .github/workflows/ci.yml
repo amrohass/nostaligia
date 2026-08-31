@@ -210,7 +210,10 @@ jobs:
       # which is why they can run on every push.
       - name: the backup's crypto and its refusals
         run: |
-          deno run --allow-read scripts/backup.ts --selftest
+          # --allow-write is for the dir-sink round trip: the self-test writes an encrypted
+          # dump into a temp directory and reads it back, which is the SAME read-back the
+          # real run does before calling itself a success. It touches nothing else.
+          deno run --allow-read --allow-write scripts/backup.ts --selftest
           deno run --allow-read scripts/restore-verify.ts --selftest
 
       - name: gate 1, the role floor and the presigner

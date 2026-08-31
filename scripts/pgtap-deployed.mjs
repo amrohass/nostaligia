@@ -42,8 +42,35 @@ const argv = process.argv.slice(2);
    as one result set, which is the only way to learn WHICH assertion failed. Opt-in,
    because the rewrite is a SQL parse and the plain counting path has to stay available
    for any file the parse cannot handle. See scripts/lib/pgtap-tap.mjs. */
-const tapMode = argv.includes('--tap');
-const filter = argv.filter((a) => a !== '--tap');
+const tapMode = argv.includes('--tap') || argv.includes('--local');
+
+/* --local <container> runs the same suite against a LOCAL Postgres container instead of the
+ * linked project, through `docker exec … psql`.
+ *
+ * It exists for §11 gate 3. A restore is only proved by running the project's own suite
+ * against the RESTORED database, and the restored database is a local container — reachable
+ * by neither `supabase db query --linked` (which goes to the hosted project) nor by
+ * `supabase test db` (which runs the suite against whatever the local stack currently holds,
+ * and in some CLI versions resets it first, which would silently replace the thing under
+ * test with one built from migrations).
+ *
+ * `docker exec` is also the safety property: it cannot reach a hosted project at all, so a
+ * mistyped container name fails to start rather than running the suite somewhere real.
+ *
+ * It implies --tap. psql returns rows, not the CLI's JSON envelope, and the TAP stream is a
+ * single two-column result that reads back the same way in both; the counting path's
+ * three-column probe would need a second shape that nothing here would exercise.
+ */
+const localIdx = argv.indexOf('--local');
+const LOCAL = localIdx === -1 ? null : argv[localIdx + 1];
+if (localIdx !== -1 && (!LOCAL || LOCAL.startsWith('--'))) {
+  console.error('--local needs a container name, e.g. --local supabase_db_<ref>. It will not guess one.');
+  process.exit(1);
+}
+/* `localIdx + 1` only when there IS one — otherwise -1 + 1 is 0 and the first filter
+   argument would be silently swallowed. */
+const localValueIdx = localIdx === -1 ? -1 : localIdx + 1;
+const filter = argv.filter((a, i) => a !== '--tap' && a !== '--local' && i !== localValueIdx);
 const files = readdirSync(TESTS)
   .filter((f) => f.endsWith('.test.sql'))
   .filter((f) => filter.length === 0 || filter.some((p) => f.includes(p)))
@@ -95,24 +122,56 @@ for (const f of files) {
   writeFileSync(path, spliced);
 
   let out;
-  try {
-    /* execSync, not execFileSync: on Windows `supabase` on PATH is a shim, not an .exe,
-       and execFileSync cannot start it -- which surfaced as every file reporting DID NOT
-       COMPLETE with no ERROR line, i.e. a red suite for a reason that was not the suite. */
-    out = execSync(`supabase db query --linked -f "${path}"`, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      maxBuffer: 32 * 1024 * 1024,
-    });
-  } catch (e) {
-    out = (e.stdout || '') + (e.stderr || '');
+  let j = null;
+  if (LOCAL) {
+    try {
+      /* -q -t -A -F ~@~: no command tags, no headers, no padding, and a field
+         separator no TAP line can contain. The SQL goes in on stdin because the file is on
+         the host and psql is inside the container. */
+      out = execSync(`docker exec -i ${LOCAL} psql -U postgres -d postgres -q -t -A -F "~@~" -f -`, {
+        encoding: 'utf8',
+        input: spliced,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        maxBuffer: 32 * 1024 * 1024,
+      });
+    } catch (e) {
+      out = (e.stdout || '') + (e.stderr || '');
+    }
+    /* `select seq, line from _tap order by seq` — one row per TAP line, seq first. A pgTAP
+       diagnostic can itself contain a newline, which psql prints as further physical lines
+       with no separator on them; those belong to the row above rather than being dropped,
+       or a failing assertion's explanation disappears exactly when it is wanted. */
+    const tap = [];
+    for (const raw of out.split('\n')) {
+      const l = raw.replace(/\r$/, '');
+      const sep = l.indexOf('~@~');
+      if (sep === -1) {
+        if (tap.length && l.length) tap[tap.length - 1].line += `\n${l}`;
+        continue;
+      }
+      tap.push({ seq: Number(l.slice(0, sep)), line: l.slice(sep + 3) });
+    }
+    if (tap.length) j = { rows: tap };
+  } else {
+    try {
+      /* execSync, not execFileSync: on Windows `supabase` on PATH is a shim, not an .exe,
+         and execFileSync cannot start it -- which surfaced as every file reporting DID NOT
+         COMPLETE with no ERROR line, i.e. a red suite for a reason that was not the suite. */
+      out = execSync(`supabase db query --linked -f "${path}"`, {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 32 * 1024 * 1024,
+      });
+    } catch (e) {
+      out = (e.stdout || '') + (e.stderr || '');
+    }
+    const m = out.match(/\{[\s\S]*\}/);
+    if (m) { try { j = JSON.parse(m[0]); } catch { j = null; } }
   }
 
-  const m = out.match(/\{[\s\S]*\}/);
   let rec = null;
-  if (m) {
+  if (j) {
     try {
-      const j = JSON.parse(m[0]);
       if (tapMode && Array.isArray(j.rows)) {
         /* Read the counters back off the TAP stream itself rather than off __tcache__,
            so this path and the counting path can disagree — and if they ever do, the

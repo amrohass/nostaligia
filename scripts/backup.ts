@@ -5,26 +5,35 @@
  *     scripts/backup.ts --dry-run
  *   deno run ... scripts/backup.ts                       # a real run
  *   deno run ... scripts/backup.ts --pin pre-launch      # a copy nothing will ever prune
- *   deno run --allow-read scripts/backup.ts --selftest   # the crypto and the refusals
+ *   deno run --allow-read --allow-write scripts/backup.ts --selftest   # crypto and refusals
  *
  * ── The three decisions this implements (Amro, 31 Aug 2026) ──
  *
  *   destination  a second R2 bucket under a DIFFERENT Cloudflare account;
  *   cadence      weekly full database, INCREMENTAL originals, plus snapshots pinned forever
  *                at pre-launch and immediately after the seed import;
- *   restore into a scratch Supabase project (scripts/restore-verify.ts).
+ *   restore into a scratch Supabase project (scripts/restore-verify.ts) — which restores
+ *                into a LOCAL container today, because the scratch project is not provisioned
+ *                and a container cannot be mistaken for a hosted one.
  *
  * "A different account" is enforced, not trusted: a destination whose account id equals the
  * source's is refused by name. A backup inside the blast radius of the thing it is backing up
  * is the failure mode this decision exists to avoid, and a typo in an env file is exactly how
  * it would happen.
  *
- * ── Why three dumps and not one ──────────────────────────────
+ * ── Why six dumps and not one ────────────────────────────────
  *
- * `supabase db dump` excludes the `auth` schema by default. A restore from a default dump
- * gives a `posts` table whose every `created_by` points at a user that does not exist and a
- * `user_roles` table — where §4's authorization actually lives — keyed to nobody. It looks
- * like a successful restore. So: schema, public data, auth data, and roles.
+ * `supabase db dump` excludes the `auth` schema's STRUCTURE by default, and a restore that
+ * loses it gives a `posts` table whose every `created_by` points at a user that does not
+ * exist and a `user_roles` table — where §4's authorization actually lives — keyed to nobody.
+ * It looks like a successful restore. So: schema, public data, auth data, roles, and the two
+ * catalogue reconstructions below that pg_dump does not fully cover.
+ *
+ * Measured 1 Sep 2026 while running the restore: `--data-only` WITHOUT `--schema` already
+ * carries the auth schema's ROWS, so `data.sql` and `auth.sql` overlap and loading both is a
+ * primary-key collision on every account. `auth.sql` is kept because that is the CLI's
+ * behaviour rather than a promise; restore-verify.ts loads it only when it is the thing that
+ * was missing.
  *
  * `vault` and `cron` are excluded too and are deliberately NOT dumped: the vault holds the
  * publisher's dispatch secret, and a backup that carries live credentials into a second
@@ -79,6 +88,26 @@ const value = (f: string): string | undefined => {
 
 const DRY = has("--dry-run");
 const PIN = value("--pin");
+
+/**
+ * `--to-dir <path>` — the SELF-HELD copy, on a disk rather than in the second account.
+ *
+ * The standing decision (Amro, 31 Aug 2026) is a second R2 bucket under a different
+ * Cloudflare account, and that is still the destination this script is for. This flag does
+ * not replace it and does not soften the different-account refusal, which still applies to
+ * every R2 run.
+ *
+ * It exists because §11 gate 3 says "one tested restore ... from a backup you hold
+ * yourself", and the second account is not provisioned — so without a sink that needs no
+ * credentials, the gate stays blocked on an account signup rather than on anything about
+ * this system. A local encrypted copy IS a backup you hold yourself; it is a weaker one
+ * (same building, same disk) and the manifest records which kind it was so a restore can
+ * never mistake one for the other.
+ *
+ * The bytes are encrypted exactly as the R2 path encrypts them, read back off the disk and
+ * DECRYPTED before the run reports success — same passphrase, same proof, same refusals.
+ */
+const TO_DIR = value("--to-dir");
 
 /* ── Env, read from a file rather than exported ───────────────────────────── */
 
@@ -211,13 +240,81 @@ async function originalsFromDatabase(): Promise<Map<string, number>> {
   }
 }
 
-/** Does the destination already hold this object, at this size? */
-async function presentAt(a: Account, key: string, bytes: number): Promise<boolean> {
-  const res = await r2(a, key, "HEAD");
-  if (!res.ok) return false;
-  // Size, not etag: R2 computes a multipart etag differently from a single PUT, so an etag
-  // comparison would re-copy every large master on every run, for ever.
-  return Number(res.headers.get("content-length") ?? "-1") === bytes;
+/* ── Where a backup is WRITTEN ────────────────────────────────────────────── */
+
+/**
+ * The destination, behind three methods, so the incremental copy and the read-back-and-
+ * decrypt below are written once and hold for both kinds of copy.
+ *
+ * `present` is deliberately a SIZE comparison and not an etag one: R2 computes a multipart
+ * etag differently from a single PUT, so an etag comparison would re-copy every large master
+ * on every run, for ever.
+ */
+interface Sink {
+  /** What this is, in the manifest and in the log. A restore must never have to guess. */
+  readonly kind: "r2" | "dir";
+  readonly where: string;
+  put(key: string, body: Uint8Array<ArrayBuffer>): Promise<void>;
+  get(key: string): Promise<Uint8Array<ArrayBuffer>>;
+  present(key: string, bytes: number): Promise<boolean>;
+}
+
+function r2Sink(a: Account): Sink {
+  return {
+    kind: "r2",
+    where: `${a.accountId}/${a.bucket}`,
+    async put(key, body) {
+      const res = await r2(a, key, "PUT", body);
+      if (!res.ok) throw new Error(`PUT ${key} → ${res.status}`);
+    },
+    async get(key) {
+      const res = await r2(a, key, "GET");
+      if (!res.ok) throw new Error(`GET ${key} → ${res.status}`);
+      return new Uint8Array(await res.arrayBuffer());
+    },
+    async present(key, bytes) {
+      const res = await r2(a, key, "HEAD");
+      if (!res.ok) return false;
+      return Number(res.headers.get("content-length") ?? "-1") === bytes;
+    },
+  };
+}
+
+function dirSink(dir: string): Sink {
+  const path = (key: string) => `${dir}/${key}`;
+  return {
+    kind: "dir",
+    where: dir,
+    async put(key, body) {
+      const p = path(key);
+      await Deno.mkdir(p.slice(0, p.lastIndexOf("/")), { recursive: true });
+      await Deno.writeFile(p, body);
+    },
+    get: (key) => Deno.readFile(path(key)) as Promise<Uint8Array<ArrayBuffer>>,
+    async present(key, bytes) {
+      try { return (await Deno.stat(path(key))).size === bytes; } catch { return false; }
+    },
+  };
+}
+
+/**
+ * Reasons a `--to-dir` path must not be written to. Empty means it may be.
+ *
+ * The dumps carry member email addresses (§7). They are encrypted, but a directory inside
+ * the working tree is one `git add -A` away from being committed, and the whole point of §6
+ * is that the thing which must not happen is made impossible rather than remembered. So a
+ * destination inside the repository is refused by name.
+ */
+export function refusesDir(dir: string, repoRoot: string): string[] {
+  const norm = (s: string) => s.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const d = norm(dir);
+  const r = norm(repoRoot);
+  const out: string[] = [];
+  if (!d) out.push("--to-dir was given an empty path");
+  if (d && (d === r || d.startsWith(`${r}/`))) {
+    out.push(`--to-dir is inside the repository (${repoRoot}) — encrypted member data must not sit in the working tree`);
+  }
+  return out;
 }
 
 /* ── The database ─────────────────────────────────────────────────────────── */
@@ -238,39 +335,100 @@ const DUMPS: Dump[] = [
   { name: "auth.sql", args: ["db", "dump", "--linked", "--data-only", "--schema", "auth"], why: "auth.users — WITHOUT THIS every created_by points at nobody" },
   { name: "roles.sql", args: ["db", "dump", "--linked", "--role-only"], why: "database roles" },
   {
-    /* ── The fourth dump, and it is not paranoia ──────────────
+    /* ── The fifth dump — CORRECTED 1 Sep 2026, and the correction is the point ──
      *
-     * `supabase db dump` DOES NOT EMIT TRIGGERS. Measured 1 Sep 2026 against the deployed
-     * database: 46 non-internal triggers on `public` tables, and the 206 KB schema dump
-     * contains the string "CREATE TRIGGER" exactly zero times. Everything else matches to
-     * the object — 18 tables of 18, 27 policies of 27, 77 functions of 77, 16 enums of 16.
-     * The trigger FUNCTIONS are all there. Only the bindings are gone.
+     * This was written on the finding that "`supabase db dump` DOES NOT EMIT TRIGGERS":
+     * 46 non-internal triggers in the catalogue, and the string "CREATE TRIGGER" appearing
+     * exactly zero times in the 206 KB schema dump.
      *
-     * For this project that is the difference between a backup and a souvenir, because
-     * nearly every invariant here IS a trigger:
+     * **The count was right and the conclusion was wrong.** pg_dump emits every one of the
+     * 46 — as `CREATE OR REPLACE TRIGGER`, fully schema-qualified. "CREATE TRIGGER" is
+     * genuinely absent from the file because that is not the spelling it uses. The measurement
+     * looked for one literal string and read its absence as the absence of the thing.
      *
-     *   audit_log_no_update_or_delete   §3's "audit rows are permanent"
-     *   comments_bidi_strip             §1: the ONLY filter between a hostile string and a shard
-     *   posts_stamp_authorship          §5's edit-after-approval reset
-     *   provision_profile               §7's mandatory handle, on every new account
-     *   *_bump_content_*                the publisher's trigger, so nothing would ever publish
+     * It was found the only way it could be: by running a restore. The trigger dump loaded
+     * after the schema dump and collided on its first statement — `trigger
+     * "audit_log_no_truncate" for relation "audit_log" already exists` — because the schema
+     * dump had already created all 46. Nothing short of an actual restore would have said so.
      *
-     * A restore without these has every row, every policy, every grant and every function.
-     * It errors nowhere. And its audit log is editable, its comments are unfiltered, and an
-     * approved post can be edited without falling back to pending.
+     * The dump is KEPT, for one reason that is not sentiment: it is a reconstruction from
+     * `pg_get_triggerdef()`, so it is the copy that still holds if a future CLI or pg_dump
+     * version stops emitting triggers the way this one does. It costs 7 KB. What changed is
+     * that it is now INSURANCE rather than the load-bearing part, restore-verify.ts rewrites
+     * it to `CREATE OR REPLACE TRIGGER` so loading it beside the schema is a no-op, and the
+     * completeness check above counts both spellings so the schema dump's own triggers are
+     * actually verified.
      *
-     * pg_get_triggerdef() emits exactly the CREATE TRIGGER that made each one, so this is a
-     * reconstruction from the catalogue rather than a hand-written list that would drift the
-     * first time somebody adds a trigger.
+     * Why it was ever worth this much attention: nearly every invariant in this project IS a
+     * trigger — `audit_log_no_update_or_delete` (§3), `comments_bidi_strip` (§1's only filter
+     * between a hostile string and a shard), `posts_stamp_authorship` (§5), `provision_profile`
+     * (§7), every `*_bump_content_*` the publisher runs on. A restore missing them has every
+     * row, every policy, every grant and every function, errors nowhere, and enforces nothing.
      */
     name: "triggers.sql",
-    why: "46 triggers `supabase db dump` does not emit — §3, §5, §7 and the publisher all live in these",
+    why: "triggers on public AND auth — the auth one is in no other dump, and §7's mandatory handle is it",
+    /* ── `auth` is in this filter and the omission was a real hole ──
+     *
+     * `users_provision_profile` is an AFTER INSERT trigger on `auth.users` (0057) and it is
+     * §7's "handle is mandatory" — the thing that gives every new account a profile. The
+     * schema dump excludes the auth schema, and the first version of this query said
+     * `nspname = 'public'`, so it was in NEITHER file. A restore therefore came back with
+     * every account, every profile row, and no way for the NEXT account to get one.
+     *
+     * Found by `35_provision_profile` going 9-of-12 red against a restored database — which
+     * is the whole argument for running the project's own suite rather than counting rows.
+     *
+     * `public` and `auth` only, deliberately: the other non-internal triggers on a Supabase
+     * database live in `cron`, `realtime` and `storage`, belong to the platform rather than
+     * to this archive, and a scratch project has its own.
+     */
     sql: `select coalesce(string_agg(pg_get_triggerdef(t.oid) || ';', chr(10)
-                  order by c.relname, t.tgname), '') as sql
+                  order by n.nspname, c.relname, t.tgname), '') as sql
             from pg_trigger t
             join pg_class c on c.oid = t.tgrelid
             join pg_namespace n on n.oid = c.relnamespace
-           where n.nspname = 'public' and not t.tgisinternal;`,
+           where n.nspname in ('public', 'auth') and not t.tgisinternal;`,
+  },
+  {
+    /* ── The sixth dump: EXECUTE grants, reconstructed from the catalogue ──
+     *
+     * `supabase db dump` emits REVOKE/GRANT for 74 of the 77 functions in `public`. The three
+     * it omits are exactly the three whose signature names a type in the `extensions` schema
+     * — `fuzz_location`, `justified_precision`, `place_public`, all of which take an
+     * `extensions.geography`. Their CREATE statements are dumped in full; only their
+     * privileges are dropped.
+     *
+     * The consequence is not cosmetic. A function with no ACL statement comes back with
+     * PostgreSQL's default, which is EXECUTE to PUBLIC — so a restored database hands `anon`
+     * three functions the migrations deliberately revoked. `16_function_grants` is the test
+     * that says so, and it went red on the first real restore.
+     *
+     * §4 puts authorization in RLS policies and grants, and §5 says the browser is hostile.
+     * A backup that restores the data and loosens the authorization surface is the shape of
+     * failure this project cares most about, so the grants are reconstructed from
+     * `pg_proc.proacl` the same way the triggers are reconstructed from the catalogue.
+     * REVOKE first, then one GRANT per grantee, ordered so a function's revoke always
+     * precedes its grants.
+     */
+    name: "function_acl.sql",
+    why: "EXECUTE grants for all functions — the dump omits them for any function taking an extensions type",
+    sql: `with f as (
+            select p.oid, p.proacl,
+                   format('%s.%s(%s)', quote_ident(n.nspname), quote_ident(p.proname),
+                          pg_get_function_identity_arguments(p.oid)) as sig
+              from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = 'public' and p.proacl is not null
+          ),
+          stmts as (
+            select sig, 0 as ord, 'REVOKE ALL ON FUNCTION ' || sig || ' FROM PUBLIC;' as stmt from f
+            union all
+            select f.sig, 1,
+                   'GRANT EXECUTE ON FUNCTION ' || f.sig || ' TO ' ||
+                   case when a.grantee = 0 then 'PUBLIC' else quote_ident(pg_get_userbyid(a.grantee)) end || ';'
+              from f, lateral aclexplode(f.proacl) a
+             where a.privilege_type = 'EXECUTE'
+          )
+          select coalesce(string_agg(stmt, chr(10) order by sig, ord, stmt), '') as sql from stmts;`,
   },
 ];
 
@@ -334,8 +492,34 @@ const COMPLETENESS = [
   { what: "policies", pattern: /^CREATE POLICY/gim, sql: `select count(*)::int as n from pg_policy p join pg_class c on c.oid=p.polrelid join pg_namespace ns on ns.oid=c.relnamespace where ns.nspname='public'` },
   { what: "functions", pattern: /^CREATE OR REPLACE FUNCTION/gim, sql: `select count(*)::int as n from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace where ns.nspname='public'` },
   { what: "enums", pattern: /^CREATE TYPE/gim, sql: `select count(*)::int as n from pg_type t join pg_namespace ns on ns.oid=t.typnamespace where ns.nspname='public' and t.typtype='e'` },
-  { what: "triggers", pattern: /^CREATE (CONSTRAINT )?TRIGGER/gim, sql: `select count(*)::int as n from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace ns on ns.oid=c.relnamespace where ns.nspname='public' and not t.tgisinternal` },
+  /* `CREATE OR REPLACE TRIGGER` is the form pg_dump actually emits, and the first version of
+     this pattern did not match it — which is the whole reason the fifth dump below was
+     believed to be load-bearing. Both forms are counted now: the catalogue's own
+     `pg_get_triggerdef()` emits the plain one, pg_dump the replace one. */
+  { what: "triggers", pattern: /^CREATE (OR REPLACE )?(CONSTRAINT )?TRIGGER/gim, sql: `select count(*)::int as n from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace ns on ns.oid=c.relnamespace where ns.nspname in ('public','auth') and not t.tgisinternal` },
+  /* Every function's EXECUTE grants have to appear SOMEWHERE across the dumps — in the schema
+     dump for most, in function_acl.sql for the three the schema dump silently omits. Counting
+     REVOKE lines against functions-with-an-ACL is what would have caught that omission
+     without a restore. */
+  { what: "fn grants", pattern: /^REVOKE ALL ON FUNCTION/gim, sql: `select count(*)::int as n from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace where ns.nspname='public' and p.proacl is not null` },
 ];
+
+/**
+ * The one thing the EXECUTE reconstruction above cannot carry: a grant made WITH GRANT OPTION.
+ *
+ * `aclexplode` reports it, and the emitted `GRANT EXECUTE … TO role` does not reproduce it —
+ * so rather than restore a quietly narrower privilege than the archive has, this refuses. No
+ * function in this schema uses one today; the refusal is here so that the day one does, the
+ * backup says so instead of losing it.
+ */
+async function grantOptionCaveats(): Promise<number> {
+  return await count(`select count(*)::int as n
+     from pg_proc p
+     join pg_namespace ns on ns.oid = p.pronamespace,
+     lateral aclexplode(p.proacl) a
+    where ns.nspname = 'public' and p.proacl is not null
+      and a.privilege_type = 'EXECUTE' and a.is_grantable`);
+}
 
 async function completeness(allSql: string): Promise<{ what: string; expected: number; found: number }[]> {
   const out: { what: string; expected: number; found: number }[] = [];
@@ -406,6 +590,35 @@ async function selftest() {
   ok(!sameAccount({ accountId: "abc" } as Account, { accountId: "def" } as Account),
      "CONTROL: a different account is not");
 
+  // The --to-dir refusal. The dumps are encrypted, but a directory in the working tree is one
+  // `git add -A` from being committed, and §6's posture is to make that impossible.
+  const repo = "C:/repo/RAMALLAH MEMORY";
+  ok(refusesDir(`${repo}/backups`, repo).length > 0, "a --to-dir inside the repository is refused");
+  ok(refusesDir(repo, repo).length > 0, "and so is the repository root itself");
+  ok(refusesDir(`${repo}\\docs\\x`, repo).length > 0, "backslashes do not get past it — this runs on Windows");
+  ok(refusesDir("", repo).length > 0, "an empty --to-dir is refused rather than treated as the cwd");
+  ok(refusesDir("C:/Temp/rma-backup", repo).length === 0,
+     "CONTROL: a path outside the repository is accepted — the refusal discriminates");
+  ok(refusesDir(`${repo}-elsewhere/x`, repo).length === 0,
+     "CONTROL: a sibling whose name merely STARTS with the repo path is not inside it");
+
+  // The dir sink round-trips the same bytes the R2 sink would, under the same encryption.
+  const tmp = await Deno.makeTempDir();
+  try {
+    const s = dirSink(tmp);
+    const key = "db/2026-09-01T00-00-00Z/schema.sql.enc";
+    await s.put(key, await encrypt(plain, "correct horse"));
+    ok(await s.present(key, (await Deno.stat(`${tmp}/${key}`)).size),
+       "the dir sink reports an object it has just written as present, at its size");
+    ok(!(await s.present(key, 1)), "CONTROL: and not at the wrong size — present() compares bytes, not existence");
+    ok(!(await s.present("db/nothing/here.enc", 0)), "CONTROL: an object it does not have is absent rather than an exception");
+    const round = await decrypt(await s.get(key), "correct horse");
+    ok(new TextDecoder().decode(round) === new TextDecoder().decode(plain),
+       "and what comes off the disk decrypts to the bytes that went in — the same read-back the R2 path does");
+  } finally {
+    await Deno.remove(tmp, { recursive: true }).catch(() => {});
+  }
+
   console.log(`\n1..${passed + failed}`);
   if (failed) { console.log(`${failed} assertion(s) failed.`); Deno.exit(1); }
   console.log(`All ${passed} assertions passed.`);
@@ -461,12 +674,13 @@ if (!import.meta.main) {
     Deno.exit(1);
   }
 
-  const destReady = destination.accountId && destination.accessKeyId && destination.secretAccessKey && destination.bucket;
+  const destReady = TO_DIR || (destination.accountId && destination.accessKeyId && destination.secretAccessKey && destination.bucket);
   if (!DRY && !destReady) {
     console.error("backup: the destination is not configured. Put these in supabase/functions/.backup.vars (git-ignored) or the environment:");
     console.error("  BACKUP_R2_ACCOUNT_ID, BACKUP_R2_ACCESS_KEY_ID, BACKUP_R2_SECRET_ACCESS_KEY, BACKUP_R2_BUCKET, BACKUP_PASSPHRASE");
     console.error("  The account MUST be a different Cloudflare account from the archive's — that is the decision this implements,");
     console.error("  and it is checked rather than trusted.");
+    console.error("  Or --to-dir <path> for the self-held copy on a disk you hold (§11 gate 3), which needs no account.");
     console.error("\nRun with --dry-run to exercise everything except the destination writes.");
     Deno.exit(1);
   }
@@ -474,15 +688,29 @@ if (!import.meta.main) {
     console.error("backup: BACKUP_PASSPHRASE is not set. The dumps carry member email addresses and are not written in clear.");
     Deno.exit(1);
   }
-  if (!DRY && sameAccount(source, destination)) {
+  /* The different-account rule governs the R2 destination and only it — a `--to-dir` copy
+     has no account to compare, and pretending otherwise would either block it or quietly
+     weaken the check for everybody. */
+  if (!DRY && !TO_DIR && sameAccount(source, destination)) {
     console.error("backup: the destination R2 account id is the SAME as the archive's. Refusing.");
     console.error("  A backup inside the blast radius of the thing it backs up is not a backup.");
     Deno.exit(1);
   }
+  if (TO_DIR) {
+    const no = refusesDir(TO_DIR, Deno.cwd());
+    if (no.length) {
+      console.error("backup: refusing the --to-dir destination —");
+      for (const r of no) console.error(`  ${r}`);
+      Deno.exit(1);
+    }
+  }
+
+  const sink: Sink = TO_DIR ? dirSink(TO_DIR) : r2Sink(destination);
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace(/-\d{3}Z$/, "Z");
   const root = PIN ? `pinned/${PIN}` : `db/${stamp}`;
   console.log(`\nbackup ${DRY ? "(DRY RUN — nothing will be written)" : ""}`);
+  console.log(`  destination       : ${sink.kind === "dir" ? `LOCAL DIRECTORY ${sink.where} — a weaker copy than the second account, and the manifest says so` : sink.where}`);
   console.log(`  destination prefix : ${root}`);
   if (PIN) console.log("  PINNED — this copy is never pruned. §11's pre-launch and post-seed-import snapshots live here.");
 
@@ -517,15 +745,12 @@ if (!import.meta.main) {
     if (DRY) { artefacts.push({ key, bytes: plain.length, sha256: sha }); continue; }
 
     const blob = await encrypt(plain, passphrase);
-    const put = await r2(destination, key, "PUT", blob);
-    if (!put.ok) throw new Error(`PUT ${key} → ${put.status}`);
+    await sink.put(key, blob);
 
     /* Read it back and DECRYPT it, before this run is called a success. A passphrase that
        does not work is then found today rather than on the day of the restore, which is the
        only day it matters and the worst day to find out. */
-    const got = await r2(destination, key, "GET");
-    if (!got.ok) throw new Error(`GET ${key} → ${got.status}`);
-    const round = await decrypt(new Uint8Array(await got.arrayBuffer()), passphrase);
+    const round = await decrypt(await sink.get(key), passphrase);
     const rd = await crypto.subtle.digest("SHA-256", round);
     const rsha = [...new Uint8Array(rd)].map((b) => b.toString(16).padStart(2, "0")).join("");
     if (rsha !== sha) throw new Error(`${key}: what came back does not match what went up`);
@@ -546,6 +771,15 @@ if (!import.meta.main) {
       console.log("\n  A dump missing these restores a database that loads cleanly and does not work.");
       if (!DRY) {
         console.error("\nbackup: refusing to store an incomplete dump.");
+        Deno.exit(1);
+      }
+    }
+
+    const grantable = await grantOptionCaveats();
+    if (grantable > 0) {
+      console.log(`\n  ${grantable} EXECUTE grant(s) carry WITH GRANT OPTION, which function_acl.sql cannot reproduce.`);
+      if (!DRY) {
+        console.error("backup: refusing to store a dump that would restore a narrower privilege than the archive has.");
         Deno.exit(1);
       }
     }
@@ -582,14 +816,13 @@ if (!import.meta.main) {
     if (actual !== size) orphans.push(`${key} → ${actual} bytes on R2, media_assets says ${size}`);
 
     const dkey = `originals/${key}`;
-    if (!DRY && await presentAt(destination, dkey, actual)) { skipped++; continue; }
+    if (!DRY && await sink.present(dkey, actual)) { skipped++; continue; }
     bytes += actual;
     if (DRY) { copied++; continue; }
 
     const body = await r2(source, key, "GET");
     if (!body.ok) throw new Error(`GET originals/${key} → ${body.status}`);
-    const put = await r2(destination, dkey, "PUT", new Uint8Array(await body.arrayBuffer()));
-    if (!put.ok) throw new Error(`PUT ${dkey} → ${put.status}`);
+    await sink.put(dkey, new Uint8Array(await body.arrayBuffer()));
     copied++;
   }
   console.log(`  ${DRY ? "would copy" : "copied"} ${copied}, already present ${skipped}, ${bytes.toLocaleString()} bytes`);
@@ -605,6 +838,12 @@ if (!import.meta.main) {
     taken_at: new Date().toISOString(),
     pinned: PIN ?? null,
     source_account: source.accountId,
+    /* Which KIND of copy this is. A local directory and a second Cloudflare account are not
+       equally good backups, and a restore that cannot tell them apart will one day report
+       a discharged gate over a copy that was sitting on the same disk as the thing it backs
+       up. So it is recorded rather than inferred from the path. */
+    destination: { kind: sink.kind, where: sink.where },
+    originals_prefix: "originals/",
     dumps: artefacts,
     dumps_that_could_not_run: dumpFailures,
     completeness_gaps: gaps,
@@ -619,8 +858,7 @@ if (!import.meta.main) {
   console.log("\n== manifest ==");
   console.log(JSON.stringify(manifest, null, 2));
   if (!DRY) {
-    const put = await r2(destination, `${root}/manifest.json`, "PUT", new TextEncoder().encode(JSON.stringify(manifest, null, 2)));
-    if (!put.ok) throw new Error(`PUT manifest → ${put.status}`);
+    await sink.put(`${root}/manifest.json`, new TextEncoder().encode(JSON.stringify(manifest, null, 2)));
   }
 
   console.log(DRY

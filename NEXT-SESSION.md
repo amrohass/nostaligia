@@ -32,8 +32,18 @@ secret pasted under hCaptcha produces exactly this. Set the provider to Turnstil
 the secret from the same widget as the site key in `config/site.json`
 (`0x4AAAAAAENYWuxg_BTOj47Q`).
 
+**RE-RUN 1 Sep 2026 and the answer is unchanged.** `POST /auth/v1/token?grant_type=password`
+with a REAL account and its REAL password, an invalid captcha token: `400 captcha_failed
+(invalid-input-secret)`, no session issued. Signup and the wrong-password control answer the
+same. The good news that comes with it: **an invalid token is genuinely REFUSED, not silently
+accepted** — the hole the audit found is closed. The bad news is the one below: the secret is
+still not one the verifier recognises, so a real token from a real person gets the same 400.
+Nothing in the dashboard was touched from here; this is Amro's to fix.
+
 `node scripts/captcha-probe.mjs <a-harness-email> --semantics` is the probe, committed so it
-can be re-run rather than rebuilt. It is written to be unmistakable: it signs in with a
+can be re-run rather than rebuilt. A working harness email is
+`e2e-member-f7108f78-86d3-4162-b4e9-0c3256ec1898@mail.example.com` (it is in
+`scripts/m1-gates-deployed.mjs`). It is written to be unmistakable: it signs in with a
 CORRECT password, so **a success is the failure** — a session issued with a garbage token
 means the token is not being checked — and `--semantics` asks siteverify for the table above
 rather than quoting it. Exit 1 on anything but the state you want, which is `captcha_failed`
@@ -71,38 +81,115 @@ scripts/gazetteer-audit.mjs` re-runs the check whenever a place is added.
 Still gated, untouched: the `/item/*` route on the site origin, the service-role JWT for
 `scripts/m1-deployed.ts`, GoTrue IP retention, the seed importer.
 
-**M5's backups are BUILT** (1 Sep, `scripts/backup.ts` + `scripts/restore-verify.ts`) against
-the three answers: a second R2 bucket under a **different Cloudflare account**, weekly full DB
-with **incremental** originals plus permanent pins at pre-launch and post-seed-import, and a
-**scratch Supabase project** as the restore target. §11 gate 3 is still NOT discharged, and
-what is missing is provisioning rather than code — the second account's R2 credentials in
-`supabase/functions/.backup.vars`, and a scratch project. The seed importer still needs your
-~300 items.
+**M5's backups are BUILT AND PROVED** (1 Sep, `scripts/backup.ts` + `scripts/restore-verify.ts`)
+against the three answers: a second R2 bucket under a **different Cloudflare account**, weekly
+full DB with **incremental** originals plus permanent pins at pre-launch and post-seed-import,
+and a scratch Supabase project as the restore target. **§11 gate 3 is discharged** — see below.
+What is still missing is provisioning rather than code: the second account's R2 credentials in
+`supabase/functions/.backup.vars`, and a scratch project. Until those exist, `--to-dir` writes
+the self-held copy to a disk and `--into-container` restores it into local Docker, which is
+what the gate was proved with. The seed importer still needs your ~300 items — `fottage/` holds
+**22 files** (5 videos, 17 photos), not ~300.
 
-## `supabase db dump` DOES NOT EMIT TRIGGERS — read this before trusting any backup
+## CORRECTED — `supabase db dump` DOES emit triggers, and the restore is what proved it
 
-Found 1 Sep while building the backup, and it is the finding that decides whether the backup
-is worth anything. Against the deployed database:
+The 31 Aug / 1 Sep entry here said "`supabase db dump` DOES NOT EMIT TRIGGERS", on a count of
+46 in the catalogue and the string `CREATE TRIGGER` appearing zero times in the 206 KB schema
+dump. **The count was right and the conclusion was wrong.** pg_dump emits every one of the 46
+— as `CREATE OR REPLACE TRIGGER`, fully schema-qualified. `CREATE TRIGGER` is genuinely absent
+because that is not the spelling it uses. The measurement looked for one literal string and
+read its absence as the absence of the thing.
 
-| object | in the database | in the dump |
-|---|---|---|
-| tables | 18 | 18 |
-| policies | 27 | 27 |
-| functions | 77 | 77 |
-| enums | 16 | 16 |
-| **triggers** | **46** | **0** |
+It was found the only way it could be: **by running a restore.** The trigger dump loaded after
+the schema dump and collided on its first statement — `trigger "audit_log_no_truncate" for
+relation "audit_log" already exists`. Nothing short of an actual restore would have said so,
+which is the argument for §11 gate 3 in one line.
 
-The trigger *functions* are all dumped. Only the bindings are missing — and nearly every
-invariant in this project IS a trigger: `audit_log_no_update_or_delete` (§3's permanent
-record), `comments_bidi_strip` (§1 makes it the ONLY filter between a hostile string and a
-shard), `posts_stamp_authorship` (§5's edit-after-approval reset), `provision_profile` (§7's
-mandatory handle), every `*_bump_content_*` the publisher runs on. A restore from a default
-dump has every row, every policy, every grant and every function, errors nowhere, and enforces
-nothing.
+Kept, because a reconstruction from `pg_get_triggerdef()` is the copy that still holds if a
+future CLI stops emitting them, and it costs 7 KB. What changed: it is now insurance rather
+than the load-bearing part, `restore-verify.ts` rewrites it to `CREATE OR REPLACE TRIGGER` so
+it loads beside the schema's own copy as a no-op, and `backup.ts`'s completeness pattern
+counts **both spellings** — the old one could not see the form pg_dump actually writes.
 
-`backup.ts` therefore takes a **fifth dump** from `pg_get_triggerdef()`, and compares the
-catalogue against the dump text on every run — a real run refuses to store an incomplete one.
-Do not remove either half.
+### What the restore found that was really missing
+
+Two gaps, both real, both fixed, and neither visible without running the restore:
+
+**1 · the `auth.users` trigger was in no dump at all.** `users_provision_profile` (0057) is
+§7's "every account gets a profile". The schema dump excludes the `auth` schema, and the
+trigger dump filtered `nspname = 'public'` — so it was in neither file. A restore came back
+with every account, every profile row, and no way for the *next* account to get one.
+`35_provision_profile` went **9 of 12 red** against the restored database and named it. The
+trigger dump now covers `public` and `auth`; the other non-internal triggers on a Supabase
+database live in `cron`, `realtime` and `storage`, belong to the platform, and are left alone.
+
+**2 · three functions came back with EXECUTE granted to PUBLIC.** `supabase db dump` emits
+REVOKE/GRANT for 74 of the 77 functions in `public`. The three it omits are exactly the three
+whose signature names a type in the `extensions` schema — `fuzz_location`,
+`justified_precision`, `place_public`, all taking an `extensions.geography`. Their CREATE
+statements are dumped in full; only their privileges are dropped. A function with no ACL
+statement comes back with PostgreSQL's default, which is EXECUTE **to PUBLIC** — so a restored
+database handed `anon` three functions the migrations had revoked. `16_function_grants` is the
+test that said so. `backup.ts` now takes a **sixth dump**, `function_acl.sql`, reconstructing
+every function's EXECUTE grants from `pg_proc.proacl`, and refuses to store a backup if any
+grant carries `WITH GRANT OPTION`, which that reconstruction cannot reproduce.
+
+A third thing was wrong in the verifier rather than the backup: its append-only check used
+`update … limit 1`, which is not PostgreSQL — a syntax error dressed as an assertion, so §3's
+permanent record would have read broken against a perfect restore. And its PostGIS check
+called `fuzz_location(location)`; the function takes the precision too.
+
+## §11 GATE 3 IS DISCHARGED — 1 Sep 2026
+
+A backup taken from the deployed database, held outside the platform, restored into an empty
+database, and graded by the project's own suite.
+
+```
+deno run --allow-run --allow-net --allow-env --allow-read --allow-write \
+  scripts/backup.ts --to-dir <a path outside the repo>          # BACKUP_PASSPHRASE required
+deno run --allow-run --allow-env --allow-read --allow-write scripts/restore-verify.ts \
+  --backup <dir>/db/<stamp> --originals <dir>/originals \
+  --into-container supabase_db_pjqvtmhizbnimqyxjbyq
+```
+
+Result: 6 dumps decrypted and sha256-matched against the manifest; target wiped to 0 tables /
+0 triggers / 0 auth users and asserted empty first; all 7 invariant checks green; all 5
+`media_assets` originals rows resolving against the backup's own copy at the right size; and
+**37 files, 669 assertions, 1 red — the one that must be red.**
+
+Three things about that run are the reason it means anything:
+
+- **the target is wiped and the wipe is asserted** before anything is graded. Without it every
+  check below passes against the database migrations built, which is the failure mode this
+  repository keeps finding in its own tests.
+- **`supabase_migrations` is dropped and nothing in the backup puts it back**, so its absence
+  at the END is the proof the suite ran against the restored database rather than one that
+  `supabase start` rebuilt underneath. Checked last, after the suite.
+- **the verdict is not the runner's exit code.** `20_publish_cron` 14 ("before the first
+  release, a publish is always due") MUST be red: the restored archive has releases, because
+  the backup restored them. It is in a `KNOWN_RED` list checked in both directions — a red
+  outside the list fails, and an entry that comes back green fails too, because green there
+  means the releases were lost. 23 and 24 are deliberately *not* in the list: they need
+  `vault.secrets`, the backup does not carry live credentials, so a restore passes them as a
+  fresh database does.
+
+### Two things that path does NOT prove, and are not pretended
+
+The target is a local Postgres container, not the scratch Supabase project of the 31 Aug
+decision. So this does not exercise GoTrue serving the restored `auth` rows, nor a hosted
+project's extension set coming up the same way. Both are about the platform around the
+database rather than about the backup. A container was chosen because `docker exec` **cannot
+reach a hosted project** — the target is safe by construction rather than by a refusal that
+has to stay correct — and because relinking the CLI to a scratch project means unlinking
+production on the one machine that operates production. `--target <ref>` is still there,
+still refusing the production ref by name, for the day the scratch project exists.
+
+The copy proved here was written with `--to-dir`, a **local encrypted directory**. That is a
+weaker backup than the second Cloudflare account and the manifest records which kind it was,
+so a restore can never mistake one for the other. The second account is still the standing
+decision and still unprovisioned; nothing about `--to-dir` softens the different-account
+refusal, which still applies to every R2 run.
+
 
 ## Do these FIRST
 
@@ -127,12 +214,33 @@ Do not remove either half.
      `schema_migrations_pkey`. What works: `stop --no-backup`, `docker volume rm` the
      `supabase_db_*` volume, then `start` — which applies all 59 migrations to a genuinely
      fresh database — then `supabase test db`.
+   - **UPDATED 1 Sep: a plain `supabase start` now FAILS and takes the whole stack down with
+     it.** It applies all 59 migrations, then times out on `storage-api` and `studio` health
+     checks (`LegacyHealthCheckTimeoutError`) and rolls back every container and the volume —
+     so a perfectly good database is destroyed by two services this work never touches. What
+     works, and is what the restore was run against:
+
+         supabase start -x storage-api,imgproxy,studio,logflare,vector,edge-runtime,realtime,supavisor,mailpit
+
+     Same 59 migrations, same 669 green assertions, and it comes up in about a minute. On this
+     run `stop --no-backup` DID remove the volume, so the `docker volume rm` step above is
+     belt-and-braces rather than always required — check `docker volume ls` instead of
+     assuming either way.
 
    **Worth knowing:** the 3 assertions that are deliberately red against the DEPLOYED database
    (`20_publish_cron` 14, 23, 24) are GREEN on a fresh one. That is the classification
    confirming itself — they describe a database that has never published and has no Vault
-   entries, which is exactly what a fresh local database is.
+   entries, which is exactly what a fresh local database is. **A RESTORED database sits between
+   the two:** 14 is red (it has releases, because they were restored) and 23/24 are green (the
+   backup deliberately carries no Vault secrets). `restore-verify.ts` encodes exactly that and
+   fails if 14 ever passes.
 4. `node scripts/write-report.mjs --selftest` and `--check docs/*.md`, which CI now runs too.
+5. **`node scripts/pgtap-deployed.mjs --local supabase_db_<ref>`** runs the same suite against a
+   LOCAL container through `docker exec … psql`. Added 1 Sep for gate 3, because the restored
+   database is reachable by neither `--linked` (that is the hosted project) nor `supabase test
+   db` (which grades whatever the local stack currently holds). It implies `--tap`, so it names
+   the failing assertion. Verified to discriminate: pointed at a container that does not exist
+   it reports red, never green.
 
 ## What changed on 31 Aug, evening
 
@@ -185,6 +293,16 @@ Do not remove either half.
 - **A label rule above the map's own maxZoom is invisible, not deferred.** `view.maxZoom` is
   taken from the PMTiles header, so a rule written for z16 against a z15 archive never fires,
   with no error and nothing on the screen to suggest a threshold rather than a bug.
+- **A restore is the only thing that tests a backup.** Both real gaps this session
+  (`auth.users`'s trigger in no dump at all; three functions coming back with EXECUTE to
+  PUBLIC) were invisible to every count, every completeness check and every green CI run, and
+  both were named within seconds of running the project's own suite against the restored
+  database. The corollary is the one that cost the time: **a completeness check that greps for
+  a literal string is testing the string, not the thing.** `CREATE TRIGGER` vs
+  `CREATE OR REPLACE TRIGGER` is the whole of the 31 Aug trigger finding.
+- **`update … limit 1` is not PostgreSQL.** UPDATE takes no LIMIT. It parses as a syntax error
+  at run time, which inside a `do $$ … exception when … $$` block looks exactly like the
+  invariant under test misbehaving. Bound it with `where id in (select id from … limit 1)`.
 - **A `throws_ok` with three arguments compares the MESSAGE, not the description.** The
   four-argument form is `throws_ok(sql, errcode, null, description)`; the three-argument one
   fails with "caught: 23514 …  wanted: 23514 <your description>", which reads like the
@@ -203,12 +321,27 @@ would mean deleting live `vault.secrets` rows inside a test transaction.
 |---|---|
 | 1 · RLS denial matrix green | **passing — and now also against the deployed database**, which it never was: the file aborted on its first fixture there until this session. |
 | 2 · EXIF verified on a real photo with GPS | **DISCHARGED.** Three deployed masters carry real Ramallah coordinates (31.899600, 35.204200); every derivative on the CDN is a bare `VP8 ` chunk with no EXIF, no XMP and no GPS tag name in its bytes. `scripts/exif-gate.ts` refuses to report a pass if no master had GPS to strip. |
-| 3 · One tested restore | **not started.** M5, and gated on Amro's three decisions. |
+| 3 · One tested restore | **DISCHARGED 1 Sep.** A backup taken from the deployed database, held on a disk outside the platform, restored into an emptied database, and graded by the project's own 669 assertions — see the section above for the run and for what it deliberately does not prove. |
 | 4 · A named human on the takedown path | **still nobody.** The path itself is verified — 2.9 s end to end — but §11 asks for a *person* with a stated response time, and nothing in the repository names one. |
 | 5 · Publish-age monitoring separating `held_by_operator` from `unchanged` | **not started.** M6. |
 | Pen test | not scheduled. |
 
 ## Suggested next move
 
-M5, or the two dashboard decisions above — which are worth doing first, because (1) is
-currently stopping anyone from making an account at all.
+**Everything left in M5 is blocked on Amro, not on code.** In the order that unblocks the most:
+
+1. **The Turnstile secret in the Supabase dashboard** (top of this file). Re-verified 1 Sep and
+   still `invalid-input-secret`. Nobody can sign in, sign up or reset a password, and every
+   deployed probe that authenticates is dead until it is fixed. Set the captcha PROVIDER to
+   Turnstile — it defaults to hCaptcha — and re-paste the secret from the same widget as the
+   site key in `config/site.json` (`0x4AAAAAAENYWuxg_BTOj47Q`).
+2. **Custom SMTP**, so a genuine new member is not refused by a project-wide send cap.
+3. **The ~300 seed items.** `fottage/` holds 22 files. The importer cannot be written against a
+   shape nobody has seen, and guessing one is how a seed import gets done twice.
+4. **The second Cloudflare account's R2 credentials**, into `supabase/functions/.backup.vars`.
+   The backup path is proved end to end; what it writes to today is a local directory, which is
+   a weaker copy than the decision calls for.
+
+Two gates remain, and neither is code either: **gate 4** still names nobody on the takedown
+path, and **gate 5** (publish-age monitoring separating `held_by_operator` from `unchanged`) is
+M6. The pen test is not scheduled.
