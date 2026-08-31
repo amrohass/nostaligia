@@ -52,7 +52,7 @@ the verifier's answer to a boolean, so a bad secret and a bad token both surface
 `turnstile_failed`. If the dashboard secret was wrong because the wrong value was to hand,
 check that one too.
 
-## Amro has to decide two things before some of this moves
+## Amro has to decide one thing before some of this moves
 
 1. **Custom SMTP for Supabase Auth.** Signup is blocked *right now*, and the limiter is named
    rather than guessed: `429 over_email_send_rate_limit`, "email rate limit exceeded". The cap
@@ -60,30 +60,49 @@ check that one too.
    messages an hour across everybody — so a genuine new member is refused because somebody
    else signed up in the same hour. Needs an SMTP credential and a dashboard change.
    (Currently masked: the captcha above refuses every signup before the mailer is reached.)
-2. **The gazetteer's Al-Manara row is about 600 m south of Al-Manara.** Found by verifying the
-   new map labels against the extract, and it is content rather than code so it has not been
-   touched. OpenStreetMap puts دوار المنارة at **31.90494, 35.20442** — two independent
-   features in the extract agree to five decimals — and `places` says **31.8996, 35.2042**.
-   `map.js`'s own default centre (31.9038, 35.2034) is 160 m from OSM's and 473 m from the
-   row's. It matters beyond the label: §7's 21 Aug amendment publishes a gazetteer choice as
-   `exact`, so an item pinned to Al-Manara is published 600 m from where it was taken. One
-   `update public.places set location = …` when you say so.
-
 **Closed since the audit:** GoTrue captcha is no longer off (see above — it is enabled, with a
-secret that does not verify), and `moderation_actions` can now record a `content_blocks` edit
-(0059).
+secret that does not verify); `moderation_actions` can now record a `content_blocks` edit
+(0059); the map draws the extract's own Arabic names; and **two of the three gazetteer
+coordinates were wrong and were corrected** — المنارة was 594 m out and رام الله التحتا was
+5,756 m out, both fixed against the extract's own features and re-audited to 1 m and 0 m.
+البلدة القديمة was left alone: the extract has no counterpart for it. `node
+scripts/gazetteer-audit.mjs` re-runs the check whenever a place is added.
 
 Still gated, untouched: the `/item/*` route on the site origin, the service-role JWT for
-`scripts/m1-deployed.ts`, GoTrue IP retention, backups + a tested restore, the seed importer.
+`scripts/m1-deployed.ts`, GoTrue IP retention, the seed importer.
 
-**M5 has not started and is waiting on you, not on the code.** The seed importer needs your
-~300 items; backups + one tested restore (§11 gate 3) needs three answers that have now been
-asked for across three sessions — where the self-held copy lives (jurisdiction is a real input
-for this archive, not a footnote), whether the cadence amendments stand (weekly full DB plus
-*incremental* originals, and snapshots pinned forever at pre-launch and immediately after the
-seed import, because a weekly cycle can lose the whole import), and the restore target (local
-Docker or a scratch Supabase project — Docker has been wedged for five sessions, which makes
-this less hypothetical than it sounds).
+**M5's backups are BUILT** (1 Sep, `scripts/backup.ts` + `scripts/restore-verify.ts`) against
+the three answers: a second R2 bucket under a **different Cloudflare account**, weekly full DB
+with **incremental** originals plus permanent pins at pre-launch and post-seed-import, and a
+**scratch Supabase project** as the restore target. §11 gate 3 is still NOT discharged, and
+what is missing is provisioning rather than code — the second account's R2 credentials in
+`supabase/functions/.backup.vars`, and a scratch project. The seed importer still needs your
+~300 items.
+
+## `supabase db dump` DOES NOT EMIT TRIGGERS — read this before trusting any backup
+
+Found 1 Sep while building the backup, and it is the finding that decides whether the backup
+is worth anything. Against the deployed database:
+
+| object | in the database | in the dump |
+|---|---|---|
+| tables | 18 | 18 |
+| policies | 27 | 27 |
+| functions | 77 | 77 |
+| enums | 16 | 16 |
+| **triggers** | **46** | **0** |
+
+The trigger *functions* are all dumped. Only the bindings are missing — and nearly every
+invariant in this project IS a trigger: `audit_log_no_update_or_delete` (§3's permanent
+record), `comments_bidi_strip` (§1 makes it the ONLY filter between a hostile string and a
+shard), `posts_stamp_authorship` (§5's edit-after-approval reset), `provision_profile` (§7's
+mandatory handle), every `*_bump_content_*` the publisher runs on. A restore from a default
+dump has every row, every policy, every grant and every function, errors nowhere, and enforces
+nothing.
+
+`backup.ts` therefore takes a **fifth dump** from `pg_get_triggerdef()`, and compares the
+catalogue against the dump text on every run — a real run refuses to store an incomplete one.
+Do not remove either half.
 
 ## Do these FIRST
 
@@ -92,12 +111,16 @@ this less hypothetical than it sounds).
 2. **`node scripts/pgtap-deployed.mjs --tap`** — 37 files, 669 assertions, 3 known-red (see
    below). Takes `--only <file>` for one file. It runs the whole pgTAP
    suite against the **hosted** database, each file in its own rolled-back transaction,
-   through `supabase db query --linked` (no password needed). This exists because Docker has
-   been wedged for four sessions and CI builds a *fresh* database from the same files, so a
-   green CI run says nothing about the database people actually use. It proved to
+   through `supabase db query --linked` (no password needed). It exists because CI builds a
+   *fresh* database from the same files, so a green CI run says nothing about the database
+   people actually use — which is still true now that the local stack works again. It proved to
    discriminate before being trusted: it reports red both for a failing assertion and for a
    file that stops short of its own `plan()`.
-3. `docker version` — still down (`dockerDesktopLinuxEngine` not found). Not needed for (2).
+3. **Docker is UP again** (server 29.7.2, 1 Sep, after six sessions down), so the LOCAL stack
+   works: `supabase start`, `supabase db reset`, `supabase test db`. It takes MINUTES to
+   launch — do not conclude it is wedged from one short wait — and never call bare
+   `docker version` inside a compound command while it is down, because the CLI blocks on the
+   named pipe and takes the whole command with it.
 4. `node scripts/write-report.mjs --selftest` and `--check docs/*.md`, which CI now runs too.
 
 ## What changed on 31 Aug, evening
