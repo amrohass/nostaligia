@@ -32,10 +32,19 @@ secret pasted under hCaptcha produces exactly this. Set the provider to Turnstil
 the secret from the same widget as the site key in `config/site.json`
 (`0x4AAAAAAENYWuxg_BTOj47Q`).
 
-Re-run the probe afterwards. It is written to be unmistakable: it signs in with a CORRECT
-password, so **a success is the failure** — a session issued with a garbage token means the
-token is not being checked, and a `captcha_failed` naming `invalid-input-response` (not
-`-secret`) is the state you want.
+`node scripts/captcha-probe.mjs <a-harness-email> --semantics` is the probe, committed so it
+can be re-run rather than rebuilt. It is written to be unmistakable: it signs in with a
+CORRECT password, so **a success is the failure** — a session issued with a garbage token
+means the token is not being checked — and `--semantics` asks siteverify for the table above
+rather than quoting it. Exit 1 on anything but the state you want, which is `captcha_failed`
+naming `invalid-input-response`.
+
+**Meanwhile every deployed probe that SIGNS IN is dead**: `scripts/e2e-deployed.ts`,
+`scripts/m1-gates-deployed.mjs`'s authenticated arms, and any browser probe that signs in all
+go through this same password grant. `scripts/pgtap-deployed.mjs` is unaffected — it goes
+through `supabase db query --linked`, not GoTrue — and so is anything signed-out, which is why
+the map work below could still be verified in a real browser. **Check this before assuming a
+harness failure is the harness.**
 
 **The upload path cannot be assessed from outside and is a separate secret.**
 `request-upload` reads its own `TURNSTILE_SECRET_KEY` from the Edge Function env and collapses
