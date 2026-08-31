@@ -157,6 +157,19 @@ jobs:
       - name: §9's performance budget
         run: node scripts/frontend-budget.mjs
 
+      # docs/audit-2026-08-31.md was committed holding THREE concatenated copies of itself,
+      # the first two cut off mid-sentence, because the sections were assembled by hand
+      # across retries and one splice used a `String.replace` whose replacement contained a
+      # `$` before a backtick — which expands to everything before the match. Nobody noticed
+      # for a commit: a report that is three times too long still reads correctly from the
+      # top. The self-test proves the writer refuses to append and refuses a doubled heading;
+      # the --check pass then holds every report already in the tree to the same invariant,
+      # which is the half that would have caught the original.
+      - name: reports are written once, not appended to
+        run: |
+          node scripts/write-report.mjs --selftest
+          for f in docs/*.md; do node scripts/write-report.mjs --check "$f"; done
+
   # Gate 1 of request-upload: the refusals that happen before the function touches the
   # network, reads an environment variable or learns who is asking. They need no
   # deployment and no credential, so there is no excuse for them to be untested -- and
