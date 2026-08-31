@@ -159,6 +159,16 @@ function selftest() {
   ok(CHECKS.every((c) => c.why.length > 40), "every check explains what its failure would mean");
   ok(CHECKS.some((c) => c.name.includes("auth.users")), "CONTROL: the auth check is present — it is the whole reason for three dumps");
 
+  /* backup.ts exports encrypt/decrypt and a module body runs on import, so its main block has
+     to be guarded or importing it from here would TAKE A BACKUP. Asserted against the source
+     rather than by importing it, because importing it is the very thing being guarded — and a
+     test that triggers the bug to check for it is not a test. */
+  const src = Deno.readTextFileSync(new URL("./backup.ts", import.meta.url));
+  ok(/if \(!import\.meta\.main\)/.test(src),
+     "backup.ts's main block is guarded by import.meta.main — importing it must not run a backup");
+  ok(/export async function decrypt/.test(src),
+     "CONTROL: backup.ts really does export what this file imports, so the guard is guarding something real");
+
   console.log(`\n1..${passed + failed}`);
   if (failed) { console.log(`${failed} assertion(s) failed.`); Deno.exit(1); }
   console.log(`All ${passed} assertions passed.`);

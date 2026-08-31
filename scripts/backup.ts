@@ -417,7 +417,21 @@ function sameAccount(a: Account, b: Account): boolean {
 
 /* ── The run ──────────────────────────────────────────────────────────────── */
 
-if (has("--selftest")) {
+/* `import.meta.main`, and it is not boilerplate.
+ *
+ * This file EXPORTS encrypt/decrypt, so restore-verify.ts imports it — and a module body runs
+ * on import. Without this guard, the moment anything imports `decrypt` and actually uses it,
+ * running the RESTORE verifier would fall into the else-branch below and start taking a
+ * BACKUP: dumping the database and writing to R2, because the importing script's argv happens
+ * not to contain `--selftest`.
+ *
+ * It is currently invisible: `decrypt` is imported by restore-verify.ts and not yet called, so
+ * TypeScript elides the import and this file never loads. That is the worst kind of latent —
+ * the bug arrives with the line that finishes the restore, and looks nothing like its cause.
+ */
+if (!import.meta.main) {
+  // imported for encrypt/decrypt; nothing below is this module's business
+} else if (has("--selftest")) {
   await selftest();
 } else {
   const src = sourceVars();
