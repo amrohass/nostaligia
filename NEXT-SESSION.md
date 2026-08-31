@@ -5,29 +5,83 @@ fully first; it governs this repo and overrides your defaults.
 section per milestone, every finding labelled, and the measurements behind each. This file is
 only the short version and what to do next.
 
-## Amro has to decide three things before some of this moves
+## THE ONE THING TO FIX FIRST — auth is closed to everybody (31 Aug, evening)
+
+**The Turnstile SECRET in the Supabase dashboard is not a secret the verifier recognises, so
+no member can sign in, sign up or reset a password.** Captcha protection is now ON and
+genuinely enforcing — that half worked, and it closes the hole the audit found — but the
+verification never gets as far as judging a token:
+
+    POST /auth/v1/token?grant_type=password   (a real account, its REAL password)
+      no captcha token      → 400 captcha_failed  "(no captcha_token found)"
+      invalid token         → 400 captcha_failed  "(invalid-input-secret)"
+    POST /auth/v1/signup    → 400 captcha_failed  "(no captcha_token found)"
+    POST /auth/v1/recover   → 400 captcha_failed  "(no captcha_token found)"
+
+`invalid-input-secret` is Cloudflare's code for *the secret is not one we recognise*, and that
+reading is measured rather than remembered — Turnstile's own siteverify, asked directly:
+
+| what was sent | answer |
+|---|---|
+| a recognised (test) secret + a garbage token | `invalid-input-response` |
+| a secret the verifier does not know + a garbage token | **`invalid-input-secret`** |
+
+So a REAL token from a REAL person gets the same refusal. The most likely cause and the first
+thing to check: **Supabase's captcha provider dropdown defaults to hCaptcha**, and a Turnstile
+secret pasted under hCaptcha produces exactly this. Set the provider to Turnstile and re-paste
+the secret from the same widget as the site key in `config/site.json`
+(`0x4AAAAAAENYWuxg_BTOj47Q`).
+
+Re-run the probe afterwards. It is written to be unmistakable: it signs in with a CORRECT
+password, so **a success is the failure** — a session issued with a garbage token means the
+token is not being checked, and a `captcha_failed` naming `invalid-input-response` (not
+`-secret`) is the state you want.
+
+**The upload path cannot be assessed from outside and is a separate secret.**
+`request-upload` reads its own `TURNSTILE_SECRET_KEY` from the Edge Function env and collapses
+the verifier's answer to a boolean, so a bad secret and a bad token both surface as
+`turnstile_failed`. If the dashboard secret was wrong because the wrong value was to hand,
+check that one too.
+
+## Amro has to decide two things before some of this moves
 
 1. **Custom SMTP for Supabase Auth.** Signup is blocked *right now*, and the limiter is named
    rather than guessed: `429 over_email_send_rate_limit`, "email rate limit exceeded". The cap
    is **project-wide, not per-visitor** — with Supabase's built-in sender it is a couple of
    messages an hour across everybody — so a genuine new member is refused because somebody
    else signed up in the same hour. Needs an SMTP credential and a dashboard change.
-2. **GoTrue captcha is OFF.** A password grant with no captcha token, and one with a
-   deliberately invalid token, both return `400 invalid_credentials` — the token is accepted
-   and ignored. §6's "Turnstile on signup" is client-side only, which §5 says is not a guard.
-   Needs the Turnstile **secret** in the dashboard. (The upload path is fine: `request-upload`
-   verifies Turnstile server-side.)
-3. **`moderation_actions` still cannot record a `content_blocks` edit** — `target_id` is
-   `uuid not null`, that table is keyed `(key, locale)`. Unchanged from the 30 Aug handoff.
+   (Currently masked: the captcha above refuses every signup before the mailer is reached.)
+2. **The gazetteer's Al-Manara row is about 600 m south of Al-Manara.** Found by verifying the
+   new map labels against the extract, and it is content rather than code so it has not been
+   touched. OpenStreetMap puts دوار المنارة at **31.90494, 35.20442** — two independent
+   features in the extract agree to five decimals — and `places` says **31.8996, 35.2042**.
+   `map.js`'s own default centre (31.9038, 35.2034) is 160 m from OSM's and 473 m from the
+   row's. It matters beyond the label: §7's 21 Aug amendment publishes a gazetteer choice as
+   `exact`, so an item pinned to Al-Manara is published 600 m from where it was taken. One
+   `update public.places set location = …` when you say so.
+
+**Closed since the audit:** GoTrue captcha is no longer off (see above — it is enabled, with a
+secret that does not verify), and `moderation_actions` can now record a `content_blocks` edit
+(0059).
 
 Still gated, untouched: the `/item/*` route on the site origin, the service-role JWT for
 `scripts/m1-deployed.ts`, GoTrue IP retention, backups + a tested restore, the seed importer.
 
+**M5 has not started and is waiting on you, not on the code.** The seed importer needs your
+~300 items; backups + one tested restore (§11 gate 3) needs three answers that have now been
+asked for across three sessions — where the self-held copy lives (jurisdiction is a real input
+for this archive, not a footnote), whether the cadence amendments stand (weekly full DB plus
+*incremental* originals, and snapshots pinned forever at pre-launch and immediately after the
+seed import, because a weekly cycle can lose the whole import), and the restore target (local
+Docker or a scratch Supabase project — Docker has been wedged for five sessions, which makes
+this less hypothetical than it sounds).
+
 ## Do these FIRST
 
-1. `supabase migration list --linked`. It was clean at the end of this session (58
-   migrations, all paired), but it has been wrong twice before while CI was green.
-2. **`node scripts/pgtap-deployed.mjs --tap`** — new this session. It runs the whole pgTAP
+1. `supabase migration list --linked`. Clean at the end of the evening session — **59**
+   migrations, all paired — but it has been wrong twice before while CI was green.
+2. **`node scripts/pgtap-deployed.mjs --tap`** — 37 files, 669 assertions, 3 known-red (see
+   below). Takes `--only <file>` for one file. It runs the whole pgTAP
    suite against the **hosted** database, each file in its own rolled-back transaction,
    through `supabase db query --linked` (no password needed). This exists because Docker has
    been wedged for four sessions and CI builds a *fresh* database from the same files, so a
@@ -35,6 +89,15 @@ Still gated, untouched: the `/item/*` route on the site origin, the service-role
    discriminate before being trusted: it reports red both for a failing assertion and for a
    file that stops short of its own `plan()`.
 3. `docker version` — still down (`dockerDesktopLinuxEngine` not found). Not needed for (2).
+4. `node scripts/write-report.mjs --selftest` and `--check docs/*.md`, which CI now runs too.
+
+## What changed on 31 Aug, evening
+
+| | |
+|---|---|
+| **The map has names** | It drew three labels, because `places.json` holds three rows. `mvt.js` said tile text is always "whatever the renderer baked in, usually Latin" — true of a RASTER extract, false of this one. The Palestine extract carries `name:ar` on **146 of 163 roads** in a central z14 tile, 125 of 126 POIs and every place. So the rule written to make the map Arabic-first was what kept it unnamed. The gazetteer still draws FIRST and wins every collision. Three silent bugs found on the way: the view stopped at the archive's maxZoom (15), where 992 px is four km and no street name fits — vector tiles OVERZOOM, so it goes three past, and `fit()` deliberately does not so the map never opens there; `lineAnchor` measured the longest SEGMENT, which on densely-noded OSM geometry is a few metres, so every street name failed the room test; and POI labels are landmark kinds only, because nine z15 tiles hold 1,600 named POIs whose big classes are restaurant, supermarket, cafe, pharmacy, bank. A default `name` in HEBREW script is never a fallback — a different name for the same point, not a translation. |
+| **0059** | `moderation_actions.target_id` is nullable and `target_key text` carries a composite key — `content_block:page.about.title:ar`. §4's "moderation_actions AND audit_log" is finally true for a site-copy edit. **The test caught a bug in the migration itself:** it first claimed no grant was needed because 0010's grant is table-level — but 0015 revoked that and replaced it with a COLUMN LIST, so the new column was granted to nobody. Fourth instance of that bug in this schema. |
+| **`scripts/write-report.mjs`** | The 31 Aug audit shipped as three concatenated copies of itself. Nothing in the repo wrote it, so this is a writer that exists: one truncating write, a loud refusal on a path that already has content, and a check that no `## ` heading appears twice — which is the half that would have caught the original, since the doubling happened inside the string before any write. CI runs `--selftest` and then `--check` over every `docs/*.md`. |
 
 ## What changed on 31 Aug
 
@@ -70,6 +133,20 @@ Still gated, untouched: the `/item/*` route on the site origin, the service-role
   to contain a `$` followed by a backtick. Use `split(anchor).join(replacement)`.
 - **A mechanical rewrite over SQL must be quote-aware.** `05_matrix` stores probe statements
   as dollar-quoted text, so a naive match hit the denial matrix's own data.
+- **A column-subset grant does not extend to a column added later, and nothing warns.** 0015
+  replaced 0010's table-level `grant select on moderation_actions` with an explicit column
+  list, so `relacl` holds only postgres and service_role and each column carries its own
+  `authenticated=r`. `has_table_privilege` therefore says FALSE while `has_column_privilege`
+  on an existing column says TRUE — and a column added in 0059 was granted to nobody. Check
+  `pg_attribute.attacl`, not `relacl`, and add the grant in the same migration as the column.
+- **A label rule above the map's own maxZoom is invisible, not deferred.** `view.maxZoom` is
+  taken from the PMTiles header, so a rule written for z16 against a z15 archive never fires,
+  with no error and nothing on the screen to suggest a threshold rather than a bug.
+- **A `throws_ok` with three arguments compares the MESSAGE, not the description.** The
+  four-argument form is `throws_ok(sql, errcode, null, description)`; the three-argument one
+  fails with "caught: 23514 …  wanted: 23514 <your description>", which reads like the
+  constraint misbehaving when it is the assertion that is malformed. `07_triggers` has it
+  right — copy from there.
 
 ## Known-red and deliberately so
 
