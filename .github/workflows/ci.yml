@@ -201,6 +201,18 @@ jobs:
       - name: scripts/ type-check
         run: deno check scripts/*.ts scripts/lifecycle/*.ts
 
+      # M5's backup (§11 gate 3). Neither of these can run the real thing in CI — one needs a
+      # second Cloudflare account's credentials, the other a scratch Supabase project — so
+      # what IS checked is the part that would destroy something if it were wrong: that the
+      # dumps are unreadable without the passphrase, that a wrong passphrase THROWS instead of
+      # returning rubbish, that a destination in the same account as the source is refused,
+      # and that a restore will not run against the production ref. Neither needs a secret,
+      # which is why they can run on every push.
+      - name: the backup's crypto and its refusals
+        run: |
+          deno run --allow-read scripts/backup.ts --selftest
+          deno run --allow-read scripts/restore-verify.ts --selftest
+
       - name: gate 1, the role floor and the presigner
         run: deno test --allow-env --allow-read supabase/functions/
 

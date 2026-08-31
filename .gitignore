@@ -26,6 +26,16 @@
 .dev.vars
 .dev.vars.*
 
+# The SECOND R2 account's credentials and the backup passphrase (M5, 31 Aug 2026). A
+# different filename again, so nothing above covers it -- and it is the one file in this
+# repository that holds a credential for an account the archive itself cannot reach, which is
+# the entire point of that account. Committed, it would put the backup inside the blast radius
+# of the thing it backs up, twice over: readable on the Pages origin like any dotfile, and
+# holding the passphrase that is the only thing standing between the dumps and every member's
+# email address.
+.backup.vars
+.backup.vars.*
+
 # Anything that smells like a key. Belt and braces alongside gitleaks.
 *.pem
 *.key
