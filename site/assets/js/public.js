@@ -1116,24 +1116,77 @@
         widget.token().then(function (captcha) {
           return mode === 'signup'
             ? AUTH.signUp(email, password, captcha).then(function (result) {
-              if (result.confirmationRequired) {
-                close();
-                UI.toast(t('auth.confirmSent'));
-                return null;
-              }
-              return claimHandle(handle).then(function () { return result.user; });
+              if (result.confirmationRequired) return { signedUp: true, account: null };
+              return claimHandle(handle).then(function () {
+                return { signedUp: true, account: result.user };
+              });
             })
-            : AUTH.signIn(email, password, captcha);
-        }).then(function (account) {
-          if (account === null) return;   // awaiting email confirmation
+            : AUTH.signIn(email, password, captcha).then(function (account) {
+              return { signedUp: false, account: account };
+            });
+        }).then(function (outcome) {
+          /* A signup ENDS on a screen, not on a closed dialog. Until 1 Sep 2026 the
+             confirmation-required branch closed the dialog and fired a 3.2-second toast,
+             which is what a new member experienced as "I pressed the button and nothing
+             happened" — the one moment in the whole flow where they have to be told to go
+             somewhere else and do something. The signed-in branch gets a panel too: which
+             of the two happened depends on a project setting the visitor cannot see, and
+             an outcome that varies with configuration should not vary in whether it is
+             announced. */
+          if (outcome.signedUp) { showSignedUp(email, outcome.account); return; }
           close();
-          onSignedIn(account);
+          onSignedIn(outcome.account);
         }).catch(function (err) {
           showError(err && err.key ? err.key : 'auth.err.generic');
           finish();
         });
       }
     }, body);
+
+    /**
+     * What the dialog becomes once the account exists.
+     *
+     * Replaces the form in place rather than closing: the focus trap and the scrim are
+     * already correct, and the member's attention is already here.
+     *
+     * `account` is null when the project requires an email confirmation — the ordinary
+     * case on this deployment — and non-null when signup returned a session outright.
+     * §9's rule that the gate preserves intent survives either way: the pending action
+     * runs from the button below, so a member who was part-way through a like or an
+     * upload still lands back on it.
+     */
+    function showSignedUp(address, account) {
+      /* The challenge is over and its token is spent. Left mounted, its iframe and timers
+         outlive the form it belonged to. */
+      if (widget) { widget.remove(); widget = null; }
+
+      var button = el('button.btn.btn--primary.btn--block', {
+        type: 'button',
+        onclick: function () {
+          close();
+          if (account) onSignedIn(account);
+        },
+        text: t(account ? 'signup.done.continue' : 'signup.done.gotIt')
+      });
+
+      var lines = [
+        el('h2.dialog__title', { text: t(account ? 'signup.done.readyTitle' : 'signup.done.checkTitle') }),
+        /* The address is echoed back because the commonest reason a confirmation never
+           arrives is a typo in it, and it is the one thing the member cannot re-check
+           after the dialog closes. In a <bdi> per §6: it is a string the visitor typed,
+           and an RTL sentence with an unisolated Latin address in it renders wrong even
+           without anyone being hostile. */
+        el('p.dialog__blurb', null, [
+          t(account ? 'signup.done.readyBody' : 'signup.done.checkBody') + ' ',
+          el('bdi', { text: address })
+        ])
+      ];
+      if (!account) lines.push(el('p.dialog__blurb', { text: t('signup.done.checkHint') }));
+      lines.push(button);
+
+      scrim.replaceChildren(el('div.dialog.dialog--gate', null, lines));
+      button.focus();
+    }
 
     scrim = overlayShell('scrim', [form], close);
     widget = TURNSTILE.mount(captchaSlot);

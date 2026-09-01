@@ -190,9 +190,31 @@ async function turnstileOk(token: string, remoteIp: string | null): Promise<bool
       { method: "POST", body: form },
     );
     const body = await r.json();
-    return body?.success === true;
-  } catch {
-    return false; // a verifier we cannot reach is a verifier that did not pass us
+    if (body?.success === true) return true;
+
+    // ── Why the error codes are LOGGED and still not returned ──
+    //
+    // Collapsing this to a boolean is what made the 1 Sep drift invisible. `invalid-input-
+    // secret` (the SECRET is not one Cloudflare recognises — an operator's mistake, and
+    // every upload fails for everyone) and `invalid-input-response` (the TOKEN was judged
+    // and refused — one visitor, working as designed) are opposite conditions with opposite
+    // responses, and both reached the caller as the same `turnstile_failed`. There was
+    // nowhere to look, so the only way to learn which one was happening was for somebody to
+    // notice uploads were broken.
+    //
+    // The distinction belongs to the operator, not the caller: telling a client which of the
+    // two it hit would let an attacker probe our configuration, and it does not change what
+    // they should do. So it goes to the function log, and the response is unchanged.
+    console.error("turnstile: verification failed", {
+      codes: Array.isArray(body?.["error-codes"]) ? body["error-codes"] : [],
+    });
+    return false;
+  } catch (e) {
+    // A verifier we cannot reach is a verifier that did not pass us -- but a Cloudflare
+    // outage and a wrong secret are also different problems, and this used to look like
+    // neither.
+    console.error("turnstile: verifier unreachable", { error: String(e) });
+    return false;
   }
 }
 

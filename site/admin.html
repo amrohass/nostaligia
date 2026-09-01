@@ -11,6 +11,12 @@
 <link rel="stylesheet" href="/assets/css/tokens.css">
 <link rel="stylesheet" href="/assets/css/atlas.css">
 <link rel="stylesheet" href="/assets/css/admin.css">
+<!-- Turnstile. This page has its own sign-in form (admin-boot.js), and that form posts to
+     the same captcha-gated /token endpoint as the public dialog. It went without a widget
+     from M1 until 1 Sep 2026, which cost nothing at all while GoTrue's captcha was off and
+     locked every moderator and admin out of the dashboard the day it was switched on. The
+     CSP already admits this origin in script-src and frame-src (site/_headers). -->
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 <body>
 
@@ -27,6 +33,7 @@
 <script src="/assets/js/data.js"></script>
 <script src="/assets/js/ui.js"></script>
 <script src="/assets/js/auth.js"></script>
+<script src="/assets/js/turnstile.js"></script>
 <script src="/assets/js/db.js"></script>
 <!-- admin.js is NOT loaded here. admin-boot.js signs the visitor in, asks the database
      what role they hold, and injects it only for a moderator or admin (CLAUDE.md §5).

@@ -74,6 +74,17 @@
                        en: 'One account — to share, comment, and keep what matters to you.' },
     'signup.submit': { ar: 'إنشاء الحساب', en: 'Create account' },
     'signup.haveAcct': { ar: 'لديك حساب؟', en: 'Already have an account?' },
+    // The post-signup panel (1 Sep 2026). Two endings, because whether signup returns a
+    // session or asks for an email confirmation is a project setting the visitor cannot
+    // see -- and both of them have to say what happens next.
+    'signup.done.checkTitle': { ar: 'تفقّد بريدك', en: 'Check your email' },
+    'signup.done.checkBody':  { ar: 'أرسلنا رابط تأكيد إلى', en: 'We sent a confirmation link to' },
+    'signup.done.checkHint':  { ar: 'افتح الرابط لتفعيل حسابك. إن لم تصل الرسالة، تحقّق من مجلد البريد غير المرغوب فيه — وقد تتأخر بضع دقائق.',
+                                en: 'Open it to activate your account. If it does not arrive, check your spam folder — it can take a few minutes.' },
+    'signup.done.gotIt':      { ar: 'حسنًا', en: 'Got it' },
+    'signup.done.readyTitle': { ar: 'حسابك جاهز', en: 'Your account is ready' },
+    'signup.done.readyBody':  { ar: 'سجّلنا دخولك باسم', en: 'You are signed in as' },
+    'signup.done.continue':   { ar: 'متابعة', en: 'Continue' },
     'login.title':   { ar: 'أهلًا بعودتك', en: 'Welcome back' },
     'login.blurb':   { ar: 'الذاكرة بانتظارك — تابع من حيث توقفت.',
                        en: 'The memory is waiting — pick up where you left off.' },
@@ -89,8 +100,9 @@
     // Google and Apple are gone, not hidden. CLAUDE.md §2: email + password only. The
     // buttons were prototype decoration and a social provider is not something to leave a
     // string lying around for.
-    'auth.confirmSent': { ar: 'أرسلنا رسالة تأكيد إلى بريدك. افتحها لتفعيل حسابك.',
-                          en: 'We have sent a confirmation email. Open it to activate your account.' },
+    // auth.confirmSent was here. It was the whole of what a new member was told, as a
+    // 3.2-second toast fired while the dialog closed under them. Replaced 1 Sep 2026 by
+    // the signup.done.* panel, which stays on the screen until it is dismissed.
     'auth.working':     { ar: 'لحظة…', en: 'One moment…' },
 
     // ── Auth refusals ───────────────────────────────────────
@@ -121,6 +133,8 @@
                                 en: 'No connection. Check the network and try again.' },
     'auth.err.notConfigured': { ar: 'تسجيل الدخول غير مهيّأ على هذه النسخة بعد.',
                                 en: 'Sign-in is not configured on this deployment yet.' },
+    'auth.err.captcha':       { ar: 'لم يكتمل التحقّق من أنك لست روبوتًا. أعد المحاولة.',
+                                en: 'The human check did not complete. Please try again.' },
     'auth.err.generic':       { ar: 'تعذّر إتمام الطلب. أعد المحاولة بعد قليل.',
                                 en: 'That did not go through. Try again shortly.' },
 

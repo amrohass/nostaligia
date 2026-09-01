@@ -47,27 +47,69 @@
     ]);
   }
 
+  /* Both failure shapes, reduced to one i18n key.
+
+     AUTH rejects with an AuthError carrying `.key`; TURNSTILE rejects with a plain Error
+     whose `.message` IS a key ('up.err.robotUnavailable'). Reading only `.key` — which is
+     what this file used to do — turned "the challenge widget never loaded" into the
+     generic "try again later", which is the one message that cannot be acted on. */
+  function errorKeyOf(err) {
+    if (err && err.key) return err.key;
+    if (err && typeof err.message === 'string' && /^[a-z]+\.[a-zA-Z.]+$/.test(err.message)) return err.message;
+    return 'auth.err.generic';
+  }
+
   function signInForm(errorKey) {
     var email = el('input.input', { type: 'email', autocomplete: 'email', placeholder: 'name@example.com' });
     var password = el('input.input', { type: 'password', autocomplete: 'current-password', placeholder: '••••••••' });
     var button = el('button.abtn.abtn--primary', { type: 'submit', text: t('login.submit') });
     var note = el('p.form-error', { role: 'alert', hidden: !errorKey, text: errorKey ? t(errorKey) : '' });
+    /* `.captcha` is atlas.css's, which admin.html already links — the same reserved box
+       the public dialog uses, so the form does not jump when the widget arrives. */
+    var captchaSlot = el('div.captcha');
+
+    /* Mounted for the same reason the public dialog mounts one: this form posts to
+       /token?grant_type=password, GoTrue's captcha protection covers that endpoint, and a
+       request without a token is refused before the credentials are ever looked at. From
+       M1 until 1 Sep 2026 there was no widget here — harmless while the project's captcha
+       was off, and a total lockout of the dashboard from the moment it was switched on.
+       The symptom was a correct password answered with a generic failure. */
+    var widget = TURNSTILE.mount(captchaSlot);
+
+    var busy = false;
 
     var form = el('form.admin-gate__form', {
       onsubmit: function (event) {
         event.preventDefault();
+        if (busy) return;
+        busy = true;
         button.disabled = true;
         button.textContent = t('auth.working');
-        AUTH.signIn(email.value, password.value)
-          .then(start)
+
+        var address = email.value;
+        var secret = password.value;
+
+        widget.token()
+          .then(function (captcha) { return AUTH.signIn(address, secret, captcha); })
+          .then(function () {
+            /* remove() before start(): start() replaces #main, and a widget left rendered
+               into a detached node keeps its iframe and its timers. */
+            widget.remove();
+            return start();
+          })
           .catch(function (err) {
-            signInForm(err && err.key ? err.key : 'auth.err.generic');
+            /* The token was spent by the attempt that just failed. Re-rendering the form
+               mounts a fresh widget, so this one is removed rather than reset — reset()
+               would leave two widgets alive on a page that only shows one. */
+            widget.remove();
+            signInForm(errorKeyOf(err));
           });
       }
     }, [
       el('h1.admin-gate__title', { text: t('admin.signInTitle') }),
       el('label.field__label', { text: t('field.email') }), email,
       el('label.field__label', { text: t('field.password') }), password,
+      captchaSlot,
       note,
       button
     ]);

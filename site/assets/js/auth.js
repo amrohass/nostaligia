@@ -75,7 +75,15 @@
     over_email_send_rate_limit: 'auth.err.mailLimit',
     over_request_rate_limit: 'auth.err.rateLimit',
     email_not_confirmed: 'auth.err.unconfirmed',
-    validation_failed: 'auth.err.invalidEmail'
+    validation_failed: 'auth.err.invalidEmail',
+    /* Added 1 Sep 2026, after this exact refusal spent two days looking like a wrong
+       password. GoTrue's captcha protection covers /signup, /token and /recover; a request
+       that carries no captcha_token is refused with this code BEFORE the credentials are
+       read, so the account and the password are irrelevant to it. It fell through to
+       auth.err.generic, and "something went wrong, try again later" is indistinguishable
+       from every other failure — which is why the admin dashboard's missing widget was
+       found by a person locked out rather than by the screen that locked them out. */
+    captcha_failed: 'auth.err.captcha'
   };
 
   function messageKey(body, status) {

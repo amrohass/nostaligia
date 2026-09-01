@@ -359,7 +359,13 @@ console.log('# db.js — the bucket rule');
                    'auth.err.rateLimit', 'auth.err.mailLimit',
                    'auth.err.unconfirmed', 'auth.err.invalidEmail',
                    'auth.err.generic', 'auth.err.offline', 'auth.err.notConfigured',
-                   'auth.err.signedOut', 'auth.confirmSent', 'auth.working',
+                   'auth.err.signedOut', 'auth.err.captcha', 'auth.working',
+                   // The post-signup panel. Both endings, because the one a visitor gets
+                   // depends on a project setting and a missing string would only show up
+                   // on whichever deployment happens to take that branch.
+                   'signup.done.checkTitle', 'signup.done.checkBody', 'signup.done.checkHint',
+                   'signup.done.gotIt', 'signup.done.readyTitle', 'signup.done.readyBody',
+                   'signup.done.continue',
                    'up.err.robotUnavailable', 'up.err.noFile',
                    // §7's rights block in the share sheet.
                    'share.fLicense', 'share.fLicenseNote', 'share.fProvenance',
@@ -496,6 +502,94 @@ console.log('# turnstile.js — every path out of token() settles');
   const quietR = await settled(quietWin.TURNSTILE.mount({}).token());
   ok(quietR.state === 'rejected' && quietR.e === 'up.err.robotUnavailable',
     'a widget that renders and then says NOTHING is refused on the deadline, not awaited forever');
+}
+
+console.log('# every captcha-gated call site actually carries a captcha');
+
+// ── 9 · the gate that was missing, asserted as a rule rather than remembered ─
+//
+// GoTrue's captcha protection covers /signup, /token and /recover. A call to AUTH.signIn
+// or AUTH.signUp without a third argument therefore posts no captcha_token and is refused
+// with `captcha_failed` BEFORE the credentials are read — for everyone, always, whatever
+// they typed.
+//
+// This is here because that is precisely what shipped. admin-boot.js's dashboard sign-in
+// called `AUTH.signIn(email.value, password.value)` from M1 onward, admin.html did not
+// load turnstile.js at all, and both were invisible for as long as the project's captcha
+// stayed off. The day it was switched on (31 Aug 2026) every moderator and admin was
+// locked out of the dashboard, and the screen said "That did not go through."
+//
+// Nothing in the suite could have caught it: frontend-view-test evaluates admin.js against
+// admin.html's globals but filters admin-boot.js out, and no test related a sign-in call to
+// the widget that has to feed it. So the rule is written down instead of remembered.
+{
+  const shells = ['site/index.html', 'site/admin.html'];
+  const modules = ['site/assets/js/public.js', 'site/assets/js/admin-boot.js', 'site/assets/js/upload.js'];
+
+  // The argument list of a call, brace/paren-aware enough for these three files: it stops
+  // at the paren that closes the call, so a nested call in an argument does not end it.
+  function callArgs(src, needle) {
+    const out = [];
+    let i = 0;
+    while ((i = src.indexOf(needle, i)) !== -1) {
+      let depth = 0, j = i + needle.length - 1;
+      for (; j < src.length; j++) {
+        if (src[j] === '(') depth++;
+        else if (src[j] === ')') { depth--; if (depth === 0) break; }
+      }
+      out.push(src.slice(i + needle.length, j));
+      i = j;
+    }
+    return out;
+  }
+
+  function topLevelArgc(args) {
+    if (args.trim() === '') return 0;
+    let depth = 0, n = 1;
+    for (const ch of args) {
+      if ('([{'.includes(ch)) depth++;
+      else if (')]}'.includes(ch)) depth--;
+      else if (ch === ',' && depth === 0) n++;
+    }
+    return n;
+  }
+
+  const sites = [];
+  for (const rel of modules) {
+    const src = readFileSync(join(root, rel), 'utf8');
+    for (const fn of ['AUTH.signIn(', 'AUTH.signUp(']) {
+      for (const args of callArgs(src, fn)) sites.push({ rel, fn, argc: topLevelArgc(args) });
+    }
+  }
+
+  // CONTROL first. An empty `sites` would make the assertion below vacuously true, and a
+  // renamed method or a changed call style is exactly how that would happen quietly.
+  ok(sites.length >= 3,
+     `CONTROL: ${sites.length} AUTH.signIn/signUp call sites found across the client`);
+
+  const tokenless = sites.filter((s) => s.argc < 3);
+  ok(tokenless.length === 0,
+     `every one passes a captcha token${tokenless.length ? ` — ${tokenless.map((s) => `${s.rel} ${s.fn}) with ${s.argc} args`).join(', ')}` : ''}`);
+
+  // CONTROL for the counter itself: the two-argument form this test exists to catch must
+  // actually be counted as two.
+  ok(topLevelArgc('email.value, password.value') === 2 &&
+     topLevelArgc('email, password, captcha') === 3 &&
+     topLevelArgc('a, f(b, c), d') === 3,
+     'CONTROL: the argument counter counts top-level commas, not commas inside a nested call');
+
+  // The other half. A call site that passes a token is no use on a page whose <script>
+  // list never loads the module that mints one — which is the shape admin.html had.
+  for (const shell of shells) {
+    const html = readFileSync(join(root, shell), 'utf8');
+    const loads = [...html.matchAll(/<script src="(\/assets\/js\/[^"]+)"/g)].map((m) => `site${m[1]}`);
+    const gated = loads.filter((rel) => modules.includes(rel));
+    const needsWidget = gated.length > 0;
+    ok(!needsWidget || loads.includes('site/assets/js/turnstile.js'),
+       `${shell} loads turnstile.js, because it loads ${gated.map((g) => g.split('/').pop()).join(' + ')}`);
+    ok(!needsWidget || /challenges\.cloudflare\.com\/turnstile/.test(html),
+       `${shell} loads Turnstile's own api.js — turnstile.js mints nothing without it`);
+  }
 }
 
 console.log('# config — the one credential permitted in the client');
