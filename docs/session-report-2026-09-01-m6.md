@@ -175,6 +175,13 @@ run no longer adds one.
 
 `backup.ts --selftest`: 26 assertions, was 18. `restore-verify.ts --selftest`: 25, unchanged.
 
+A third `rma-backup` directory was then found in another session's scratchpad, and it is
+**left in place and reported rather than deleted**: it holds only `.enc` files and two
+manifests, `originals copied: 0`, and no email-shaped string anywhere in the manifests. That
+is the artifact shape the design intends, and deleting somebody's backup copy uninvited is
+not a call to make silently. It is, however, exactly the destination `--to-dir` now refuses —
+the guard's first real-world example.
+
 Separately, and reported rather than swept under the same heading: three files carrying a
 live password and a session JWT for a deployed test account (`ra***@emalupe.com`, a
 disposable-mailbox harness account) were found in another session's scratchpad and deleted.
@@ -297,20 +304,53 @@ Two design points that would be easy to get backwards, both written into the fil
 
 ### Lighthouse on throttled 3G / mid-tier Android
 
-Against the deployed origin at 300ms RTT, 700 kbps, 4× CPU, 412×823 @1.75:
+Against the deployed origin at 300ms RTT, 700 kbps, 4x CPU, 412x823 @1.75. Run once before
+the M6 changes and twice after, and the third run is the reason the second is not quoted
+alone.
 
-| route | perf | a11y | best-practices | seo | FCP | LCP | TBT | CLS | transfer |
-|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| `/` | 28 | 93 | 92 | 92 | 4334ms | 8150ms | 294ms | 0.647 | 303 KiB |
-| `/map` | 11 | 94 | 92 | 92 | 4244ms | 7084ms | 1647ms | 0.862 | 635 KiB |
-| `/events` | 55 | 94 | 92 | 91 | 4343ms | 6524ms | 25ms | 0.225 | 162 KiB |
+| route | run | perf | a11y | b-p | seo | FCP | LCP | TBT | CLS | transfer |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| `/` | before | 28 | 93 | 92 | 92 | 4334 | 8150 | 294 | **0.647** | 303 KiB |
+| `/` | after 1 | 26 | 93 | **100** | 92 | 5651 | 11319 | 3555 | **0.028** | 582 KiB |
+| `/` | after 2 | 58 | 93 | **100** | 92 | 3507 | 10642 | 175 | **0.022** | 582 KiB |
+| `/map` | before | 11 | 94 | 92 | 92 | 4244 | 7084 | 1647 | **0.862** | 635 KiB |
+| `/map` | after 1 | 28 | 94 | **100** | 92 | 3759 | 10430 | 7754 | **0.055** | 915 KiB |
+| `/map` | after 2 | 32 | 94 | **100** | 92 | 3754 | 10308 | 1574 | **0.062** | 914 KiB |
+| `/events` | before | 55 | 94 | 92 | 91 | 4343 | 6524 | 25 | 0.225 | 162 KiB |
+| `/events` | after 1 | 67 | 94 | **100** | 91 | 3789 | 7277 | 0 | **0.008** | 442 KiB |
+| `/events` | after 2 | 68 | 94 | **100** | 91 | 3692 | 6867 | 0 | **0.008** | 442 KiB |
 
-**These numbers are measured against a handful of published items, not §3's ~300.**
-`fottage/` holds 22 files. §9's budget is per-page and holds; every judgement here about feed
-pagination, shard size, or scroll behaviour is **provisional** until the seed import lands.
+**What is stable across runs, and is therefore a measurement:**
 
-The run earned its place immediately by finding a real defect. CLS was attributed with a
-`PerformanceObserver` rather than guessed at, and it is not the fonts:
+- **CLS collapsed.** 0.647 → 0.022 on the feed, 0.862 → 0.062 on the map, 0.225 → 0.008 on
+  events. Google's "good" threshold is 0.1; all three were over it and all three are now well
+  under. This is the defect the run was worth doing for, and it is described below.
+- **Best practices 92 → 100**, on every route. That is the Google Fonts origin leaving the
+  page — the one third-party request the site made.
+- **Transfer +279 KiB on every route**, which is the font payload almost exactly (264.8 KiB
+  across nine faces; the home page requests all nine, verified live). **This is a real cost
+  and it is the price of the fix**: before, the CSP blocked Google Fonts outright, so the
+  deployed site downloaded *zero* font bytes and rendered in whatever the OS had. It now
+  fetches its own typeface once and caches it for a year. §9 puts fonts outside the 150 KB
+  budget for exactly this reason, and first paint is 90.8 KiB of 150.
+
+**What is NOT stable, and is therefore not a measurement.** TBT on `/` came back 294, 3555
+and 175 ms across three runs of two code states, and the performance *score* moved with it
+(28, 26, 58). The middle run was taken while this machine was running sixteen Chrome
+processes and two other probes. `/map`'s TBT is the one figure that reproduces — 1647 and
+1574 either side of the change — and that is the canvas map doing real work on a 4×-throttled
+CPU. **The performance score on this hardware is not a number to act on**; CLS, transfer and
+best-practices are.
+
+**The caveat that belongs on all of it:** these are measured against a handful of published
+items, not §3's ~300. `fottage/` holds 22 files. §9's budget is per-page and holds; every
+judgement here about feed pagination, shard size or scroll behaviour is **provisional** until
+the seed import lands.
+
+### The CLS defect, found and fixed
+
+Attributed with a `PerformanceObserver` rather than guessed at, because Lighthouse names a
+score and not a culprit:
 
 ```
 0.2418  footer.site-footer [412x26 -> 412x412]
@@ -318,11 +358,21 @@ The run earned its place immediately by finding a real defect. CLS was attribute
 0.0888  footer.site-footer [412x330 -> 412x190] | ...
 ```
 
-The thumb `<img>` had no dimensions, so every card was zero-height until it decoded and then
-snapped to full height, dragging the footer up and down four times per load. The feed shard
-now carries `thumb_w`/`thumb_h` from `media_assets` — the columns already existed — and
-`public.js` sets them as width/height **attributes**, from which the browser derives the
-aspect ratio and reserves the exact box before a byte arrives.
+Two causes, one level apart, and both fixed:
+
+1. **The cards.** The thumb `<img>` had no dimensions, so every card was zero-height until it
+   decoded and then snapped to full height. The feed shard now carries `thumb_w`/`thumb_h`
+   from `media_assets` — the columns already existed — and `public.js` sets them as width and
+   height **attributes**, from which the browser derives the ratio and reserves the exact box
+   before a byte arrives. Worst per-card shift: **0.2418 → 0.0024.**
+
+2. **The footer.** With the feed empty for the first seconds on 3G, the footer sat *inside
+   the viewport*, where it grew from 26px to 410px as its copy arrived and shifted by 0.24.
+   Nothing is wrong with the footer; a shift below the fold costs nothing, and its whole
+   contribution was being briefly on screen at all. `#view { min-block-size: 82svh }` holds a
+   screen open for the archive before the archive arrives. `svh` rather than `vh`
+   deliberately: the small viewport height does not move when a phone's URL bar hides, so the
+   reservation cannot itself become the shift it is preventing.
 
 `.memory__plate:has(> .memory__img) { min-height: 0 }` carried a comment saying it "reserves
 the row before the image decodes, so a feed of lazy images does not shift the masonry".
