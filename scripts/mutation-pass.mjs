@@ -64,6 +64,17 @@ process.on('exit', () => { try { rmSync(work, { recursive: true, force: true });
  * A mutation must break the PROPERTY, not the syntax. Deleting a function so the test
  * errors out proves nothing — every test "fails" when the database is broken. Each one
  * below leaves a working system that is wrong in exactly one way.
+ *
+ * AND IT MUST BE ORDERED RIGHT, which is subtler and cost two false findings on the first
+ * run. The prelude lands immediately after `begin;` — BEFORE the test file inserts its own
+ * fixtures. So a mutation written as an UPDATE over existing rows touches nothing the test
+ * will look at: `update posts set location_public = location` rewrote six real rows and
+ * then the test created a fresh fixture, correctly fuzzed by the trigger, and passed. Both
+ * mutations reported SURVIVED and both were no-ops.
+ *
+ * The rule that falls out: mutate the MECHANISM, never the data. Redefine the function the
+ * trigger calls, drop the predicate out of the view, change the column default. Then a
+ * fixture created after the prelude is created wrong, which is the thing being tested.
  */
 const MUTATIONS = [
   {
@@ -147,9 +158,18 @@ const MUTATIONS = [
     kind: 'sql',
     sql: `
       -- The highest-severity failure this project can have: the fuzzed point becomes the
-      -- raw one. Every shape stays valid, every column stays populated, and every
-      -- contributor's home coordinate is published to three decimal places more.
-      update public.posts set location_public = location where location is not null;
+      -- raw one. fuzz_location becomes the identity, so the trigger still fires, every
+      -- column stays populated, every shape stays valid — and every contributor's exact
+      -- coordinate is what gets published.
+      --
+      -- Mutating the FUNCTION rather than the rows is load-bearing: an UPDATE that sets
+      -- location_public = location runs before the test inserts its fixture, the trigger
+      -- then fuzzes that fixture correctly, and the mutation is a no-op that reports
+      -- SURVIVED. That is exactly what the first run of this file did.
+      create or replace function public.fuzz_location(
+        p_location extensions.geography, p_precision public.location_precision)
+      returns extensions.geography language sql immutable parallel safe set search_path = ''
+      as $mutant$ select p_location $mutant$;
     `,
   },
   {
@@ -158,9 +178,19 @@ const MUTATIONS = [
     catches: ['18_publishable_posts', '19_takedown'],
     kind: 'sql',
     sql: `
-      -- Clear the flag rather than editing the view: the view's own logic stays under test,
-      -- and a taken-down row becomes publishable again by the front door.
-      update public.posts set takedown = false where takedown = true;
+      -- The takedown flag stops being consulted. Written as a column DEFAULT plus a rule on
+      -- the write path rather than an update of existing rows, for the ordering reason in
+      -- the header: the test sets takedown = true on its own fixture AFTER the prelude
+      -- runs, so clearing the flag beforehand changes nothing and reports a false SURVIVED.
+      --
+      -- A BEFORE trigger that forces the flag back to false is the mechanism-level version:
+      -- the view keeps its predicate and is tested honestly; the flag simply never sticks,
+      -- which is what "a takedown that does not take effect" actually looks like.
+      create or replace function public.__mutant_clear_takedown()
+      returns trigger language plpgsql as $mutant$
+      begin new.takedown := false; return new; end $mutant$;
+      create trigger zzz_mutant_clear_takedown before insert or update on public.posts
+        for each row execute function public.__mutant_clear_takedown();
     `,
   },
   {
@@ -173,9 +203,9 @@ const MUTATIONS = [
       /* Falsify the BUDGET, not the measurement: drop the ceiling below what the site
          really weighs. A mutation that inflated the site instead would be testing the
          scales rather than the assertion. */
-      const m = /const\s+BUDGET_KIB\s*=\s*(\d+)/.exec(src);
+      const m = /const\s+BUDGET\s*=\s*[\d\s*]+;/.exec(src);
       if (!m) return null;
-      return src.replace(m[0], `const BUDGET_KIB = 1`);
+      return src.replace(m[0], 'const BUDGET = 1024;');
     },
     run: 'node scripts/frontend-budget.mjs',
   },
@@ -195,20 +225,30 @@ const MUTATIONS = [
     restoreAlso: ['site/_headers', 'site/assets/js/config.js'],
   },
   {
-    id: 'exif-gate-passthrough',
+    id: 'exif-strip-flag',
     invariant: '§11 gate 2 — EXIF is stripped from every derivative',
-    catches: ['exif-gate'],
+    catches: ['worker/src/ladder.test.ts'],
     kind: 'source',
-    file: 'scripts/exif-gate.ts',
+    /* worker/src/ladder.ts, NOT scripts/exif-gate.ts.
+     *
+     * The gate script is the END-TO-END proof and needs R2 credentials and a real
+     * photograph, so the only thing runnable against a mutated copy of it here is
+     * `deno check` — and a type-check passes whether or not the assertion inside it is
+     * right. That mutation could never be killed, and an unkillable mutation reports a
+     * permanent false SURVIVED, which is worse than not testing it: it would sit in the
+     * findings list forever and train everyone to ignore the findings list.
+     *
+     * The MECHANISM is one ffmpeg flag, `-map_metadata -1`, and it has a real offline
+     * test. Remove it from STRIP and every rung still transcodes, every output still
+     * exists, and every photograph in the archive keeps its GPS. */
+    file: 'worker/src/ladder.ts',
     mutate: (src) => {
-      /* The gate's job is to REFUSE a derivative that still carries GPS. Make it accept
-         one: the probe still runs end to end and still reports, it simply stops judging. */
-      const m = /gpsFound\s*===?\s*null|readGps\([^)]*\)\s*===?\s*null/.exec(src);
-      if (!m) return null;
-      return src.replace(m[0], 'true');
+      const m = 'const STRIP = ["-map_metadata", "-1"';
+      if (!src.includes(m)) return null;
+      return src.replace(m, 'const STRIP = ["-map_chapters", "-1"');
     },
-    run: 'deno check scripts/exif-gate.ts',
-    note: 'compile-only: the full gate needs R2 credentials and a real photograph',
+    run: 'deno test --allow-all worker/src/ladder.test.ts',
+    note: 'the -map_metadata -1 flag, which IS the strip; the end-to-end gate needs R2',
   },
 ];
 
