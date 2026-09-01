@@ -442,6 +442,18 @@ html[lang="en"] .feed-end { font: 400 12px var(--font-en); }
 
 /* ─────────────────────────── Footer ─────────────────────────── */
 
+/* Reserves a screen for the archive before the archive arrives.
+   Measured, not guessed: on a mid-tier Android over 3G the feed is empty for the first few
+   seconds, which puts the FOOTER inside the viewport -- and then the footer grows from 26px
+   to 410px as its copy lands and shifts by 0.24, and again when a later render replaces it.
+   A layout shift below the fold costs nothing; the whole of the footer's contribution to
+   CLS was that it was briefly on screen at all.
+
+   `svh` rather than `vh`: the small viewport height does not change when a phone's URL bar
+   hides, so this cannot itself become a shift. The same reason .mapview uses an aspect
+   ratio instead of a viewport height. */
+#view { min-block-size: 82svh; }
+
 .site-footer {
   background: var(--olive);
   color: var(--footer-ink);
