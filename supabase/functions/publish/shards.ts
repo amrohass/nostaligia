@@ -283,6 +283,21 @@ export function feedEntry(row: SourcePost) {
     decade: row.decade,
     date_precision: row.date_precision,
     thumb: thumb ? thumb.path : null,
+    /* The thumb's own pixel dimensions, added 1 Sep 2026 (M6).
+     *
+     * Two numbers, and they are worth the bytes: without them the card's <img> has no
+     * intrinsic size, so every card is zero-height until its image decodes and then jumps
+     * to full height. Measured on a mid-tier Android over 3G, that was a CLS of 0.57 on the
+     * feed -- the cards resized, the footer was dragged up and down four times, and the
+     * worst single shift was 0.24. `.memory__plate:has(> .memory__img) { min-height: 0 }`
+     * carried a comment claiming it "reserves the row before the image decodes"; it
+     * reserves nothing, and that comment is why nobody looked again.
+     *
+     * They are already in `media_assets` (§3), so this costs a projection rather than a
+     * measurement. Null when the worker did not record them, and the front end falls back
+     * to a ratio rather than to zero. */
+    thumb_w: thumb ? thumb.width : null,
+    thumb_h: thumb ? thumb.height : null,
     author: author(row),
     likes: row.like_count,
     comments: row.comment_count,

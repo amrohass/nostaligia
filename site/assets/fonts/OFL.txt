@@ -1,0 +1,13 @@
+Both font families bundled in this directory are licensed under the
+SIL Open Font License, Version 1.1.
+
+  IBM Plex Sans Arabic  (c) 2017 IBM Corp.        https://github.com/IBM/plex
+  Inter                 (c) 2016 The Inter Project Authors
+                                                  https://github.com/rsms/inter
+
+The files here are SUBSETS produced by scripts/subset-fonts.py: glyph coverage is
+reduced to the unicode ranges the archive needs. No outline, metric or layout table
+has been modified. The OFL permits this and requires that the licence travel with the
+font, which is what this file is for.
+
+The full licence text: https://openfontlicense.org/open-font-license-official-text/

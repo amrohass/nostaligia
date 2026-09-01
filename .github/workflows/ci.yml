@@ -157,6 +157,34 @@ jobs:
       - name: §9's performance budget
         run: node scripts/frontend-budget.mjs
 
+      # M6's fonts. The SHAPING check lives in scripts/subset-fonts.py, which needs
+      # HarfBuzz, fontTools and the unsubsetted originals -- none of them in this repository
+      # and none of them belonging in a runner. What runs here is everything decidable from
+      # the committed output: that the faces exist, are really WOFF2, still carry the GSUB
+      # and GDEF that Arabic joining lives in, split their unicode-ranges without overlap,
+      # and cover every character the interface's own strings contain. That last one found
+      # two glyphs (U+2715, U+2304) that neither family has and that had been rendering from
+      # whatever font the reader's OS happened to supply.
+      - name: the font subsets, from the committed output
+        run: node scripts/frontend-fonts-test.mjs
+
+      # M6's RTL pass. §9: "CSS logical properties only -- never left/right", and "the
+      # decade slider must run right-to-left in Arabic". The slider's actual direction is
+      # the BROWSER's behaviour and is measured by scripts/rtl-browser-probe.mjs, which
+      # needs Playwright and is run by hand; what this asserts is the half that is ours --
+      # that nothing overrides the direction the control inherits, and that no arrow points
+      # the same way in both languages.
+      - name: logical properties, mirrored glyphs, the slider's direction
+        run: node scripts/frontend-rtl-test.mjs
+
+      # M6's monitor and §11 gate 5. The scheduled run is .github/workflows/monitor.yml and
+      # needs a credential; this is the part that does not. It is the assertion that
+      # matters most, because gate 5 fails SILENTLY: a held pipeline and an idle one must
+      # produce opposite verdicts AT THE SAME AGE, and an alert that has never been shown to
+      # fire is a line of code rather than a monitor.
+      - name: the monitor separates a held pipeline from an idle one
+        run: node scripts/monitor.mjs --selftest
+
       # docs/audit-2026-08-31.md was committed holding THREE concatenated copies of itself,
       # the first two cut off mid-sentence, because the sections were assembled by hand
       # across retries and one splice used a `String.replace` whose replacement contained a
@@ -169,6 +197,24 @@ jobs:
         run: |
           node scripts/write-report.mjs --selftest
           for f in docs/*.md; do node scripts/write-report.mjs --check "$f"; done
+
+      # Three secrets have now drifted between two locations and each surfaced as a live
+      # outage rather than a caught bug: PUBLISH_SECRET (vault vs function env, 30 Aug), the
+      # Turnstile secret in GoTrue (31 Aug), and TURNSTILE_SECRET_KEY (.dev.vars vs function
+      # env, 1 Sep). The check itself CANNOT run here -- every reading it takes needs a
+      # project credential, and putting those in a runner would create one more copy of every
+      # secret, which is the problem rather than the fix. So the pre-flight is manual and CI
+      # runs the part that has no credential in it: that the comparison DISCRIMINATES.
+      #
+      # That is the assertion doing the work. A comparator that answers MATCH to everything
+      # passes the happy-path test and is worthless -- and this repository has shipped exactly
+      # that shape twice (05_matrix's missing anti-vacuity control; backup.ts's completeness
+      # grep that tested a string rather than a thing). The self-test holds it to five
+      # readings, including that ONE readable copy out of three is UNVERIFIABLE and never
+      # MATCH, and that nothing derived from a secret -- not a digest, not an 8-character
+      # prefix -- can reach the output.
+      - name: the secret-consistency comparison discriminates
+        run: node scripts/secret-consistency.mjs --selftest
 
   # Gate 1 of request-upload: the refusals that happen before the function touches the
   # network, reads an environment variable or learns who is asking. They need no

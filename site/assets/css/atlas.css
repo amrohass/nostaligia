@@ -67,9 +67,16 @@ a:hover { text-decoration: underline; }
 
 /* Every title carries a gloss in the other language. The gloss runs in its own
    direction but stays flush with the page's reading edge, so the two lines share
-   a margin instead of splaying apart. */
-.gloss-line { direction: ltr; text-align: right; }
-html[lang="en"] .gloss-line { direction: rtl; text-align: left; }
+   a margin instead of splaying apart.
+
+   `text-align: end` rather than a physical side, and it collapses two rules into one:
+   `end` resolves against the ELEMENT's own direction, and the gloss's direction is
+   always the opposite of the page's — so `end` is the page's reading edge in both
+   languages, by construction rather than by a second rule that has to agree with the
+   first. §9: logical properties only. The `html[lang="en"]` override that used to sit
+   here was also a specificity trap (0,2,1 beats any single-class mobile rule). */
+.gloss-line { direction: ltr; text-align: end; }
+html[lang="en"] .gloss-line { direction: rtl; }
 
 /* ─────────────────────────── Header ─────────────────────────── */
 
@@ -298,20 +305,27 @@ html[lang="en"] .hero__stats li { font: 500 12px var(--font-en); }
   color: var(--ink-55);
 }
 
-/* Sits on the far edge from the reading side, so it never collides with the
-   caption. Physical values because the badge sets its own direction. */
+/* Sits on the far edge from the reading side, so it never collides with the caption.
+   `inset-inline-end` does that in both languages: the reading side is the inline START,
+   so the far edge is the inline END, and the browser resolves which physical side that
+   is. This used to be `left: 10px` plus an `html[lang="en"]` rule undoing it, which was
+   the same behaviour written twice and §9's "never left/right" broken once.
+
+   The badge no longer sets `direction: ltr` either -- that was what made a logical inset
+   impossible, since insets resolve against the element's OWN direction. It was never
+   needed: `unicode-bidi: isolate` is what keeps a duration like 2:34 out of the
+   surrounding bidi run, and digits are left-to-right under the bidi algorithm anyway. */
 .memory__duration {
   position: absolute;
   bottom: 10px;
-  left: 10px;
+  inset-inline-end: 10px;
   font: 600 10.5px var(--font-en);
-  direction: ltr;
+  unicode-bidi: isolate;
   background: rgba(38, 40, 31, .72);
   color: var(--paper);
   padding: 4px 8px;
   border-radius: var(--r-sm);
 }
-html[lang="en"] .memory__duration { left: auto; right: 10px; }
 
 .memory__body {
   padding: 11px 14px 13px;
@@ -1004,9 +1018,19 @@ html[lang="en"] .review-note { font: 400 11px/1.7 var(--font-en); }
   border-radius: var(--r-md);
 }
 
-/* Reserves the row before the image decodes, so a feed of lazy images does not
-   shift the masonry under a reader's finger as each one lands. */
-.memory__plate:has(> .memory__img) { display: block; min-height: 0; }
+/* The FALLBACK box, for a thumb whose dimensions nothing recorded.
+   The real reservation is the width/height attribute pair public.js sets from the shard's
+   thumb_w/thumb_h — the browser divides them and holds the exact box. This ratio only
+   applies when those are absent, and 4/3 is the shape most of the archive's photographs
+   already are, so a wrong guess here is a small wrong guess rather than a card that starts
+   at zero height. `:not([width])` so it never fights the attributes when they ARE there. */
+.memory__img:not([width]) { aspect-ratio: 4 / 3; object-fit: cover; }
+
+/* This rule used to carry a comment saying it "reserves the row before the image decodes,
+   so a feed of lazy images does not shift the masonry". `min-height: 0` reserves nothing —
+   it was the opposite of what it claimed, and the claim is why nobody looked again while
+   the feed measured CLS 0.57 on a mid-tier Android. Kept only for the display change. */
+.memory__plate:has(> .memory__img) { display: block; }
 
 .viewer__media-wrap {
   width: 100%;

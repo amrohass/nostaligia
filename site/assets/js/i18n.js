@@ -50,8 +50,8 @@
     'donate.cta':     { ar: 'تبرّع الآن',         en: 'Donate' },
 
     // ── Viewer ──────────────────────────────────────────────
-    'viewer.back':      { ar: '✕ العودة إلى الأرشيف',  en: '✕ Back to the archive' },
-    'viewer.next':      { ar: 'مرّر للأسفل للذكرى التالية ⌄', en: 'Scroll down for the next memory ⌄' },
+    'viewer.back':      { ar: '× العودة إلى الأرشيف',  en: '× Back to the archive' },
+    'viewer.next':      { ar: 'مرّر للأسفل للذكرى التالية ↓', en: 'Scroll down for the next memory ↓' },
     'viewer.save':      { ar: 'حفظ',      en: 'Save' },
     'viewer.like':      { ar: 'إعجاب',    en: 'Like' },
     'comments.title':   { ar: 'التعليقات', en: 'Comments' },
@@ -330,7 +330,9 @@
     'admin.places':   { ar: 'الأماكن والخريطة', en: 'Places & map' },
     'admin.members':  { ar: 'الأعضاء',         en: 'Members' },
     'admin.reports':  { ar: 'البلاغات',        en: 'Reports' },
-    'admin.backToSite': { ar: '← عودة إلى الموقع', en: '← Back to the site' },
+    // The arrow MIRRORS. "Back" is where the reading started, which in Arabic is the
+    // right; a left arrow there points forward. Both glyphs are in the Latin subset.
+    'admin.backToSite': { ar: '→ عودة إلى الموقع', en: '← Back to the site' },
     'admin.me':       { ar: 'هناء ع.',          en: 'Hana A.' },
 
     // ── Admin: overview ─────────────────────────────────────
@@ -809,6 +811,54 @@
     return lang === 'ar' ? toArabicDigits(value) : String(value);
   }
 
+  /* ── Dates ────────────────────────────────────────────────
+     §9 names `Intl.DateTimeFormat('ar-PS')` and, in the same breath, "one digit system,
+     held consistently". Until M6 there was no date formatting at all: every date on the
+     site was the raw ISO day off the shard, so an Arabic page rendered "٤٢ ذكرى" beside
+     "2026-08-31" — two numbering systems, one screen.
+
+     `-u-nu-arab` is what holds the second half of that rule. ar-PS's own CLDR default is
+     not guaranteed to be Arabic-Indic, and num()/year() above are unconditionally
+     Arabic-Indic, so the numbering system is stated rather than inherited.
+
+     Day precision, never a time. §7: "Public timestamps are day-precision. Never expose
+     exact submission times publicly." The shards already carry a day rather than an
+     instant; this makes it impossible to render more than one even if that changes. */
+  var DATE_FORMATTERS = {};
+
+  function dateFormatter() {
+    if (!(lang in DATE_FORMATTERS)) {
+      try {
+        DATE_FORMATTERS[lang] = new global.Intl.DateTimeFormat(
+          lang === 'ar' ? 'ar-PS-u-nu-arab' : 'en-GB',
+          // timeZone UTC, deliberately: a day-precision string is a CALENDAR DAY, not an
+          // instant. Formatted in the reader's zone, 2026-08-31 renders as the 30th for
+          // everyone west of Greenwich — a diaspora archive has readers on both sides.
+          { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }
+        );
+      } catch (e) {
+        DATE_FORMATTERS[lang] = null;   // an engine without the locale data
+      }
+    }
+    return DATE_FORMATTERS[lang];
+  }
+
+  /**
+   * A day string ('2026-08-31', or an ISO timestamp) as a readable date.
+   *
+   * Anything that is not a date comes back untouched rather than as "Invalid Date": these
+   * values arrive from a shard, and a missing field must not put an error string on a card.
+   */
+  function day(value) {
+    var raw = String(value == null ? '' : value);
+    var parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+    if (!parts) return raw;
+    var iso = raw.slice(0, 10);
+    var fmt = dateFormatter();
+    if (!fmt) return lang === 'ar' ? toArabicDigits(iso) : iso;
+    return fmt.format(new Date(Date.UTC(+parts[1], +parts[2] - 1, +parts[3])));
+  }
+
   /** Look up a string, substituting {placeholders}. */
   function t(key, vars) {
     var entry = STRINGS[key];
@@ -859,6 +909,7 @@
     t: t,
     num: num,
     year: year,
+    day: day,
     pick: pick,
     gloss: gloss,
     digits: toArabicDigits

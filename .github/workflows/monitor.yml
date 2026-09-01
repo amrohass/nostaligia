@@ -1,0 +1,90 @@
+name: monitor
+
+# §10's M6 monitoring and §11's gate 5, on a clock.
+#
+# ── Why a scheduled workflow and not pg_cron ────────────────
+#
+# The thing being watched is whether the publish pipeline is stopped. A monitor that lives
+# INSIDE the system it monitors cannot report that the system is not running — pg_cron is
+# already unscheduled here (§2's amendment, migration 0820140000), and if it were the
+# monitor, the failure it exists to catch would be the failure that silences it.
+#
+# GitHub Actions is outside Supabase and outside Cloudflare, costs nothing on this plan, and
+# already mails the repository owner when a scheduled run fails. For a solo maintainer that
+# email IS the alerting system, which is why the job is written to FAIL rather than to print.
+#
+# ── What Amro has to provision, once ────────────────────────
+#
+#   Settings → Secrets and variables → Actions → New repository secret
+#     SUPABASE_ACCESS_TOKEN   a personal access token from
+#                             https://supabase.com/dashboard/account/tokens
+#
+# Until it exists this job FAILS EVERY NIGHT, deliberately, with "REQUIRED CHECK COULD NOT
+# RUN: publish". That is the correct behaviour and the reason `--require publish` is passed:
+# without it a runner with no credential reports `unknown`, `unknown` is not an alert, and
+# the workflow would go green every night while measuring nothing at all. A monitor that is
+# believed and never looked is worse than no monitor.
+#
+# No database password is needed. `supabase db query --linked` mints its own temporary login
+# role from the access token — the same path scripts/pgtap-deployed.mjs uses.
+
+on:
+  schedule:
+    # Every six hours. Not every five minutes: the alert this exists for is an operator
+    # hold left set, which is measured in hours of a person forgetting rather than in
+    # minutes, and a schedule that mails four times a day is a schedule that gets filtered.
+    - cron: '17 */6 * * *'
+  # So a change to the monitor can be proved without waiting for the clock.
+  workflow_dispatch:
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    name: publish age, storage, budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.115.0
+
+      # `--linked` reads supabase/.temp/project-ref, which is not checked in. Linking here
+      # is what makes the project ref explicit rather than ambient.
+      - name: Link the project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase link --project-ref pjqvtmhizbnimqyxjbyq
+
+      - name: The monitor's own logic, before it is trusted with a verdict
+        run: node scripts/monitor.mjs --selftest
+
+      - name: Check the deployed system
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        # `--require publish` is gate 5. See the header: a publish check that could not run
+        # must fail this job rather than pass it as `unknown`.
+        run: node scripts/monitor.mjs --require publish
+
+      # Written whatever the outcome, so a failed run leaves the numbers behind rather than
+      # only the exit code.
+      - name: Keep the reading
+        if: always()
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node scripts/monitor.mjs --json > monitor.json || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: monitor-reading
+          path: monitor.json
+          retention-days: 30

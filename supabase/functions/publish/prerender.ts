@@ -172,20 +172,20 @@ export const SPA_SCRIPTS = [
  * The shell's stylesheets, in order, and pinned against site/index.html by the same test as
  * SPA_SCRIPTS.
  *
- * The Google Fonts link is here for a reason that is easy to get wrong in either direction.
- * It is a known_violations entry in config/site.json, removed by M6's font subsetting, and
- * the CSP already blocks it — so it does nothing today. Omitting it would still be wrong:
- * the prerendered page is a SEPARATE document from the shell, so a reader arriving from a
- * shared link would get a different typeface from everyone else until the SPA hydrated, and
- * on a slow connection that is the whole visit.
+ * The font stylesheet leads, and it is now OURS. It used to be the Google Fonts link, kept
+ * here deliberately so a reader arriving from a shared link would not get a different
+ * typeface from everyone else until the SPA hydrated — on a slow connection that is the
+ * whole visit. M6 made that argument moot in the best way: /assets/css/fonts.css is the
+ * same self-hosted, subsetted, unicode-range-split set the shell loads, so the prerendered
+ * page and the shell are now identical rather than merely consistent.
  *
- * Consistency also has a safety consequence: scripts/frontend-csp-test.mjs scans this file
- * alongside site/, so the origin ratchet covers the prerendered pages. Leaving the font out
- * would put this document permanently out of step with the shell and give M6 two places to
- * remember instead of one.
+ * The pinning against site/index.html is what keeps it that way, and it is why the list is
+ * here rather than inlined below: scripts/frontend-csp-test.mjs scans this file alongside
+ * site/, so the origin ratchet covers the prerendered pages too. When the two shells stopped
+ * loading Google Fonts and this file still did, the ratchet is what said so.
  */
 export const SPA_STYLES = [
-  "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap",
+  "/assets/css/fonts.css",
   "/assets/css/tokens.css",
   "/assets/css/atlas.css",
 ];

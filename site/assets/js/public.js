@@ -390,13 +390,29 @@
         ICONS.waveform(130, 24, 7)
       ]));
     } else if (thumb) {
+      /* width/height ATTRIBUTES, not CSS. With `width: 100%; height: auto` in the
+         stylesheet, these two do not set the rendered size -- the browser divides them to
+         get an aspect ratio and reserves the right box before a single byte of the image
+         has arrived. Without them a card is zero-height until its thumb decodes and then
+         snaps to full height, which measured as CLS 0.57 on the feed over 3G and dragged
+         the footer up and down four times per load.
+
+         `thumb_w`/`thumb_h` come from the shard (M6). An older shard, or an asset whose
+         dimensions the worker never recorded, has neither -- and then no attribute is set
+         at all and .memory__img's CSS fallback ratio takes over. Setting a guessed number
+         here would reserve the WRONG box, which shifts as badly as reserving none. */
+      var img = el('img.memory__img', {
+        src: thumb,
+        alt: pick(title),
+        loading: 'lazy',
+        decoding: 'async'
+      });
+      if (entry.thumb_w > 0 && entry.thumb_h > 0) {
+        img.setAttribute('width', String(entry.thumb_w));
+        img.setAttribute('height', String(entry.thumb_h));
+      }
       parts.push(el('div.memory__plate', null, [
-        el('img.memory__img', {
-          src: thumb,
-          alt: pick(title),
-          loading: 'lazy',
-          decoding: 'async'
-        }),
+        img,
         displayKind(entry) === 'video' ? el('span.memory__duration', { text: '▶' }) : null
       ]));
     } else {
@@ -624,7 +640,7 @@
             ? el('a.profile-link', { href: '/u/' + encodeURIComponent(who.handle) },
                 el('span.comment__name', null, bdi(name)))
             : el('span.comment__name', null, bdi(name || t('comments.someone'))),
-          el('span.comment__when', { text: comment.day || '' }),
+          el('span.comment__when', { text: I18N.day(comment.day) }),
           comment.justPosted ? el('span.privacy-flag', { text: t('comments.justPosted') }) : null
         ]),
         el('p.comment__body', null, bdi(comment.body))
@@ -923,7 +939,7 @@
           el('h2.dialog__title', { text: t('report.title') }),
           el('p.dialog__blurb', { text: t('report.blurb') })
         ]),
-        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
       ]),
       el('div.field', null, [
         el('label.field__label', { text: t('report.kind') }),
@@ -1043,7 +1059,7 @@
           el('h2.dialog__title', { text: t(mode === 'signup' ? 'signup.title' : 'login.title') }),
           el('p.dialog__blurb', { text: t(mode === 'signup' ? 'signup.blurb' : 'login.blurb') })
         ]),
-        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
       ])
     ];
 
@@ -1510,7 +1526,7 @@
         ]),
         el('button.dialog__close', {
           type: 'button', 'aria-label': t('action.close'), onclick: close,
-          text: '✕ ' + t('action.close')
+          text: '× ' + t('action.close')
         })
       ]),
       canvasSlot,
@@ -1756,7 +1772,7 @@
           el('h2.dialog__title', { text: t('share.title') }),
           el('p.dialog__blurb', { text: t('share.blurb') })
         ]),
-        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕ ' + t('action.close') })
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '× ' + t('action.close') })
       ]),
       kindRow,
       field(t('share.fTitle'), { type: 'text', placeholder: t('share.fTitlePh'), required: true }),
@@ -1887,7 +1903,7 @@
               el('a', { href: '/item/' + encodeURIComponent(c.post_id) }, [
                 t('profile.onMemory') + ' ', bdi(pick(title))
               ]),
-              el('span.comment__when', { text: c.day || '' })
+              el('span.comment__when', { text: I18N.day(c.day) })
             ])
           ]);
         }))

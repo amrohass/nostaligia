@@ -290,7 +290,7 @@
                       el('span', { text: t('action.' + row.action) === 'action.' + row.action
                         ? row.action : t('action.' + row.action) }),
                       ' · ',
-                      el('span.comment__when', { text: String(row.created_at || '').slice(0, 10) })
+                      el('span.comment__when', { text: I18N.day(row.created_at) })
                     ])
                   ]);
                 }))
@@ -949,7 +949,7 @@
           el('h2.dialog__title', { text: t('q.locationFix') }),
           el('p.dialog__blurb', { text: t('q.locationBlurb') })
         ]),
-        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
       ]),
       summary,
       el('div.field', null, [
@@ -1013,7 +1013,7 @@
           el('h2.dialog__title', { text: t('ar.takedownTitle') }),
           el('p.dialog__blurb', { text: t('ar.takedownBlurb') })
         ]),
-        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
       ]),
       el('p.detail__story', null, bdi(pick(titlePair(row)))),
       noteInput,
@@ -1267,7 +1267,7 @@
           el('h2.dialog__title', { text: editing ? t('pl.editTitle') : t('pl.addTitle') }),
           el('p.dialog__blurb', { text: t('pl.blurb') })
         ]),
-        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
       ]),
       names.node,
       el('div.field', null, [
@@ -1347,7 +1347,7 @@
           el('h2.dialog__title', { text: t('pl.pinTitle') }),
           el('p.dialog__blurb', { text: t('pl.pinBlurb') })
         ]),
-        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '✕' })
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
       ]),
       slot,
       el('div.dialog__actions', null, [
@@ -1474,7 +1474,7 @@
                    A moderator has to tell them apart before reading the reason. */
                 el('span.queue-item__sub', { text: t('rp.kind.' + (row.kind || 'abuse'))
                   + ' · ' + t('rp.on.' + row.target_type)
-                  + ' · ' + String(row.created_at || '').slice(0, 10) })
+                  + ' · ' + I18N.day(row.created_at) })
               ]);
             })
           : [panelState(p, 'rp.empty')]),
@@ -1494,7 +1494,7 @@
           el('p.detail__story', null, bdi(row.reason)),
           el('div.detail__fields', null, [
             detailField(t('rp.target'), t('rp.on.' + row.target_type)),
-            detailField(t('rp.filed'), String(row.created_at || '').slice(0, 10)),
+            detailField(t('rp.filed'), I18N.day(row.created_at)),
             detailField(t('mb.colStatus'), t('rp.' + (row.status === 'closed' ? 'closed' : 'open')))
           ]),
           row.target_type === 'post'
