@@ -234,3 +234,42 @@ export function serviceRoleKey() {
   if (!found) throw new Error('no legacy service_role key on this project');
   return found.api_key;
 }
+
+/* ── A session that is NOT the stored one ───────────────────── */
+
+/**
+ * Mints a throwaway session through the admin API, leaving `.harness.vars` untouched.
+ *
+ * This exists for the browser harness. auth.js keeps the refresh token in
+ * sessionStorage['rma.refresh'] and exchanges it on load, so seeding a browser means
+ * handing it a refresh token — and the browser will then ROTATE it, silently putting the
+ * copy in `.harness.vars` one generation behind. GoTrue's reuse grace hides that for a
+ * while and then it does not, and the failure arrives days later looking like a broken
+ * test. So the browser gets its own, and the stored credential is never spent by a page.
+ *
+ * Needs the service-role key, like the bootstrap. Sends no mail (generate_link returns the
+ * link rather than mailing it) and creates nothing.
+ */
+export async function mintDisposable(role) {
+  const vars = readVars();
+  const email = vars[`RMA_HARNESS_${role.toUpperCase()}_EMAIL`];
+  if (!email) throw new ReauthRequired(role, `no RMA_HARNESS_${role.toUpperCase()}_EMAIL in .harness.vars`);
+
+  const svc = serviceRoleKey();
+  const gen = await fetch(`${SUPABASE}/auth/v1/admin/generate_link`, {
+    method: 'POST',
+    headers: { apikey: svc, Authorization: `Bearer ${svc}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'magiclink', email }),
+  });
+  const gb = await gen.json().catch(() => ({}));
+  if (!gb.hashed_token) throw new Error(`generate_link ${gen.status}: ${JSON.stringify(gb).slice(0, 200)}`);
+
+  const ver = await fetch(`${SUPABASE}/auth/v1/verify`, {
+    method: 'POST',
+    headers: { apikey: ANON, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'magiclink', token_hash: gb.hashed_token }),
+  });
+  const vb = await ver.json().catch(() => ({}));
+  if (!vb.refresh_token) throw new Error(`verify ${ver.status}: ${JSON.stringify(vb).slice(0, 200)}`);
+  return { ...vb, email };
+}
