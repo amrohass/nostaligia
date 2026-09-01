@@ -36,6 +36,15 @@
 .backup.vars
 .backup.vars.*
 
+# The E2E harness's refresh tokens (2 Sep 2026). A THIRD filename, so none of the rules
+# above covers it — and it holds a live capability: a refresh token mints an access token
+# for a harness account with no captcha and no password, which is exactly why the
+# authenticated E2E suite can run at all. Committed, it would hand any reader a moderator
+# session on the deployed project. Bootstrapped by scripts/harness-bootstrap.mjs and
+# rewritten on every use, because GoTrue rotates the token on each exchange.
+.harness.vars
+.harness.vars.*
+
 # Anything that smells like a key. Belt and braces alongside gitleaks.
 *.pem
 *.key
