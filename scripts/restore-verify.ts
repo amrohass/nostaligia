@@ -53,7 +53,7 @@
  * ordinary outcome of a script that defaults its target.
  */
 
-import { decrypt } from "./backup.ts";
+import { armScratchSweep, decrypt } from "./backup.ts";
 
 /* ── Arguments ────────────────────────────────────────────────────────────── */
 
@@ -437,6 +437,18 @@ export function redAssertions(suiteOut: string): { file: string; desc: string }[
 }
 
 /* ── The run ──────────────────────────────────────────────────────────────── */
+
+/* Every path this process writes outside the backup directory is enumerated and deleted
+   when it ends -- a normal finish, a throw, a `Deno.exit` refusal or a Ctrl-C. It is armed
+   here rather than inside the run because the refusals below exit before the run starts.
+
+   This file writes nothing itself: `dumpFromBackup` decrypts into memory and the SQL goes to
+   psql on stdin, which is the property backup.ts's selftest asserts by scanning both files.
+   What it DOES do is spawn `pgtap-deployed.mjs --local`, which writes a rewritten copy of
+   all 37 test files into a temp directory -- project SQL rather than member data, but 37
+   files a run, never removed until now, and "the tooling cleans up after itself" is not a
+   claim worth making with an exception in it. */
+armScratchSweep("restore-verify scratch");
 
 if (has("--selftest")) {
   selftest();

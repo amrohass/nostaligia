@@ -222,7 +222,7 @@ async function r2(a: Account, key: string, method: "GET" | "HEAD" | "PUT", body?
  */
 async function originalsFromDatabase(): Promise<Map<string, number>> {
   const sql = `select storage_path, bytes from public.media_assets where bucket = 'originals' order by storage_path;`;
-  const file = await Deno.makeTempFile({ suffix: ".sql" });
+  const file = await scratchFile(".sql");
   await Deno.writeTextFile(file, sql);
   try {
     const { code, stdout, stderr } = await new Deno.Command("npx", {
@@ -305,7 +305,7 @@ function dirSink(dir: string): Sink {
  * is that the thing which must not happen is made impossible rather than remembered. So a
  * destination inside the repository is refused by name.
  */
-export function refusesDir(dir: string, repoRoot: string): string[] {
+export function refusesDir(dir: string, repoRoot: string, tempRoots: string[] = []): string[] {
   const norm = (s: string) => s.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   const d = norm(dir);
   const r = norm(repoRoot);
@@ -314,8 +314,144 @@ export function refusesDir(dir: string, repoRoot: string): string[] {
   if (d && (d === r || d.startsWith(`${r}/`))) {
     out.push(`--to-dir is inside the repository (${repoRoot}) — encrypted member data must not sit in the working tree`);
   }
+  /* And a destination inside a TRANSIENT directory, added 1 Sep 2026 after the second
+     incident of the same shape.
+     Twice now, unencrypted member data has been found in a local scratchpad after the fact,
+     from two different sessions. One of the two was this script's own output: `--to-dir`
+     pointed at a scratch path, and the header above is explicit that the ORIGINALS are
+     written in the clear — its argument for that is sound, but it rests on "the destination
+     bucket being private and on R2's own encryption at rest", and a temp directory is
+     neither. So the plaintext masters of real contributors, EXIF intact (§7 calls a face and
+     a voice the sensitive part), sat in a directory whose whole contract is that something
+     else sweeps it later.
+     A backup in a directory designed to be swept is not a backup. It is a disclosure with a
+     delay, and it fails in both directions at once. Refused by name, the same way the
+     repository is. */
+  for (const t of tempRoots) {
+    const tr = norm(t);
+    if (!tr || !d) continue;
+    if (d === tr || d.startsWith(`${tr}/`)) {
+      out.push(`--to-dir is inside a temporary directory (${t}) — originals are written in the CLEAR (see the header), and a scratch path is swept by something else, not held by you`);
+    }
+  }
   return out;
 }
+
+/* ── Everything written outside the destination, enumerated and removed ───── */
+
+/*
+ * The one channel for transient files, and a sweep that names what it deleted.
+ *
+ * Both this script and restore-verify.ts used `Deno.makeTempFile()` directly, scattered
+ * across four call sites. Each one removed its own file in a `finally`, which is correct and
+ * is also exactly the arrangement that leaves nothing to inspect when it is not: there was no
+ * list of what had been written, so "did this run leave anything behind" was not a question
+ * the tool could answer — only a question a person could ask a directory listing, afterwards,
+ * if they thought to.
+ *
+ * Now every transient path is recorded as it is handed out and the sweep enumerates and
+ * deletes the lot, printing what it removed. Called from a `finally` and from SIGINT, so a
+ * crash and a Ctrl-C clean up on the same path a success does.
+ *
+ * These files hold SQL the tool composed — a query, a test — and never a decrypted dump:
+ * `dumpFromBackup` decrypts into memory and pipes it to psql's stdin, and `--selftest`
+ * asserts that no `decrypt(` result reaches a write call in either file. That assertion is
+ * the one that matters. The sweep is for the rest.
+ */
+const scratchPaths: string[] = [];
+let scratchRoot: string | null = null;
+
+export async function scratchDir(): Promise<string> {
+  if (scratchRoot === null) {
+    scratchRoot = await Deno.makeTempDir({ prefix: "rma-backup-scratch-" });
+    scratchPaths.push(scratchRoot);
+  }
+  return scratchRoot;
+}
+
+/** A path inside the single scratch root, recorded so the sweep can find it again. */
+export async function scratchFile(suffix: string): Promise<string> {
+  const p = `${await scratchDir()}/${crypto.randomUUID()}${suffix}`;
+  scratchPaths.push(p);
+  return p;
+}
+
+/* A write call with a `decrypt(` in its arguments. Built once, up here, so the selftest's
+   control fixture does not have to spell it out a second time — see the CONTROL there.
+   NOT global: a `g` regex carries `lastIndex` between `.test()` calls and would answer true
+   and then false for the same input. The scan below adds the flag on its own copy. */
+const PLAINTEXT_WRITE = /Deno\.write(?:Text)?File(?:Sync)?\([^)]*decrypt\(/;
+
+/**
+ * Enumerate and delete. Returns what it could not remove, so a caller can be loud about it.
+ *
+ * SYNCHRONOUS, and that is the whole reason it works. This script refuses a bad destination
+ * with `Deno.exit(1)` in five places, and `Deno.exit` does not run a `finally` — so a sweep
+ * in one would cover the successful runs and miss every refusal, which is the half where a
+ * half-written file is most likely. It hangs off `unload` instead, which fires on a normal
+ * end AND on `Deno.exit`, and an unload handler cannot await.
+ */
+export function sweepScratch(label = "scratch"): string[] {
+  if (scratchPaths.length === 0) return [];
+  const stuck: string[] = [];
+  let removed = 0;
+  /* Reversed: files before the directory that holds them. */
+  for (const p of [...scratchPaths].reverse()) {
+    try {
+      Deno.removeSync(p, { recursive: true });
+      removed++;
+    } catch (e) {
+      if (!(e instanceof Deno.errors.NotFound)) stuck.push(`${p} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  console.log(`\n== ${label}: ${scratchPaths.length} path(s) written outside the destination, ${removed} removed ==`);
+  if (scratchRoot) console.log(`  root: ${scratchRoot}`);
+  for (const s of stuck) console.log(`  COULD NOT REMOVE: ${s} — delete it by hand`);
+  scratchPaths.length = 0;
+  scratchRoot = null;
+  return stuck;
+}
+
+/**
+ * Arms the sweep for every way this process can end.
+ *
+ * `unload` covers a normal finish, an uncaught throw, and every `Deno.exit` refusal.
+ * SIGINT does not fire it — Deno's default handler terminates outright — so Ctrl-C is
+ * registered separately and exits through the sweep.
+ */
+export function armScratchSweep(label = "scratch"): void {
+  globalThis.addEventListener("unload", () => { sweepScratch(label); });
+  try {
+    Deno.addSignalListener("SIGINT", () => {
+      sweepScratch(`${label} (interrupted)`);
+      Deno.exit(130);
+    });
+  } catch { /* a platform without SIGINT is not a reason to refuse to run */ }
+}
+
+/**
+ * The directories this machine treats as transient, however it happens to be configured.
+ *
+ * Read from the environment rather than hardcoded to `/tmp` and `C:\Temp`: an agent
+ * scratchpad, a CI runner and a Windows profile all put it somewhere different, and a guard
+ * that only knows two paths is a guard that passes on the third. `Deno.makeTempDir()` is
+ * asked where it actually writes rather than being predicted — that answer is the OS's own,
+ * and it is the one that matters.
+ */
+export function tempRoots(): string[] {
+  const out = new Set<string>();
+  for (const k of ["TMPDIR", "TMP", "TEMP", "RUNNER_TEMP", "CLAUDE_SCRATCHPAD"]) {
+    const v = Deno.env.get(k);
+    if (v) out.add(v);
+  }
+  try {
+    const probe = Deno.makeTempDirSync();
+    out.add(probe.replace(/\\/g, "/").replace(/\/[^/]+$/, ""));
+    Deno.removeSync(probe, { recursive: true });
+  } catch { /* no permission to ask; the env vars above still apply */ }
+  return [...out];
+}
+
 
 /* ── The database ─────────────────────────────────────────────────────────── */
 
@@ -434,7 +570,7 @@ const DUMPS: Dump[] = [
 
 /** Runs one statement through the CLI and returns the single text column it selects. */
 async function queryText(sql: string): Promise<string> {
-  const file = await Deno.makeTempFile({ suffix: ".sql" });
+  const file = await scratchFile(".sql");
   await Deno.writeTextFile(file, sql);
   try {
     const { code, stdout, stderr } = await new Deno.Command("npx", {
@@ -535,7 +671,7 @@ async function completeness(allSql: string): Promise<{ what: string; expected: n
 
 /** The counting queries select `n`, so they need their own reader. */
 async function count(sql: string): Promise<number> {
-  const file = await Deno.makeTempFile({ suffix: ".sql" });
+  const file = await scratchFile(".sql");
   await Deno.writeTextFile(file, `${sql};`);
   try {
     const { stdout } = await new Deno.Command("npx", {
@@ -603,8 +739,8 @@ async function selftest() {
      "CONTROL: a sibling whose name merely STARTS with the repo path is not inside it");
 
   // The dir sink round-trips the same bytes the R2 sink would, under the same encryption.
-  const tmp = await Deno.makeTempDir();
-  try {
+  const tmp = await scratchDir();
+  {
     const s = dirSink(tmp);
     const key = "db/2026-09-01T00-00-00Z/schema.sql.enc";
     await s.put(key, await encrypt(plain, "correct horse"));
@@ -615,8 +751,53 @@ async function selftest() {
     const round = await decrypt(await s.get(key), "correct horse");
     ok(new TextDecoder().decode(round) === new TextDecoder().decode(plain),
        "and what comes off the disk decrypts to the bytes that went in — the same read-back the R2 path does");
-  } finally {
-    await Deno.remove(tmp, { recursive: true }).catch(() => {});
+  }
+  /* No `finally` removing `tmp` any more: it is the scratch root now, and the sweep armed at
+     startup is what deletes it — including when an assertion above throws. Removing it here
+     as well would report "1 path, 0 removed" and read like a sweep that does not work. */
+
+  /* ── The rule the two scratchpad incidents were about ──────────────────────
+     Neither this file nor restore-verify.ts may write a DECRYPTED dump to a disk. Both
+     decrypt into memory — restore-verify pipes the plaintext to psql's stdin — and the
+     material found in a scratchpad twice was written by ad-hoc session scripts doing what
+     this asserts nobody may do. A source-level rule, because the property is "there is no
+     such call site", and the only way to check that is to look at every call site. */
+  {
+    const sources = ["scripts/backup.ts", "scripts/restore-verify.ts"];
+    const offenders: string[] = [];
+    for (const rel of sources) {
+      const src = Deno.readTextFileSync(rel);
+      // A write call with a decrypt() inside its arguments. Deliberately crude and
+      // deliberately loud: it fires on a comment too, which is the right way round.
+      for (const m of src.matchAll(new RegExp(PLAINTEXT_WRITE.source, "g"))) {
+        offenders.push(`${rel}: ${m[0]}`);
+      }
+    }
+    ok(offenders.length === 0,
+       `no decrypted dump is written to a disk by either tool${offenders.length ? ` — ${offenders.join("; ")}` : ""}`);
+    /* CONTROL: the pattern finds the thing when it is there. The fixture is CONCATENATED
+       rather than written out, because a literal one in this file is a match in this file —
+       the first run of this assertion failed on its own control, which is the check working
+       and is also why it cannot be spelled the obvious way. */
+    ok(PLAINTEXT_WRITE.test("await Deno.write" + "File(p, await de" + "crypt(b, pass));"),
+       "CONTROL: and the pattern DOES match a write of a decrypted dump");
+  }
+
+  /* The transient-directory refusal, which is the other half of the same incident. */
+  {
+    const repo = "C:/repo/RAMALLAH MEMORY";
+    const temps = ["C:/Users/x/AppData/Local/Temp", "/tmp"];
+    ok(refusesDir("C:/Users/x/AppData/Local/Temp/rma-backup", repo, temps).length > 0,
+       "a --to-dir inside the system temp directory is refused — originals are written in the clear");
+    ok(refusesDir("/tmp/scratch/rma-backup/originals", repo, temps).length > 0,
+       "and a POSIX one, however deep");
+    ok(refusesDir("C:/Users/x/AppData/Local/Temp", repo, temps).length > 0, "and the temp root itself");
+    ok(refusesDir("D:/backups/rma", repo, temps).length === 0,
+       "CONTROL: a real disk outside both is still accepted — the refusal discriminates");
+    ok(refusesDir("C:/Users/x/AppData/Local/Temporary-holdings", repo, temps).length === 0,
+       "CONTROL: a sibling whose name merely STARTS with a temp root is not inside it");
+    ok(refusesDir("D:/backups/rma", repo, []).length === 0,
+       "CONTROL: with no temp roots known, nothing is refused for being temporary");
   }
 
   console.log(`\n1..${passed + failed}`);
@@ -645,8 +826,12 @@ function sameAccount(a: Account, b: Account): boolean {
 if (!import.meta.main) {
   // imported for encrypt/decrypt; nothing below is this module's business
 } else if (has("--selftest")) {
+  armScratchSweep("selftest scratch");
   await selftest();
 } else {
+  /* Armed before anything is written, and it covers the refusals below as well as the run:
+     every `Deno.exit` here fires `unload`. See sweepScratch. */
+  armScratchSweep();
   const src = sourceVars();
   const dst = destVars();
   const missing: string[] = [];
@@ -697,7 +882,7 @@ if (!import.meta.main) {
     Deno.exit(1);
   }
   if (TO_DIR) {
-    const no = refusesDir(TO_DIR, Deno.cwd());
+    const no = refusesDir(TO_DIR, Deno.cwd(), tempRoots());
     if (no.length) {
       console.error("backup: refusing the --to-dir destination —");
       for (const r of no) console.error(`  ${r}`);

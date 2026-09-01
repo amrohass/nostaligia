@@ -30,7 +30,7 @@
  *   node scripts/pgtap-deployed.mjs 05 19      # only files whose name contains 05 or 19
  */
 
-import { readFileSync, writeFileSync, readdirSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -82,6 +82,22 @@ if (files.length === 0) {
 }
 
 const work = mkdtempSync(join(tmpdir(), 'pgtap-deployed-'));
+
+/* Removed when the process ends, however it ends.
+ *
+ * This directory takes a rewritten copy of every test file -- 37 of them a run -- and it was
+ * never cleaned up, so a temp root collected one `pgtap-deployed-*` per invocation forever.
+ * The contents are the project's own SQL rather than anybody's data, which is why it was
+ * never urgent and also why it stayed. `restore-verify.ts` spawns this script, and a backup
+ * tool that enumerates and deletes what it writes cannot have a child process that does not.
+ *
+ * `exit` covers a normal end and an explicit `process.exit`; SIGINT does not fire it, so
+ * Ctrl-C is registered separately. */
+function sweepWork() {
+  try { rmSync(work, { recursive: true, force: true }); } catch { /* nothing left to do */ }
+}
+process.on('exit', sweepWork);
+process.on('SIGINT', () => { sweepWork(); process.exit(130); });
 
 /* Appended after the file's own `select * from finish();` and before its `rollback;`.
    `reset role` first: a file that ends inside `set local role authenticated` would

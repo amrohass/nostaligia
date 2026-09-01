@@ -574,6 +574,21 @@ harms someone other than the maintainer.
    denials asserted; green in CI.
 2. **EXIF stripping verified** on a real photo carrying GPS data, end to end.
 3. **One restore tested** from a backup you hold yourself.
+   - **DISCHARGED 1 Sep 2026, and the standard is settled rather than left open.** A backup
+     taken from the deployed database, held on a disk outside the platform, restored into a
+     database asserted empty first (0 tables, 0 triggers, 0 auth users), and graded by this
+     project's own suite: 37 files, 669 assertions, one red — `20_publish_cron` 14, which
+     MUST be red on a restore because the releases came back with it, and which is checked
+     in both directions so a green there fails the run too.
+     **Amro's ruling, 1 Sep: the local-Docker target is sufficient for this gate.** The
+     question put to him was whether a hosted scratch project was still owed, on the
+     grounds that a container never exercises GoTrue serving the restored `auth` rows. It
+     is not: the gate asks whether a backup this project holds can be turned back into this
+     project's database, and that was answered — including two real gaps nothing else could
+     see (`auth.users`'s provisioning trigger was in no dump at all; three functions came
+     back with EXECUTE to PUBLIC). `--target <ref>` remains, still refusing the production
+     ref by name, for the day a scratch project exists — as a wider test, not as an
+     outstanding obligation. **No further restore work is owed for launch.**
 4. **A named human on the takedown path** with a stated response time.
 5. **Publish-age monitoring separates a held pipeline from an idle one** — an operator hold
    left set stops the archive as silently as a broken cron, so the alert must report
