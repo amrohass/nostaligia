@@ -67,10 +67,35 @@ if (localIdx !== -1 && (!LOCAL || LOCAL.startsWith('--'))) {
   console.error('--local needs a container name, e.g. --local supabase_db_<ref>. It will not guess one.');
   process.exit(1);
 }
+/* --prelude <file.sql> splices that SQL in immediately after each test file's own
+ * `begin;`, INSIDE the transaction the file already rolls back.
+ *
+ * It exists for scripts/mutation-pass.mjs, which asks the only question that tells you
+ * whether a suite is worth anything: if the invariant were broken, would this go red?
+ * Six non-discriminating tests have been found in this repository by accident; the
+ * prelude is how they get found on purpose.
+ *
+ * The safety property is the one the whole file already relies on: the mutation lands
+ * inside `begin; … rollback;`, so a `drop policy` or a stray `grant` against the DEPLOYED
+ * database is undone by the same rollback that undoes the test's own fixtures. The
+ * refusal below — no trailing `rollback;`, no run — is what makes that a guarantee rather
+ * than a habit, and it is why the prelude is spliced here rather than prepended to the
+ * file, which would put it OUTSIDE the transaction.
+ */
+const preludeIdx = argv.indexOf('--prelude');
+const PRELUDE = preludeIdx === -1 ? null : readFileSync(argv[preludeIdx + 1], 'utf8');
+if (preludeIdx !== -1 && !argv[preludeIdx + 1]) {
+  console.error('--prelude needs a path to a .sql file');
+  process.exit(1);
+}
+
 /* `localIdx + 1` only when there IS one — otherwise -1 + 1 is 0 and the first filter
    argument would be silently swallowed. */
 const localValueIdx = localIdx === -1 ? -1 : localIdx + 1;
-const filter = argv.filter((a, i) => a !== '--tap' && a !== '--local' && i !== localValueIdx);
+const preludeValueIdx = preludeIdx === -1 ? -1 : preludeIdx + 1;
+const filter = argv.filter((a, i) =>
+  a !== '--tap' && a !== '--local' && a !== '--prelude' &&
+  i !== localValueIdx && i !== preludeValueIdx);
 const files = readdirSync(TESTS)
   .filter((f) => f.endsWith('.test.sql'))
   .filter((f) => filter.length === 0 || filter.some((p) => f.includes(p)))
@@ -130,9 +155,28 @@ for (const f of files) {
     rows.push({ file: f, planned: -1, ran: -1, failed: -1, note: 'no rollback' });
     continue;
   }
+  /* The prelude goes in AFTER the tap rewrite, never before it. toTapCapture() turns every
+     top-level SELECT into an insert into _tap, and a prelude spliced first gets rewritten
+     too — into an insert against a table that does not exist yet, which fails the file with
+     a message about _tap and says nothing about the mutation. */
+  let body = tapMode ? toTapCapture(src) : src;
+  if (PRELUDE) {
+    /* After the FIRST `begin;`, so the mutation is inside the transaction that gets rolled
+       back — and before `plan()`, so a mutation that itself errors fails the file loudly
+       rather than being counted as an assertion. */
+    const b = body.indexOf('begin;');
+    if (b === -1) {
+      console.error(`  ${f}: no 'begin;' — refusing to apply a prelude to it`);
+      redFiles++;
+      rows.push({ file: f, planned: -1, ran: -1, failed: -1, note: 'no begin' });
+      continue;
+    }
+    body = body.slice(0, b + 'begin;'.length) + '\n' + PRELUDE + '\n' + body.slice(b + 'begin;'.length);
+  }
+
   const spliced = tapMode
-    ? toTapCapture(src)
-    : src.slice(0, idx) + PROBE + '\n' + src.slice(idx);
+    ? body
+    : body.slice(0, body.lastIndexOf('rollback;')) + PROBE + '\n' + body.slice(body.lastIndexOf('rollback;'));
 
   const path = join(work, f);
   writeFileSync(path, spliced);
