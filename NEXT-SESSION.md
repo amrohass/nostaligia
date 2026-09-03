@@ -1,6 +1,11 @@
 Ramallah Memory Atlas — handoff. Read CLAUDE.md fully first; it governs this repo and
 overrides your defaults.
 
+**The 2 Sep session's report is `docs/session-report-2026-09-02-testing.md`** — the
+authenticated-E2E blocker removed, the mutation pass, the privacy suite, where the time
+actually goes, the 300-item load test, and the two §9 accessibility defects that were fixed.
+Read it before touching any test in this repository.
+
 **The 1 Sep evening session's report is `docs/session-report-2026-09-01-m6.md`** — the two
 login bugs and how each was diagnosed rather than guessed, gate 3's closure, the structural
 scratchpad fix, and all of M6 with its measurements. This file is the short version and what
@@ -36,7 +41,20 @@ against the deployed pipeline, not argued.
    credential. **`unknown` is not `ok`** — a check that could not look says so.
 3. `supabase migration list --linked`. 59 migrations, all paired at the end of this session.
 4. **`node scripts/pgtap-deployed.mjs --tap`** — 37 files, 669 assertions, 3 known-red.
-5. The rest of the suite, all green at the end of this session:
+5. **The testing suites added 2 Sep.** They need `node scripts/harness-bootstrap.mjs --all`
+   once (it writes `.harness.vars`, git-ignored) and a scratch `node_modules` holding
+   `playwright` + `axe-core` for the two browser ones:
+   ```
+   node scripts/harness-bootstrap.mjs --status        live / stale, per role
+   node scripts/e2e-authenticated.mjs            61   1 known-red: takedown 207, see below
+   PLAYWRIGHT_DIR=… node scripts/e2e-browser.mjs 39   green
+   node scripts/privacy-shards-test.mjs          44   green
+   node scripts/mutation-pass.mjs                11   11 killed
+   PLAYWRIGHT_DIR=… AXE_DIR=… node scripts/a11y-sweep.mjs  23, 0 failed, 6 findings
+   node scripts/perf-probe.mjs                        measurement, no pass/fail
+   deno run -A scripts/load-test-300.ts               measurement, no pass/fail
+   ```
+6. The rest of the suite, all green at the end of this session:
    ```
    node scripts/frontend-csp-test.mjs      14    node scripts/frontend-fonts-test.mjs   14
    node scripts/frontend-auth-test.mjs     48    node scripts/frontend-rtl-test.mjs     12
@@ -48,6 +66,24 @@ against the deployed pipeline, not argued.
    ```
 
 ---
+
+---
+
+## Three things the 2 Sep session found
+
+1. **`e2e-authenticated.mjs`'s one red is real and is Amro's.** Takedown answers **207
+   `objects_remain`**, not 200, because `CLOUDFLARE_PURGE_TOKEN` is unset — §8's CDN purge
+   is a no-op. The bytes and the prerendered page ARE deleted; the CDN is not purged. An
+   earlier draft of that check asserted `res.ok`, which is TRUE for 207 and went green.
+
+2. **Nothing is cached at a CDN edge.** The bucket is served over its `r2.dev` DEVELOPMENT
+   URL: no `cf-cache-status`, no `age` on an object marked immutable for a year, and a
+   repeat fetch only 9% faster than a cache-busted one. §2's "Browser → CDN → media" is at
+   present "Browser → bucket" for every visitor. This makes the production custom domain a
+   performance item, not only a §2 one.
+
+3. **The network dominates, so do NOT upgrade the Supabase plan.** ~80 ms transport floor
+   against ~37 ms of database work on the slowest query. Numbers in §4 of the report.
 
 ## What is left, and every one of these is Amro's
 
@@ -112,7 +148,7 @@ to prevent, reappearing inside the monitor. Adding the secret is what makes it g
 
 ---
 
-## New this session — what to know before touching it
+## New in the 1 Sep session — what to know before touching it
 
 ### The monitor (`scripts/monitor.mjs`)
 
@@ -155,7 +191,30 @@ minutes for three routes — run it in the background.
 
 ---
 
-## Traps this session hit, so you do not
+## Traps the 2 Sep session hit, so you do not
+
+- **GoTrue's captcha does NOT cover `grant_type=refresh_token`.** That is what unblocked
+  every authenticated test. `scripts/lib/harness-auth.mjs` holds the reasoning.
+- **Playwright's `route()` takes a STRING as a GLOB**, and `?` is a single-character
+  wildcard — so `token?grant_type=password` intercepts nothing. Use a RegExp for any URL
+  with a query string. The only symptom was `AUTH.user()` staying null.
+- **`turnstile.js` assigns `window.TURNSTILE`**, so a non-writable stub makes the module
+  throw and never finish. The stub must be an accessor with a swallowing setter.
+- **A mutation must break the MECHANISM, not the data.** `mutation-pass.mjs`'s prelude lands
+  before the test's fixtures, so an `UPDATE` over existing rows is a no-op that reports a
+  false SURVIVED. Redefine the function; do not rewrite the rows.
+- **`save_content_block` reports refusal in the BODY with HTTP 200.** A status-code
+  assertion on it says the opposite of the truth.
+- **`document.body` is `isConnected`.** A focus-restore fallback guarded only on
+  `isConnected` never fires.
+- **Time a build warm, and take a median.** A single cold `buildShards()` call reported
+  11,891 ms for 300 items — V8 optimisation, not an algorithm. The warm median is 44 ms.
+- **Synthetic fixtures compress far better than real prose.** Calibrate against the live
+  archive's own ratio or the budget number is fiction.
+- **Bash's PATH broke mid-session** (`head`, `python` not found). PowerShell kept working;
+  use `git commit -F <file>` there, because a message with `->` in it is parsed as a switch.
+
+## Traps earlier sessions hit, so you do not
 
 - **A `/route` argument in Git Bash becomes `C:/Program Files/Git/…`.** Prefix with
   `MSYS_NO_PATHCONV=1`. (Already in the memory; hit again anyway.)
