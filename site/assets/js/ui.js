@@ -356,9 +356,31 @@
     var firstField = qs(selector, container);
     if (firstField) firstField.focus();
 
-    return function release() {
+    /* `fallback` is where focus goes when the element that opened the dialog is no longer
+       in the document — an element, or a function returning one, resolved at release time.
+
+       It is not defensive tidiness. §9 requires focus restore and the viewer did not have
+       it, for a reason invisible from this function: the archive re-renders on the route
+       change to /item/{id}, so by the time the viewer closes, the card that was focused
+       when the trap was installed has been REPLACED by an equal-looking one. `previous`
+       points at a detached node, `.focus()` on a detached node is silently a no-op, and
+       the keyboard user is returned to <body> — the top of the page, with the whole feed
+       to tab through again to get back to where they were.
+
+       `isConnected` is the test rather than `document.contains`: it is what distinguishes
+       a node that was removed from one that was never inserted, and both fail the same
+       way here. */
+    return function release(fallback) {
       container.removeEventListener('keydown', onKey);
-      if (previous && previous.focus) previous.focus();
+      /* `document.body` is not an opener, and excluding it is the whole fix rather than a
+         detail. By the time openViewer installs this trap the route has already
+         re-rendered the archive, so the card the reader activated is detached and
+         `activeElement` has fallen back to <body> — which IS connected, and which a plain
+         isConnected test therefore accepts, focuses, and calls a restore. That was the
+         first version of this fix and it changed nothing at all. */
+      var usable = previous && previous.isConnected && previous !== doc.body ? previous : null;
+      var target = usable || (typeof fallback === 'function' ? fallback() : fallback);
+      if (target && target.focus) target.focus();
     };
   }
 

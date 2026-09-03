@@ -856,12 +856,34 @@
   }
 
   function closeViewer() {
+    /* Captured before state.viewer is cleared: §9 asks for focus restore, and "restore"
+       means the card this viewer was opened on, not merely something focusable. */
+    var open = state.viewer ? viewerList()[state.viewer.index] : null;
+
     var overlay = qs('#viewer');
     if (overlay) overlay.remove();
     global.removeEventListener('keydown', onViewerKey);
     global.document.body.style.removeProperty('overflow');
     state.viewer = null;
-    if (state.releaseTrap) { state.releaseTrap(); state.releaseTrap = null; }
+    if (state.releaseTrap) {
+      /* Resolved at release time rather than passed as a node, because the archive
+         re-renders on the way in and out of /item/{id} and every card is a different
+         element by now. UI.trapFocus prefers the original opener when it is still
+         connected and falls back to this only when it is not — which, for the viewer,
+         is every time. */
+      state.releaseTrap(function () {
+        if (open) {
+          var card = qs('a.memory[href="/item/' + encodeURIComponent(open.id) + '"]');
+          if (card) return card;
+        }
+        /* No card — a deep link the feed does not contain, or an empty archive. Any other
+           card, then the wordmark, both of which are real links. Deliberately NOT #view:
+           it is a plain <div>, focus() on it is a no-op, and the result would be <body>
+           again with a comment claiming otherwise. */
+        return qs('.memory') || qs('.wordmark');
+      });
+      state.releaseTrap = null;
+    }
   }
 
   /* ── Engagement ──────────────────────────────────────────── */
@@ -1789,7 +1811,15 @@
         precisionSelect,
         precisionNote
       ]),
-      field(t('share.fStory'), { multiline: true, placeholder: t('share.fStoryPh'), rows: '3' }),
+      /* §9: "Required description field on upload (frame it as archival metadata)."
+         `required` was missing until 2 Sep 2026 — the field existed, was framed exactly as
+         §9 asks ("what do you remember of this moment"), and could be left empty, which
+         produces an archive entry with a picture and no account of what it is. The
+         framing was the half that got done; the requirement is the half that makes it
+         archival. Native validation, matching the report form's `required` reason field:
+         the form is a real <form> with no novalidate, so the browser blocks the submit
+         before onsubmit runs. */
+      field(t('share.fStory'), { multiline: true, required: true, placeholder: t('share.fStoryPh'), rows: '3' }),
       el('label.dropzone', null, [
         ICONS.upload(),
         el('span', { text: t('share.drop') }),
