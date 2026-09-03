@@ -504,6 +504,128 @@ console.log('# turnstile.js — every path out of token() settles');
     'a widget that renders and then says NOTHING is refused on the deadline, not awaited forever');
 }
 
+console.log('# auth.js — the password reset path');
+
+// ── 8b · the §7 decision on a recovery link, asserted rather than commented ──
+//
+// GoTrue's /verify hands back a FULL SESSION, and the official SDK adopts it on landing.
+// This one does not: §7's contributors are on shared and borrowed devices, and a recovery
+// link opened on one of those must not leave a live session behind for the next person to
+// open the tab, whether or not a password was ever set.
+//
+// That is one line from being "fixed" by someone making the reload work, and nothing about
+// the screen would look different afterwards — which is the same argument section 1 makes
+// about the access token, and the reason both are pinned here rather than commented.
+{
+  const calls = [];
+  const win = makeWindow({
+    fetch: (url, init) => {
+      calls.push({ url, init, body: JSON.parse(init.body) });
+      return okJson({ id: 'u1', email: 'a@b.test', app_metadata: {} });
+    }
+  });
+  load('site/assets/js/auth.js', win);
+
+  win.AUTH.beginRecovery({ access_token: 'RECOVERY-ACCESS', refresh_token: 'RECOVERY-REFRESH', expires_in: 3600 });
+
+  ok(win.AUTH.hasRecovery(), 'a recovery link is HELD once its fragment is read');
+  ok(win.AUTH.isSignedIn() === false,
+     'and holding it does NOT sign anybody in — abandoning the screen leaves no session');
+  ok(win._session.size === 0 && win._local.size === 0,
+     'nothing about it is written to storage — not the refresh token, not the access token');
+  ok(calls.length === 0, 'and holding it costs no request');
+
+  // Now complete it. Only here does any of that change.
+  await win.AUTH.completeRecovery('a-new-password');
+
+  ok(calls.length === 1 && calls[0].init.method === 'PUT' && /\/auth\/v1\/user$/.test(calls[0].url),
+     'completeRecovery PUTs /auth/v1/user — the password change, not a second sign-in');
+  ok(calls[0].init.headers.Authorization === 'Bearer RECOVERY-ACCESS',
+     '...authenticated by the recovery session the link carried, not by the anon key alone');
+  ok(calls[0].init.headers.apikey === 'stub-anon-key', '...which is still sent alongside it');
+  ok(calls[0].body.password === 'a-new-password' && !('email' in calls[0].body),
+     '...carrying the new password and nothing else');
+  ok(win.AUTH.isSignedIn() === true,
+     'and NOW the member is signed in — the reset ends signed in, not on a sign-in form');
+  ok(win._session.get('rma.refresh') === 'RECOVERY-REFRESH',
+     '...with the link refresh token adopted, so the session survives a reload');
+  ok(win.AUTH.hasRecovery() === false, 'the held recovery is spent and gone');
+}
+
+// ── 8c · a link that is dead, or was never there ────────────────────────────
+{
+  const win = makeWindow({ fetch: () => errJson(401, { msg: 'invalid claim' }) });
+  load('site/assets/js/auth.js', win);
+
+  // No link at all: the reset form should be unreachable, but if it is reached it must
+  // refuse locally rather than send a Bearer-less PUT and mistranslate the 401.
+  const bare = await win.AUTH.completeRecovery('whatever').then(() => null, (e) => e.key);
+  ok(bare === 'auth.err.linkExpired', 'completeRecovery with no link held refuses before any request');
+
+  win.AUTH.beginRecovery({ access_token: 'SPENT', refresh_token: 'r', expires_in: 3600 });
+  const spent = await win.AUTH.completeRecovery('a-new-password').then(() => null, (e) => e.key);
+  ok(spent === 'auth.err.linkExpired',
+     'a 401 from /user is the SPENT LINK, not "that did not go through" over a form that cannot work');
+  ok(win.AUTH.isSignedIn() === false, 'and a refused reset signs nobody in');
+}
+
+// ── 8d · /recover carries what it has to carry ──────────────────────────────
+{
+  const calls = [];
+  const win = makeWindow({
+    fetch: (url, init) => { calls.push({ url, body: JSON.parse(init.body) }); return okJson({}); }
+  });
+  load('site/assets/js/auth.js', win);
+
+  await win.AUTH.requestPasswordReset('a@b.test', 'CAPTCHA-TOKEN', 'https://example.test/reset');
+
+  ok(/\/auth\/v1\/recover$/.test(calls[0].url), 'requestPasswordReset posts to /auth/v1/recover');
+  ok(calls[0].body.gotrue_meta_security?.captcha_token === 'CAPTCHA-TOKEN',
+     '...carrying the Turnstile token — the captcha covers /recover exactly as it covers /signup');
+  ok(calls[0].body.redirect_to === 'https://example.test/reset',
+     '...and the redirect target, which GoTrue silently ignores if the allowlist does not admit it');
+  ok(win.AUTH.isSignedIn() === false, 'asking for a link signs nobody in');
+}
+
+// ── 8e · four refusals, four messages ───────────────────────────────────────
+//
+// The whole point of this screen is that a member can act on what it says. Merged into one
+// generic failure, "captcha did not complete", "you have asked too often", "WE cannot send
+// mail right now" and "that link is dead" are four different next actions behind one
+// sentence that suggests none of them. Pinned as a SET so a later tidy-up cannot collapse
+// any two back together — the same shape as the over_request/over_email pair above.
+{
+  const win = makeWindow();
+  load('site/assets/js/auth.js', win);
+
+  const keyFor = async (status, body) => {
+    win.fetch = () => errJson(status, body);
+    return win.AUTH.requestPasswordReset('a@b.test', 'tok', 'https://x.test/reset')
+      .then(() => 'NO REFUSAL', (e) => e.key);
+  };
+
+  const captcha = await keyFor(400, { error_code: 'captcha_failed' });
+  const requests = await keyFor(429, { error_code: 'over_request_rate_limit' });
+  const mail = await keyFor(429, { error_code: 'over_email_send_rate_limit' });
+
+  win.AUTH.beginRecovery({ access_token: 'x', refresh_token: 'r', expires_in: 3600 });
+  win.fetch = () => errJson(403, { error_code: 'session_not_found' });
+  const expired = await win.AUTH.completeRecovery('a-new-password').then(() => 'NO REFUSAL', (e) => e.key);
+
+  const four = [captcha, requests, mail, expired];
+  ok(four.every((k) => k && k !== 'NO REFUSAL' && k !== 'auth.err.generic'),
+     `none of the four falls through to the generic message (${four.join(', ')})`);
+  ok(new Set(four).size === 4,
+     'and no two of them share a message — captcha, rate limit, our mail cap, dead link');
+
+  // Same-password is the fifth, and it is the one a member meets by doing the obvious thing.
+  win.AUTH.beginRecovery({ access_token: 'x', refresh_token: 'r', expires_in: 3600 });
+  win.fetch = () => errJson(422, { error_code: 'same_password' });
+  const same = await win.AUTH.completeRecovery('a-new-password').then(() => null, (e) => e.key);
+  ok(same === 'auth.err.samePassword' && !four.includes(same),
+     'reusing the old password says so, rather than "that did not go through"');
+}
+
 console.log('# every captcha-gated call site actually carries a captcha');
 
 // ── 9 · the gate that was missing, asserted as a rule rather than remembered ─
@@ -557,15 +679,15 @@ console.log('# every captcha-gated call site actually carries a captcha');
   const sites = [];
   for (const rel of modules) {
     const src = readFileSync(join(root, rel), 'utf8');
-    for (const fn of ['AUTH.signIn(', 'AUTH.signUp(']) {
+    for (const fn of ['AUTH.signIn(', 'AUTH.signUp(', 'AUTH.requestPasswordReset(']) {
       for (const args of callArgs(src, fn)) sites.push({ rel, fn, argc: topLevelArgc(args) });
     }
   }
 
   // CONTROL first. An empty `sites` would make the assertion below vacuously true, and a
   // renamed method or a changed call style is exactly how that would happen quietly.
-  ok(sites.length >= 3,
-     `CONTROL: ${sites.length} AUTH.signIn/signUp call sites found across the client`);
+  ok(sites.length >= 4,
+     `CONTROL: ${sites.length} captcha-gated AUTH call sites found across the client`);
 
   const tokenless = sites.filter((s) => s.argc < 3);
   ok(tokenless.length === 0,

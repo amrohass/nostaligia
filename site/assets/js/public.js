@@ -28,6 +28,7 @@
      /u/{handle}       somebody's profile
      /me               your own
      /page, /page/{s}  the info page, deep-linked to a section
+     /reset            where a password-reset link lands
 
    site/_redirects serves index.html with a 200 for anything unmatched, so a refresh on
    /item/{id} keeps the path rather than 404ing.
@@ -78,7 +79,11 @@
 
     /* §9: "The sign-in gate always preserves intent — the pending action and its item
        survive the auth round-trip and the user returns exactly where they were." */
-    pending: null
+    pending: null,
+
+    /* Set once, at boot, by captureRecovery() — null on every ordinary visit.
+       { stage: 'set' | 'dead' | 'done', linkKind: 'recovery' | 'unknown', error: key } */
+    recovery: null
   };
 
   function adoptAccount(account) {
@@ -107,6 +112,7 @@
     if (seg[0] === 'item') return 'archive';   // the viewer opens OVER the archive
     if (seg[0] === 'u' || seg[0] === 'me') return 'profile';
     if (seg[0] === 'page') return 'page';
+    if (seg[0] === 'reset') return 'reset';
     return ['map', 'events'].indexOf(seg[0]) > -1 ? seg[0] : 'archive';
   }
 
@@ -167,6 +173,72 @@
 
     event.preventDefault();
     navigate(href);
+  }
+
+  /* ── Password recovery ───────────────────────────────────────
+     Where a reset link actually lands, which is not obvious and is worth writing down.
+
+     The mail Supabase sends does NOT link here. It links to GoTrue's own /auth/v1/verify,
+     which consumes the one-time token server-side and then 302s to a redirect target with
+     the resulting session in the URL **fragment** — `#access_token=…&refresh_token=…&
+     type=recovery` — or, when the token is spent or stale, with `#error=…&error_code=…`.
+
+     Which target it 302s to is Amro's Auth configuration and not this repository's: it is
+     the `redirect_to` we asked for IF his allowlist admits it, and the project's Site URL
+     otherwise, silently. So both landings are handled. `/reset` is the one we ask for; the
+     site root is the one we get if the allowlist has not been widened, and a member whose
+     password reset dead-ends at a blank archive is exactly the failure §9 forbids.
+
+     The fragment is read once and then REPLACED out of the URL. A session in an address
+     bar survives into history, into a screenshot, and into whatever the next person to
+     open the tab scrolls back through. Referrer-Policy is already no-referrer, so the one
+     remaining exposure is the local one, and replaceState closes it. */
+
+  var RECOVERY_PATH = '/reset';
+
+  /** Where we ASK GoTrue to send the member back to. See requestPasswordReset in auth.js. */
+  function recoveryRedirect() { return global.location.origin + RECOVERY_PATH; }
+
+  function captureRecovery() {
+    var raw = (global.location.hash || '').replace(/^#/, '');
+    if (!raw || raw.indexOf('=') === -1) return false;
+
+    var q;
+    try { q = new global.URLSearchParams(raw); } catch (e) { return false; }
+
+    var token = q.get('access_token');
+    var kind = q.get('type');
+    var failed = q.get('error') || q.get('error_code');
+
+    if (token && kind === 'recovery') {
+      AUTH.beginRecovery({
+        access_token: token,
+        refresh_token: q.get('refresh_token'),
+        expires_in: Number(q.get('expires_in')) || 3600
+      });
+      state.recovery = { stage: 'set', linkKind: 'recovery', error: null };
+    } else if (failed) {
+      /* Every error GoTrue can put on a verify redirect — otp_expired, access_denied, a
+         server_error — has the same answer for the person reading it: that link is no good,
+         ask for another. So they share one message rather than being spelled out, and the
+         message is the actionable one rather than the accurate-and-useless one.
+
+         `linkKind` is the honesty. A fragment that names itself `type=recovery`, or that
+         landed on /reset because the allowlist admitted our redirect, IS a reset link and is
+         called one. A bare error fragment at the site root could just as easily be an expired
+         SIGNUP confirmation, so it is called "this link" — the screen under it offers the
+         same two ways out either way, and neither of them is a claim. */
+      state.recovery = {
+        stage: 'dead',
+        linkKind: (kind === 'recovery' || path() === RECOVERY_PATH) ? 'recovery' : 'unknown',
+        error: 'auth.err.linkExpired'
+      };
+    } else {
+      return false;
+    }
+
+    global.history.replaceState(null, '', RECOVERY_PATH);
+    return true;
   }
 
   /* Links shared before §2's routing changed. Translated once, with replaceState so the
@@ -1056,8 +1128,24 @@
     return copy;
   }
 
-  function openAuth(mode) {
+  /* Three modes, one dialog. `reset` joined signup and login on 3 Sep 2026 rather than
+     opening a fourth overlay of its own: it needs the same shell, the same Turnstile mount,
+     the same single-use-token reset after a failure and the same "the panel replaces the
+     form" ending, and a second copy of all four is a second copy to get wrong.
+
+     `opts.email` prefills the address. Used by the account panel on /me, where the member
+     is signed in and we already know which address the link has to go to — asking them to
+     type it again would be asking a question we know the answer to. */
+  var AUTH_COPY = {
+    signup: { title: 'signup.title', blurb: 'signup.blurb', submit: 'signup.submit' },
+    login:  { title: 'login.title',  blurb: 'login.blurb',  submit: 'login.submit' },
+    reset:  { title: 'reset.title',  blurb: 'reset.blurb',  submit: 'reset.submit' }
+  };
+
+  function openAuth(mode, opts) {
     var scrim;
+    var copy = AUTH_COPY[mode] || AUTH_COPY.login;
+    opts = opts || {};
     function close() { closeOverlay(scrim); if (widget) widget.remove(); }
 
     /* §6: Turnstile on signup. It is mounted for sign-in too — credential stuffing against
@@ -1068,6 +1156,12 @@
 
     var errorNote = el('p.form-error', { role: 'alert', hidden: true });
     function showError(key, vars) {
+      /* One remap, and it earns its place: auth.err.mailLimit says "confirmation email",
+         which is the wrong noun on a screen where the member is waiting for a RESET link
+         and would reasonably read it as having been sent somewhere else. Same 429, same
+         honesty about the limit being ours, different word for the thing that did not
+         arrive. */
+      if (mode === 'reset' && key === 'auth.err.mailLimit') key = 'reset.err.mailLimit';
       /* textContent, never markup — §6. These strings are ours, but the habit is the
          defence: the day one of them interpolates a server value, this is already safe. */
       errorNote.textContent = t(key, vars);
@@ -1078,14 +1172,19 @@
     var body = [
       el('div.dialog__head', null, [
         el('div.dialog__head-text', null, [
-          el('h2.dialog__title', { text: t(mode === 'signup' ? 'signup.title' : 'login.title') }),
-          el('p.dialog__blurb', { text: t(mode === 'signup' ? 'signup.blurb' : 'login.blurb') })
+          el('h2.dialog__title', { text: t(copy.title) }),
+          el('p.dialog__blurb', { text: t(copy.blurb) })
         ]),
         el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
       ])
     ];
 
-    if (mode === 'signup') {
+    if (mode === 'reset') {
+      body.push(field(t('field.email'),
+        { type: 'email', placeholder: 'name@example.com', email: true, autocomplete: 'email',
+          required: true, value: opts.email || null }));
+      body.push(el('button.btn.btn--primary.btn--block', { type: 'submit', text: t('reset.submit') }));
+    } else if (mode === 'signup') {
       /* §3: "handle is user-chosen, NOT a legal name." The field that used to sit here
          asked for a full name, which for a politically sensitive archive (§7) is the
          opposite of what onboarding should collect. */
@@ -1101,9 +1200,11 @@
     } else {
       body.push(field(t('field.email'), { type: 'email', placeholder: 'name@example.com', email: true, autocomplete: 'email' }));
       body.push(field(t('field.password'), { type: 'password', placeholder: '••••••••', autocomplete: 'current-password' },
-        el('button.field__hint', {
+        el('button.field__hint.linklike', {
           type: 'button',
-          onclick: function () { UI.toast(t('login.forgot')); },
+          /* Was a toast of its own label — the control existed, said its own name back and
+             did nothing else, from M1 until 3 Sep 2026. */
+          onclick: function () { close(); openAuth('reset'); },
           text: t('login.forgot')
         })));
       body.push(el('button.btn.btn--olive.btn--block', { type: 'submit', text: t('login.submit') }));
@@ -1113,6 +1214,10 @@
     body.push(errorNote);
     body.push(el('div.dialog__foot', null, mode === 'signup'
       ? [t('signup.haveAcct') + ' ', el('button.linklike', {
+          type: 'button', onclick: function () { close(); openAuth('login'); }, text: t('action.signIn')
+        })]
+      : mode === 'reset'
+      ? [t('reset.remembered') + ' ', el('button.linklike', {
           type: 'button', onclick: function () { close(); openAuth('login'); }, text: t('action.signIn')
         })]
       : [t('login.newHere') + ' ', el('button.linklike', {
@@ -1143,7 +1248,7 @@
           busy = false;
           if (submitButton) {
             submitButton.disabled = false;
-            submitButton.textContent = t(mode === 'signup' ? 'signup.submit' : 'login.submit');
+            submitButton.textContent = t(copy.submit);
           }
           /* A Turnstile token is single-use and was just spent. Without this reset the
              member's second attempt sends a token the server has already seen and is told
@@ -1152,6 +1257,10 @@
         }
 
         widget.token().then(function (captcha) {
+          if (mode === 'reset') {
+            return AUTH.requestPasswordReset(email, captcha, recoveryRedirect())
+              .then(function () { return { resetSent: true }; });
+          }
           return mode === 'signup'
             ? AUTH.signUp(email, password, captcha).then(function (result) {
               if (result.confirmationRequired) return { signedUp: true, account: null };
@@ -1163,6 +1272,7 @@
               return { signedUp: false, account: account };
             });
         }).then(function (outcome) {
+          if (outcome.resetSent) { showResetSent(email); return; }
           /* A signup ENDS on a screen, not on a closed dialog. Until 1 Sep 2026 the
              confirmation-required branch closed the dialog and fired a 3.2-second toast,
              which is what a new member experienced as "I pressed the button and nothing
@@ -1180,6 +1290,36 @@
         });
       }
     }, body);
+
+    /**
+     * What the dialog becomes once the link is on its way.
+     *
+     * The same shape as showSignedUp below, deliberately: it replaces the form in place so
+     * the scrim and the focus trap stay correct, it stays on the screen until it is
+     * dismissed rather than being a toast that outruns the reading of it, and it echoes the
+     * address back in a <bdi> because a typo in it is the commonest reason a message never
+     * arrives and it is the one thing the member cannot re-check afterwards.
+     *
+     * **The wording does not depend on whether the address has an account**, and that is a
+     * §7 constraint rather than a simplification: GoTrue answers 200 either way, and a
+     * screen that said "no such member" would turn a public form into a way of asking the
+     * archive who contributes to it.
+     */
+    function showResetSent(address) {
+      if (widget) { widget.remove(); widget = null; }
+
+      var button = el('button.btn.btn--primary.btn--block', {
+        type: 'button', onclick: close, text: t('reset.sent.gotIt')
+      });
+
+      scrim.replaceChildren(el('div.dialog.dialog--gate', null, [
+        el('h2.dialog__title', { text: t('reset.sent.title') }),
+        el('p.dialog__blurb', null, [t('reset.sent.body') + ' ', el('bdi', { text: address })]),
+        el('p.dialog__blurb', { text: t('reset.sent.hint') }),
+        button
+      ]));
+      button.focus();
+    }
 
     /**
      * What the dialog becomes once the account exists.
@@ -1303,6 +1443,145 @@
     if (route() === 'profile') { navigate('/'); return; }
     renderMasthead();
     if (state.viewer) renderViewerChrome(state.viewer.index);
+  }
+
+  /* ── The reset landing ───────────────────────────────────────
+     /reset, which is a page rather than a dialog for one reason: the member arrives here
+     from their mail client on a fresh page load, with no dialog to have been opened over
+     and — because the fragment is replaced out of the URL the moment it is read — nothing
+     to reload back into. A screen that survives being the first thing the browser paints
+     is the only shape that works.
+
+     Four states, and none of them is a dead end (§9):
+
+       set   — a live recovery session is held; type a new password.
+       done  — the password is set and the session is now a real one.
+       dead  — the link was refused, or died between landing and submitting.
+       bare  — /reset with no link at all: typed, bookmarked, or reloaded.
+
+     It renders BEFORE the archive-error branch in render(), and that is deliberate: a
+     member locked out of their account must be able to get back in on a day the CDN is
+     having one. Nothing on this screen reads a shard. */
+
+  function authPage(children) {
+    return el('div.authpage', null, el('div.authpage__card', null, children));
+  }
+
+  /* field(), handing back the input as well.
+
+     field() builds the label/`for` pairing and returns only the wrapper, which is enough
+     when one querySelector can find the input again. It is not enough on a form with two
+     password boxes, and §9 asks for a real label rather than the aria-label that a
+     hand-built input would need. */
+  function labelledInput(labelText, props, extras) {
+    var wrap = field(labelText, props, extras);
+    return { wrap: wrap, input: UI.qs('input, textarea', wrap) };
+  }
+
+  function renderReset() {
+    var rec = state.recovery;
+
+    if (rec && rec.stage === 'done') {
+      /* Not a "now go and sign in" screen. completeRecovery() adopted the session, so
+         they already are — §9's "never a dead end", at the one moment a member is most
+         likely to give up on an archive. */
+      return authPage([
+        el('h1.authpage__title', { text: t('reset.done.title') }),
+        el('p.authpage__blurb', null, [
+          t('reset.done.body') + ' ',
+          el('bdi', { text: (state.account && state.account.email) || rec.email || '' })
+        ]),
+        el('a.btn.btn--primary.btn--block', { href: '/', text: t('reset.done.continue') })
+      ]);
+    }
+
+    if (rec && rec.stage === 'set' && AUTH.hasRecovery()) return resetForm();
+
+    var dead = Boolean(rec && rec.stage === 'dead');
+    return authPage([
+      el('h1.authpage__title', {
+        text: t(dead
+          ? (rec.linkKind === 'recovery' ? 'reset.dead.title' : 'reset.dead.titleAny')
+          : 'reset.bare.title')
+      }),
+      el('p.authpage__blurb', { text: t(dead ? 'reset.dead.body' : 'reset.bare.body') }),
+      el('button.btn.btn--primary.btn--block', {
+        type: 'button',
+        onclick: function () {
+          openAuth('reset', { email: state.account ? state.account.email : null });
+        },
+        text: t('reset.dead.again')
+      }),
+      state.signedIn ? null : el('button.btn.btn--ghost.btn--block', {
+        type: 'button', onclick: function () { openAuth('login'); }, text: t('action.signIn')
+      }),
+      el('a.authpage__back', { href: '/', text: t('reset.dead.back') })
+    ]);
+  }
+
+  function resetForm() {
+    var note = el('p.form-error', { role: 'alert', hidden: true });
+    function fail(key) { note.textContent = t(key); note.hidden = false; }
+
+    var pw = labelledInput(t('reset.set.password'),
+      { type: 'password', autocomplete: 'new-password', required: true, placeholder: '••••••••' },
+      el('span.field__hint', { text: t('reset.set.rule') }));
+    var again = labelledInput(t('reset.set.confirm'),
+      { type: 'password', autocomplete: 'new-password', required: true, placeholder: '••••••••' });
+
+    var busy = false;
+    var submit = el('button.btn.btn--primary.btn--block', { type: 'submit', text: t('reset.set.submit') });
+
+    var form = el('form.authpage__form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        if (busy) return;
+        note.hidden = true;
+
+        var value = pw.input.value;
+        /* Checked here as well as at GoTrue. §5 is unambiguous that the browser is not a
+           guard and the server still decides — its own refusal has its own message
+           (auth.err.weakPassword). This only saves the member a round-trip to be told
+           something they could have been told while typing. */
+        if (value.length < 8) { fail('reset.err.tooShort'); return; }
+        if (value !== again.input.value) { fail('reset.err.mismatch'); return; }
+
+        busy = true;
+        submit.disabled = true;
+        submit.textContent = t('auth.working');
+
+        AUTH.completeRecovery(value).then(function (account) {
+          state.recovery = {
+            stage: 'done', linkKind: 'recovery', error: null,
+            email: account ? account.email : null
+          };
+          onSignedIn(account);
+          render();
+        }, function (err) {
+          busy = false;
+          submit.disabled = false;
+          submit.textContent = t('reset.set.submit');
+
+          var key = err && err.key ? err.key : 'auth.err.generic';
+          /* A link that died BETWEEN landing and submitting is the same dead end as one
+             that arrived dead, and it gets the same screen — with the way to a new link on
+             it — rather than a red line above a form that can no longer do anything. */
+          if (key === 'auth.err.linkExpired') {
+            AUTH.discardRecovery();
+            state.recovery = { stage: 'dead', linkKind: 'recovery', error: key };
+            render();
+            return;
+          }
+          fail(key);
+        });
+      }
+    }, [pw.wrap, again.wrap, note, submit]);
+
+    return authPage([
+      el('h1.authpage__title', { text: t('reset.set.title') }),
+      el('p.authpage__blurb', { text: t('reset.set.blurb') }),
+      form
+    ]);
   }
 
   /* ── Share sheet ─────────────────────────────────────────── */
@@ -1949,6 +2228,7 @@
       header,
       bio,
       isOwner && own ? editPanel() : null,
+      isOwner && own ? accountPanel() : null,
       isOwner && own ? pendingPanel() : null,
       profileSection('contributions', isOwner, t('profile.contributions'), contributions.length, contributionsBody),
       profileSection('comments', isOwner, t('profile.comments'), comments.length, commentsBody)
@@ -2111,6 +2391,43 @@
   }
 
   /* ── Edit profile & privacy (owner only) ─────────────────── */
+
+  /**
+   * The member's own account controls — not their profile, and kept apart from it.
+   *
+   * editPanel() above is about what OTHER people see (§7's visibility map). This is about
+   * the account itself, which nobody else sees at all, and the note says so: the two live
+   * on one page and the difference between them is the whole of what a privacy control
+   * means here.
+   *
+   * The reset goes through the same dialog a signed-out visitor uses, prefilled with the
+   * address we already know. Not a shortcut that skips the email round-trip: a signed-in
+   * session is not proof that the person at the keyboard owns the mailbox, and on §7's
+   * shared and borrowed devices that distinction is the entire point of sending a link.
+   */
+  function accountPanel() {
+    if (!state.account) return null;
+
+    return el('section.profile__section.account', null, [
+      el('div.profile__section-head', null, [
+        el('h2.profile__section-title', { text: t('account.title') })
+      ]),
+      el('p.privacy-list__note', { text: t('account.note') }),
+      el('div.account__rows', null, [
+        el('div.account__row', null, [
+          el('div', null, [
+            el('div.privacy-row__name', { text: t('account.password') }),
+            el('div.privacy-row__hint', { text: t('account.passwordHint') })
+          ]),
+          el('button.btn.btn--ghost', {
+            type: 'button',
+            onclick: function () { openAuth('reset', { email: state.account.email }); },
+            text: t('reset.submit')
+          })
+        ])
+      ])
+    ]);
+  }
 
   function editPanel() {
     var own = profileCache.own;
@@ -2553,6 +2870,16 @@
 
     var view = qs('#view');
 
+    /* Before the archive-error branch on purpose. A member who cannot sign in has to be
+       able to reset their password on a day the CDN is having one, and nothing on this
+       screen reads a shard. */
+    if (name === 'reset') {
+      mount(view, renderReset());
+      closeViewer();
+      global.scrollTo(0, 0);
+      return;
+    }
+
     if (state.error && !state.feed.length) {
       mount(view, el('div.page-head', null, [
         el('h1.page-head__title', { text: t('archive.err.title') }),
@@ -2692,6 +3019,10 @@
     }, 150);
   });
 
+  /* BEFORE migrateHashRoute(), and the order matters: a recovery fragment is not a route
+     and migrateHashRoute() would leave it sitting in the address bar with a session in it
+     while it looked for `#/m/…`. */
+  captureRecovery();
   migrateHashRoute();
 
   /* The archive paints before anything about a session is known. §1: "Browsing is open" —

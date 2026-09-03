@@ -160,7 +160,10 @@ try {
 
   section(1, 'axe-core — WCAG 2.1 A/AA across every public surface');
   {
-    for (const route of ['/', '/map', '/events']) {
+    /* /reset joined the list on 3 Sep 2026 with the password-reset flow. It is the one
+       public surface a member reaches while LOCKED OUT — so it is the surface on which an
+       unlabelled input costs the most, and the only one nobody can route around. */
+    for (const route of ['/', '/map', '/events', '/reset']) {
       const page = await newPage();
       await page.goto(`${ORIGIN}${route}`, { waitUntil: 'domcontentloaded' });
       await ready(page);

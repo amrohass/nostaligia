@@ -210,6 +210,41 @@ const MUTATIONS = [
     run: 'node scripts/frontend-budget.mjs',
   },
   {
+    id: 'recovery-adopts-on-landing',
+    invariant: '§7 — a recovery link is HELD, not adopted, until the password is actually set',
+    catches: ['frontend-auth-test'],
+    kind: 'source',
+    file: 'site/assets/js/auth.js',
+    mutate: (src) => {
+      /* The "fix" this guards against, written the way somebody would actually write it:
+         adopt the session on landing, as the official SDK does. Everything still works —
+         the reset completes, the member is signed in — and a link opened on a borrowed
+         device now leaves a live session behind whether or not a password was ever set. */
+      const held = 'recovery = tokens && tokens.access_token ? tokens : null;';
+      if (!src.includes(held)) return null;
+      return src.replace(held, held +
+        ' if (recovery) adopt({ access_token: recovery.access_token,' +
+        ' refresh_token: recovery.refresh_token, expires_in: recovery.expires_in, user: {} });');
+    },
+    run: 'node scripts/frontend-auth-test.mjs',
+  },
+  {
+    id: 'recovery-no-redirect',
+    invariant: 'a reset link comes back to THIS origin, not to whatever Site URL happens to be',
+    catches: ['frontend-auth-test'],
+    kind: 'source',
+    file: 'site/assets/js/auth.js',
+    mutate: (src) => {
+      /* Drop redirect_to. GoTrue still sends the mail and still answers 200, so nothing
+         fails and nothing looks different — the member simply lands wherever the project's
+         Site URL points, which on this deployment is localhost:3000. */
+      const m = /\n\s+if \(redirectTo\) payload\.redirect_to = redirectTo;/.exec(src);
+      if (!m) return null;
+      return src.replace(m[0], '');
+    },
+    run: 'node scripts/frontend-auth-test.mjs',
+  },
+  {
     id: 'csp-unsafe-inline',
     invariant: "§6 — CSP carries no 'unsafe-inline'",
     catches: ['frontend-csp-test'],

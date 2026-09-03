@@ -39,6 +39,10 @@
   var expiresAt = 0;
   var user = null;
 
+  /* A recovery link's tokens, between landing on /reset and setting a password. Held
+     here rather than adopted, and never written to storage — see beginRecovery below. */
+  var recovery = null;
+
   var listeners = [];
 
   function emit() {
@@ -83,7 +87,15 @@
        auth.err.generic, and "something went wrong, try again later" is indistinguishable
        from every other failure — which is why the admin dashboard's missing widget was
        found by a person locked out rather than by the screen that locked them out. */
-    captcha_failed: 'auth.err.captcha'
+    captcha_failed: 'auth.err.captcha',
+    /* The password-reset path, added 3 Sep 2026. All three are refusals of PUT /user with
+       a recovery session, and all three used to fall through to auth.err.generic — which
+       on a screen whose only job is "type a new password" tells the member nothing about
+       which of the three things they must do differently. */
+    same_password: 'auth.err.samePassword',
+    reauthentication_needed: 'auth.err.reauth',
+    session_not_found: 'auth.err.linkExpired',
+    bad_jwt: 'auth.err.linkExpired'
   };
 
   function messageKey(body, status) {
@@ -104,19 +116,38 @@
     return e;
   }
 
-  function request(path, payload) {
+  /* `opts` exists for the recovery path and nothing else so far:
+
+       method      — /user is a PUT. Everything else here is a POST.
+       token       — a Bearer, for the one call that is authenticated by a session rather
+                     than by the anon key.
+       statusKeys  — a per-call override for a status whose meaning depends on which
+                     endpoint answered it. A 401 from /user during a password reset means
+                     the recovery link has been spent or has aged out; a 401 anywhere else
+                     does not, so this is not something messageKey() can know. */
+  function request(path, payload, opts) {
+    opts = opts || {};
     if (!ANON) {
       /* Loud and specific. Without this the browser sends an unauthenticated request and
          gets a 401 that looks like wrong credentials — a false trail that costs an hour. */
       return Promise.reject(AuthError('auth.err.notConfigured'));
     }
+    var headers = { apikey: ANON, 'Content-Type': 'application/json' };
+    if (opts.token) headers.Authorization = 'Bearer ' + opts.token;
     return global.fetch(AUTH + path, {
-      method: 'POST',
-      headers: { apikey: ANON, 'Content-Type': 'application/json' },
+      method: opts.method || 'POST',
+      headers: headers,
       body: JSON.stringify(payload)
     }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (body) {
-        if (!res.ok) throw AuthError(messageKey(body, res.status));
+        if (!res.ok) {
+          var key = messageKey(body, res.status);
+          var override = opts.statusKeys && opts.statusKeys[res.status];
+          /* The override applies only where the body said nothing useful. A response that
+             names its own error code is more specific than a status, always. */
+          if (override && key === 'auth.err.generic') key = override;
+          throw AuthError(key);
+        }
         return body;
       });
     }, function () {
@@ -204,6 +235,82 @@
       return request('/token?grant_type=password', payload).then(adopt);
     },
 
+    /* ── Password reset ──────────────────────────────────────
+       Added 3 Sep 2026. Two halves, an email round-trip apart.
+
+       GoTrue's captcha protection covers /recover exactly as it covers /signup and
+       /token, so the token is not optional in practice — a request without one is refused
+       with `captcha_failed` before the address is even looked at. §6 wants the widget
+       there anyway; this is the endpoint that also insists.
+
+       `redirect_to` is sent as the CALLING page's own origin + /reset rather than a value
+       from config, and the reason is that it must match Amro's Auth redirect allowlist,
+       which this repository cannot read and must not change. A value the allowlist does
+       not admit is not an error: GoTrue silently falls back to the project's Site URL.
+       So sending it costs nothing and, where it IS admitted, the member lands on the
+       screen built for them instead of on the archive with a fragment in the URL. The
+       front end handles both landings (see captureRecovery in public.js).
+
+       The response is deliberately not inspected. GoTrue answers 200 for an address it
+       has never seen, which is the correct behaviour and the reason §7 can keep the
+       confirmation panel identical either way — this must not become a way to ask the
+       archive who has an account. */
+    requestPasswordReset: function (email, turnstileToken, redirectTo) {
+      var payload = { email: email };
+      if (turnstileToken) payload.gotrue_meta_security = { captcha_token: turnstileToken };
+      if (redirectTo) payload.redirect_to = redirectTo;
+      return request('/recover', payload).then(function () { return true; });
+    },
+
+    /* The tokens a recovery link arrives with, HELD rather than adopted.
+
+       GoTrue's /verify hands back a full session, so the obvious implementation is to
+       adopt it on landing and let the member browse. That is what the official SDK does
+       and it is not what happens here: §7's contributors are on shared and borrowed
+       devices, and a recovery link opened on one of those would leave a live session
+       behind for whoever opens the tab next, whether or not a password was ever set.
+
+       So nothing is emitted, nothing is written to sessionStorage, and AUTH.isSignedIn()
+       stays false until completeRecovery() succeeds. Abandoning the screen costs the
+       visitor nothing and leaves nothing behind. */
+    beginRecovery: function (tokens) {
+      recovery = tokens && tokens.access_token ? tokens : null;
+      return recovery !== null;
+    },
+
+    hasRecovery: function () { return recovery !== null; },
+
+    discardRecovery: function () { recovery = null; },
+
+    /**
+     * Set the new password with the recovery session, and only then become signed in.
+     *
+     * PUT /auth/v1/user returns the USER, not a session — so the session adopted here is
+     * assembled from the tokens the link carried plus the user the update answered with.
+     * That is the same shape adopt() takes from /token, which is why there is one adopt().
+     */
+    completeRecovery: function (password) {
+      if (!recovery) return Promise.reject(AuthError('auth.err.linkExpired'));
+      var held = recovery;
+      return request('/user', { password: password }, {
+        method: 'PUT',
+        token: held.access_token,
+        /* A recovery session that has been spent or has aged out answers 401 with a body
+           this file does not recognise. Left generic it reads as "that did not go
+           through", and the member retypes the same password into a link that will never
+           work again. */
+        statusKeys: { 401: 'auth.err.linkExpired', 403: 'auth.err.linkExpired' }
+      }).then(function (body) {
+        recovery = null;
+        return adopt({
+          access_token: held.access_token,
+          refresh_token: held.refresh_token,
+          expires_in: held.expires_in,
+          user: body
+        });
+      });
+    },
+
     signOut: function () {
       var token = accessToken;
       clear();
@@ -233,6 +340,11 @@
     /* Exposed for the tests in scripts/frontend-auth-test.mjs, which assert that the
        access token is never written to storage. Reading it any other way would mean the
        test asserting against its own copy of the rule. */
-    _debug: { hasAccessTokenInMemory: function () { return accessToken !== null; } }
+    _debug: {
+      hasAccessTokenInMemory: function () { return accessToken !== null; },
+      /* The §7 decision in beginRecovery is one line from being undone by someone
+         "fixing" the reload, and nothing about the screen would look different. */
+      hasRecoveryInMemory: function () { return recovery !== null; }
+    }
   };
 })(window);

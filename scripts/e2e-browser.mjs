@@ -135,6 +135,8 @@ const TURNSTILE_STUB = `
    trap, and it is worth using one anywhere a URL under test carries a query string. */
 const PASSWORD_GRANT = /\/auth\/v1\/token\?grant_type=password/;
 const SIGNUP = /\/auth\/v1\/signup/;
+const RECOVER = /\/auth\/v1\/recover/;
+const USER = /\/auth\/v1\/user$/;
 
 const browser = await chromium.launch({ headless: !HEADED, slowMo: SLOW ? 250 : 0 });
 
@@ -467,6 +469,207 @@ try {
       { method: 'DELETE', headers: { apikey: SVC, Authorization: `Bearer ${SVC}` } },
     );
     ck(removed.ok, `the harness member's likes were removed again (${removed.status})`);
+  }
+
+  /* ── 5 · the password reset, both halves ─────────────────── */
+
+  section(5, 'password reset — the request, the landing, and the two dead ends');
+  {
+    /* Half one: the request.
+     *
+     * "Forgot password?" was a stub that toasted its own label from M1 until 3 Sep 2026,
+     * so there is nothing here to regress against — this is the first run of the path.
+     * The request is watched at the NETWORK: a dialog that changes into a confirmation
+     * panel without POSTing anything would satisfy every DOM assertion below and send no
+     * mail, which is precisely the failure mode the stub had. */
+    const page = await newPage();
+    const posted = [];
+    await page.route(RECOVER, (route) => {
+      posted.push(JSON.parse(route.request().postData() ?? '{}'));
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    });
+
+    await page.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
+    await ready(page);
+
+    await page.click(SEL.mastheadSignIn);
+    await page.waitForSelector(SEL.form, { timeout: 10000 });
+    ck(await page.locator('form.dialog--form .field__hint').count() > 0,
+       `the sign-in form carries the "forgot password" control`);
+
+    await page.click('form.dialog--form .field__hint');
+    await page.waitForSelector(SEL.email, { timeout: 10000 });
+    ck(await page.locator(SEL.password).count() === 0,
+       `it opens a form asking for an EMAIL and no password — a different mode, not the same dialog`);
+
+    await page.fill(SEL.email, 'reset-probe@mail.example.com');
+    await page.click(SEL.submit);
+    await page.waitForSelector(SEL.panel, { timeout: 10000 }).catch(() => {});
+
+    ck(posted.length === 1, `POST /auth/v1/recover actually happened (${posted.length})`);
+    ck(posted[0]?.gotrue_meta_security?.captcha_token === 'harness-stub-token',
+       `...carrying a Turnstile token — the widget was mounted and waited on, not skipped`);
+    ck(posted[0]?.redirect_to === `${ORIGIN}/reset`,
+       `...and redirect_to pointing at this origin's /reset (${posted[0]?.redirect_to})`);
+
+    const panel = await text(page, SEL.panel);
+    ck(!!panel, `a confirmation PANEL replaced the form — "${panel}"`);
+    await page.waitForTimeout(6000);
+    ck(await page.locator(SEL.panel).count() > 0,
+       `and it is STILL there 6 s later — it persists until dismissed, like the signup panel`);
+    ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+    await page.context().close();
+  }
+
+  {
+    /* The mail cap gets its own sentence. Amro's project has no custom SMTP, so
+       over_email_send_rate_limit is not a hypothetical here — it is the refusal a real
+       member meets today, and telling them "too many attempts" for somebody else's
+       cooldown is the defect this asserts against. */
+    const page = await newPage();
+    await page.route(RECOVER, (route) => route.fulfill({
+      status: 429, contentType: 'application/json',
+      body: JSON.stringify({ error_code: 'over_email_send_rate_limit', msg: 'email rate limit exceeded' }),
+    }));
+
+    await page.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
+    await ready(page);
+    await page.click(SEL.mastheadSignIn);
+    await page.waitForSelector(SEL.form, { timeout: 10000 });
+    await page.click('form.dialog--form .field__hint');
+    await page.waitForSelector(SEL.email, { timeout: 10000 });
+    await page.fill(SEL.email, 'reset-probe@mail.example.com');
+    await page.click(SEL.submit);
+    await page.waitForSelector('form.dialog--form .form-error:not([hidden])', { timeout: 10000 }).catch(() => {});
+
+    const msg = await text(page, 'form.dialog--form .form-error');
+    /* Three assertions, not one, and the first exists because a single one SURVIVED its own
+       mutation: "the limit is ours" is true of auth.err.mailLimit AND of the reset-specific
+       string that replaced it, so an assertion on that clause tested the pre-existing
+       signup wording and said nothing about this screen. What this screen has to get right
+       is the NOUN — a member waiting for a reset link told "we could not send the
+       confirmation email" reasonably concludes they are on the wrong screen. */
+    ck(/رابط الاستعادة/.test(msg),
+       `the mail cap names the RESET LINK, not a confirmation email — "${msg.slice(0, 46)}…"`,
+       'reset.err.mailLimit vs auth.err.mailLimit: same 429, and the wrong noun on this screen');
+    ck(/من جهتنا/.test(msg),
+       `...and says the sending limit is OURS rather than blaming the member`,
+       'auth.err.mailLimit vs auth.err.rateLimit: two different 429s, two different next actions');
+    ck(!/محاولات كثيرة/.test(msg),
+       `...and is NOT the "too many attempts" string`);
+    ck(await page.locator(SEL.panel).count() === 0, `a refused request does not show the sent panel`);
+    await page.context().close();
+  }
+
+  {
+    /* Half two: the landing.
+     *
+     * GoTrue's /verify consumes the token server-side and 302s with the session in the URL
+     * FRAGMENT. Nothing here fakes the app's own code — the fragment below is the exact
+     * shape GoTrue emits, and the page is asked to do with it what it would do with a real
+     * one. The only double is the PUT that would change a real password. */
+    const page = await newPage();
+    const puts = [];
+    await page.route(USER, (route) => {
+      puts.push({ method: route.request().method(), headers: route.request().headers(),
+                  body: JSON.parse(route.request().postData() ?? '{}') });
+      route.fulfill({ status: 200, contentType: 'application/json',
+                      body: JSON.stringify({ id: 'u-recovered', email: 'recovered@mail.example.com',
+                                             app_metadata: {} }) });
+    });
+
+    await page.goto(
+      `${ORIGIN}/#access_token=HARNESS-RECOVERY-ACCESS&refresh_token=HARNESS-RECOVERY-REFRESH` +
+      `&expires_in=3600&token_type=bearer&type=recovery`,
+      { waitUntil: 'domcontentloaded' });
+    await ready(page);
+    await page.waitForSelector('.authpage__form', { timeout: 15000 }).catch(() => {});
+
+    ck(await page.locator('.authpage__form').count() > 0,
+       `a recovery fragment at the SITE ROOT renders the set-a-password screen`,
+       'this is the landing that happens when the Auth allowlist does not admit /reset');
+    ck(new URL(page.url()).pathname === '/reset' && !page.url().includes('access_token'),
+       `and the URL is now ${new URL(page.url()).pathname} with the session REPLACED out of it`,
+       'a session in an address bar survives into history and into a screenshot');
+
+    ck(await page.evaluate(() => !window.AUTH.isSignedIn() && window.AUTH.hasRecovery()),
+       `the link is HELD and nobody is signed in yet — §7, shared and borrowed devices`);
+    ck(await page.evaluate(() => { try { return window.sessionStorage.getItem('rma.refresh') === null; }
+                                   catch (e) { return false; } }),
+       `...and nothing was written to sessionStorage`);
+
+    const boxes = page.locator('.authpage__form input[type="password"]');
+    ck(await boxes.count() === 2, `two password boxes — the new one and its confirmation`);
+    const labelled = await page.evaluate(() =>
+      [...document.querySelectorAll('.authpage__form input')]
+        .every((i) => !!document.querySelector(`label[for="${i.id}"]`)));
+    ck(labelled, `both carry a real <label for>, not a placeholder standing in for one`);
+
+    /* Local validation refuses BEFORE the network — a round-trip to be told "eight
+       characters" is a round-trip the member does not need to make. */
+    await boxes.nth(0).fill('short');
+    await boxes.nth(1).fill('short');
+    await page.click('.authpage__form button[type="submit"]');
+    await page.waitForTimeout(400);
+    ck(puts.length === 0 && await page.locator('.authpage__form .form-error:not([hidden])').count() > 0,
+       `a too-short password is refused locally and sends nothing`);
+
+    await boxes.nth(0).fill('a-long-enough-password');
+    await boxes.nth(1).fill('a-different-password');
+    await page.click('.authpage__form button[type="submit"]');
+    await page.waitForTimeout(400);
+    const mismatch = await text(page, '.authpage__form .form-error');
+    ck(puts.length === 0 && /متطابق|match/i.test(mismatch),
+       `a mismatch is its own message rather than the length one — "${mismatch}"`);
+
+    await boxes.nth(1).fill('a-long-enough-password');
+    await page.click('.authpage__form button[type="submit"]');
+    await page.waitForTimeout(1500);
+
+    ck(puts.length === 1 && puts[0].method === 'PUT',
+       `a valid password PUTs /auth/v1/user (${puts.length} call(s))`);
+    ck(puts[0]?.headers.authorization === 'Bearer HARNESS-RECOVERY-ACCESS',
+       `...authenticated by the recovery session the link carried`);
+    ck(puts[0]?.body.password === 'a-long-enough-password', `...and carries the new password`);
+    ck(await page.evaluate(() => window.AUTH.isSignedIn()),
+       `and only NOW is the member signed in — never a dead end, and never before the reset`);
+    ck(await page.locator('#masthead .avatar-btn').count() > 0,
+       `the masthead agrees without a reload — the avatar is there`);
+    ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+    await page.context().close();
+  }
+
+  {
+    /* The two ways there is no usable link, and neither may be a blank screen. */
+    const page = await newPage();
+    await page.goto(`${ORIGIN}/#error=access_denied&error_code=otp_expired` +
+                    `&error_description=Email+link+is+invalid+or+has+expired`,
+                    { waitUntil: 'domcontentloaded' });
+    await ready(page);
+    await page.waitForSelector('.authpage__card', { timeout: 15000 }).catch(() => {});
+
+    ck(await page.locator('.authpage__card').count() > 0,
+       `an EXPIRED link renders a screen rather than dropping the visitor on the archive`);
+    ck(new URL(page.url()).pathname === '/reset', `...at /reset`);
+    ck(await page.locator('.authpage__card .btn--primary').count() > 0,
+       `...with a way to ask for a new link on it (§9: never a dead end)`);
+    ck(await page.locator('.authpage__form').count() === 0,
+       `...and NOT a password form that could never work`);
+
+    /* Direct navigation. This is the History API assertion the whole route depends on:
+       /reset is not a file, so it only resolves because site/_redirects serves the SPA
+       shell with a 200 for anything unmatched. The dev server above implements that same
+       rule, so this proves the ROUTE — the deployed behaviour is the _redirects file, and
+       frontend-csp-test already pins that. */
+    const res = await page.goto(`${ORIGIN}/reset`, { waitUntil: 'domcontentloaded' });
+    await ready(page);
+    ck(res?.status() === 200, `GET /reset answers 200 under History API routing (${res?.status()})`);
+    ck(await page.locator('.authpage__card').count() > 0,
+       `...and renders the reset screen, not a 404 and not the archive`);
+    ck(await page.locator('.authpage__card .btn--primary').count() > 0,
+       `...with the request-a-link action, so a bookmark or a reload is not a dead end either`);
+    ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+    await page.context().close();
   }
 } finally {
   await browser.close();

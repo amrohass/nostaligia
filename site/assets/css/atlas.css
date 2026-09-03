@@ -1742,6 +1742,60 @@ html[lang="en"] .prerender__rights { font: 400 11.5px/1.8 var(--font-en); }
 .prerender__home { margin: 22px 0 0; font: 600 12.5px var(--font-ar); }
 html[lang="en"] .prerender__home { font: 600 12px var(--font-en); }
 
+/* ─────────────────────────── Auth pages ───────────────────────────
+   /reset is a PAGE and not a dialog: the member arrives on a fresh page load from their
+   mail client, so there is nothing for an overlay to sit over. It borrows the dialog's
+   card rather than defining a second visual language for the same moment.
+
+   Logical properties throughout (section 9) -- margin-inline, padding-inline, text-align
+   start -- so the card centres and the copy reads from the correct edge in both
+   directions with no RTL-specific rule. */
+
+.authpage {
+  display: flex;
+  justify-content: center;
+  padding: 56px 24px 80px;
+}
+.authpage__card {
+  width: 440px;
+  max-width: 100%;
+  background: var(--paper);
+  border: 1px solid var(--olive-a14);
+  border-radius: var(--r-xl);
+  padding: 32px 34px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.authpage__title { font: 700 21px/1.6 var(--font-ar); color: var(--olive); margin: 0; }
+html[lang="en"] .authpage__title { font: 700 20px/1.4 var(--font-en); }
+.authpage__blurb { font: 400 13.5px/2 var(--font-ar); color: var(--ink-70); margin: 0; }
+html[lang="en"] .authpage__blurb { font: 400 12.5px/1.7 var(--font-en); }
+.authpage__form { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.authpage__back {
+  text-align: center;
+  margin-top: 4px;
+  font: 400 12.5px var(--font-ar);
+  color: var(--ink-55);
+}
+html[lang="en"] .authpage__back { font: 400 12px var(--font-en); }
+.authpage__back:hover { color: var(--ink); }
+.authpage .btn--block { margin-top: 6px; }
+
+/* The account controls on /me. One row per control, and it deliberately looks like a
+   .privacy-row above it -- the two sit on one page and read as one settings surface. */
+.account__rows { display: flex; flex-direction: column; }
+.account__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 13px 0;
+  border-bottom: 1px solid rgba(62, 74, 46, .08);
+}
+.account__row:last-child { border-bottom: 0; }
+
 /* ─────────────────────────── Responsive ───────────────────────────
    The mobile pass follows 2c/2e/2i: two-column grid, terracotta masthead,
    decade rail as a swipeable chip row, viewer comments as a bottom bar. */

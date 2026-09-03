@@ -137,6 +137,79 @@
                                 en: 'The human check did not complete. Please try again.' },
     'auth.err.generic':       { ar: 'تعذّر إتمام الطلب. أعد المحاولة بعد قليل.',
                                 en: 'That did not go through. Try again shortly.' },
+    // ── Password reset (3 Sep 2026) ─────────────────────────
+    // Four refusals kept apart on purpose, because on a screen whose only job is "type a
+    // new password" a single generic failure tells the member nothing about which of the
+    // four things they have to do differently. §6's captcha refusal (auth.err.captcha) and
+    // the two 429s (auth.err.rateLimit, auth.err.mailLimit) are the other three, and they
+    // are already above — the reset views reuse them rather than growing copies.
+    'auth.err.linkExpired':   { ar: 'انتهت صلاحية هذا الرابط أو استُخدم من قبل. اطلب رابطًا جديدًا.',
+                                en: 'That link has expired or has already been used. Ask for a new one.' },
+    'auth.err.samePassword':  { ar: 'كلمة المرور الجديدة مطابقة للقديمة. اختر واحدة مختلفة.',
+                                en: 'That is the same password you had. Choose a different one.' },
+    'auth.err.reauth':        { ar: 'يتطلّب هذا الحساب تأكيدًا إضافيًا قبل تغيير كلمة المرور. تواصل معنا.',
+                                en: 'This account needs an extra confirmation before the password can change. Please get in touch.' },
+
+    'reset.title':    { ar: 'استعادة كلمة المرور', en: 'Reset your password' },
+    'reset.blurb':    { ar: 'اكتب بريدك الإلكتروني وسنرسل إليك رابطًا لتعيين كلمة مرور جديدة.',
+                        en: 'Enter your email and we will send you a link to set a new password.' },
+    'reset.submit':   { ar: 'أرسل الرابط', en: 'Send the link' },
+    'reset.remembered': { ar: 'تذكّرتها؟', en: 'Remembered it?' },
+    // Identical whether or not the address has an account. GoTrue answers 200 either way
+    // and §7 does not let this become a way to ask the archive who is a member.
+    'reset.sent.title': { ar: 'تفقّد بريدك', en: 'Check your email' },
+    'reset.sent.body':  { ar: 'إن كان هناك حساب مرتبط بهذا البريد، فقد أرسلنا إليه رابط استعادة:',
+                          en: 'If there is an account for this address, we have sent it a reset link:' },
+    'reset.sent.hint':  { ar: 'الرابط صالح لفترة قصيرة. إن لم تصل الرسالة، تحقّق من مجلد البريد غير المرغوب فيه — وقد تتأخر بضع دقائق.',
+                          en: 'The link is good for a short while. If it does not arrive, check your spam folder — it can take a few minutes.' },
+    'reset.sent.gotIt': { ar: 'حسنًا', en: 'Got it' },
+    // Its own wording rather than auth.err.mailLimit's: that string says "confirmation
+    // email", which is the wrong noun on this screen, and a member reading it while
+    // waiting for a RESET link would reasonably think they had been sent to the wrong
+    // place. Same cause, same honesty about whose limit it is.
+    'reset.err.mailLimit': { ar: 'تعذّر إرسال رابط الاستعادة الآن — الحد المسموح به من الرسائل من جهتنا، لا خطأ منك. أعد المحاولة بعد قليل.',
+                             en: 'We could not send the reset link just now — a sending limit on our side, not something you did. Please try again shortly.' },
+
+    // ── The landing page the link lands on ──────────────────
+    'reset.set.title':   { ar: 'اختر كلمة مرور جديدة', en: 'Choose a new password' },
+    'reset.set.blurb':   { ar: 'كلمة المرور الجديدة ستُستخدم لتسجيل الدخول من الآن فصاعدًا.',
+                           en: 'This is the password you will sign in with from now on.' },
+    'reset.set.password': { ar: 'كلمة المرور الجديدة', en: 'New password' },
+    'reset.set.confirm':  { ar: 'تأكيد كلمة المرور',   en: 'Confirm password' },
+    'reset.set.submit':   { ar: 'حفظ كلمة المرور',     en: 'Save password' },
+    'reset.set.rule':     { ar: 'ثمانية أحرف على الأقل.', en: 'Eight characters at least.' },
+    'reset.err.tooShort': { ar: 'كلمة المرور قصيرة جدًا — ثمانية أحرف على الأقل.',
+                            en: 'That password is too short — eight characters at least.' },
+    'reset.err.mismatch': { ar: 'الكلمتان غير متطابقتين.', en: 'Those two do not match.' },
+
+    'reset.done.title':  { ar: 'تم تحديث كلمة المرور', en: 'Your password is updated' },
+    'reset.done.body':   { ar: 'سجّلنا دخولك باسم', en: 'You are signed in as' },
+    'reset.done.continue': { ar: 'متابعة إلى الأرشيف', en: 'Continue to the archive' },
+
+    // Two headings for the same failure, and the difference is what we actually know.
+    // A link that names itself (`type=recovery`) or that landed on /reset is a reset link
+    // and is called one. A bare error fragment at the site root could equally be a signup
+    // confirmation, so it is called "this link" — never a dead end either way, and never a
+    // claim the fragment did not make.
+    'reset.dead.title':      { ar: 'انتهت صلاحية رابط الاستعادة', en: 'That reset link is no longer valid' },
+    'reset.dead.titleAny':   { ar: 'انتهت صلاحية هذا الرابط', en: 'That link is no longer valid' },
+    'reset.dead.body':       { ar: 'روابط الاستعادة صالحة لفترة قصيرة وتُستخدم مرة واحدة. اطلب رابطًا جديدًا وسنرسله فورًا.',
+                               en: 'Reset links are good for a short while and work once. Ask for a new one and we will send it straight away.' },
+    'reset.dead.again':      { ar: 'اطلب رابطًا جديدًا', en: 'Send me a new link' },
+    'reset.dead.back':       { ar: 'العودة إلى الأرشيف', en: 'Back to the archive' },
+    // /reset reached with no link at all — someone typed it, or bookmarked it. Not an
+    // error and not reported as one.
+    'reset.bare.title':      { ar: 'استعادة كلمة المرور', en: 'Reset your password' },
+    'reset.bare.body':       { ar: 'افتح رابط الاستعادة من بريدك للوصول إلى هذه الصفحة، أو اطلب رابطًا جديدًا من هنا.',
+                               en: 'Open the reset link from your email to get here, or ask for a new one below.' },
+
+    // ── The account panel on /me ────────────────────────────
+    'account.title':      { ar: 'الحساب والأمان', en: 'Account and security' },
+    'account.note':       { ar: 'هذه الإجراءات تخصّ حسابك وحده ولا تظهر لأحد.',
+                            en: 'These are yours alone and are not shown to anyone.' },
+    'account.password':   { ar: 'تغيير كلمة المرور', en: 'Change your password' },
+    'account.passwordHint': { ar: 'سنرسل رابطًا إلى بريدك المسجَّل.', en: 'We will send a link to your registered email.' },
+
 
     // ── Upload refusals ─────────────────────────────────────
     // One message per refusal request-upload and complete-upload can return. A generic
