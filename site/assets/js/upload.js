@@ -76,6 +76,11 @@
     unauthenticated: 'up.err.signedOut',
     turnstile_failed: 'up.err.robot',
     role_lookup_failed: 'up.err.generic',
+    /* 0060, gate 4b. Mapped rather than left generic because it is the one refusal in this
+       table the member can fix in thirty seconds, and the sheet blocks before reaching it
+       — so a caller who sees this is one whose confirmation state changed under them. */
+    email_unconfirmed: 'up.err.unconfirmed',
+    confirmation_check_failed: 'up.err.generic',
     over_size_cap: 'up.err.tooBig',
     over_duration_cap: 'up.err.tooLong',
     /* gate 5, the daily quota */

@@ -89,3 +89,11 @@ verify_jwt = true
 # else's id is refused by Postgres, not by the gateway.
 [functions.delete-account]
 verify_jwt = true
+
+# resend-confirmation (0060). Verified, like takedown and delete-account: the caller is a
+# signed-in member's browser. The guard behind the gate is claim_confirmation_send, called
+# with that same token so PostgREST verifies the signature and derives auth.uid() itself --
+# which is also the only reason the address the mail goes to can be trusted, since it is
+# read from the token AFTER the database has accepted it.
+[functions.resend-confirmation]
+verify_jwt = true

@@ -154,8 +154,11 @@ select set_eq(
     having count(p.polname) = 0
   $q$,
   array['user_roles', 'reserved_handles', 'releases', 'upload_quota', 'publish_lease',
-        'publish_revision', 'publish_hold'],
-  'exactly seven tables are intentionally policy-free (deny-all, service role only)'
+        'publish_revision', 'publish_hold',
+        -- 0060. Shaped after user_roles for the same reason: a member who can write it
+        -- confirms themselves, and one who can read it learns who else has not.
+        'email_confirmations'],
+  'exactly eight tables are intentionally policy-free (deny-all, service role only)'
 );
 
 -- ── 10 · No SECURITY DEFINER function with a mutable search_path ──

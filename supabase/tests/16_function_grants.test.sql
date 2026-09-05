@@ -231,6 +231,38 @@ select set_eq(
     ('save_content_block(p_key text, p_locale text, p_draft text, p_publish boolean) -> authenticated'),
     ('save_content_block(p_key text, p_locale text, p_draft text, p_publish boolean) -> service_role'),
 
+    -- Email confirmation (0060). Four functions, four different answers, and the shape of
+    -- each grant IS the boundary.
+    --
+    -- email_confirmed() is read by the four INSERT policies, and a policy is evaluated as
+    -- the querying role -- so the role doing the writing must hold EXECUTE or the table
+    -- would raise 42501 instead of refusing the row, exactly as the is_admin note above
+    -- says. It reports the CALLER's own state and nothing about anybody else, so anon may
+    -- ask and is told false.
+    ('email_confirmed() -> anon'),
+    ('email_confirmed() -> authenticated'),
+    ('email_confirmed() -> service_role'),
+
+    -- confirm_email() is the stamp. `authenticated` may call it because the boundary is
+    -- INSIDE it: the caller's own session has to carry an `amr` naming a mailed link, which
+    -- is inside a signature and cannot be forged in a browser. `anon` gets nothing -- a
+    -- signed-out caller has no row to stamp.
+    ('confirm_email() -> authenticated'),
+
+    ('email_confirmation_status() -> authenticated'),
+
+    -- claim_confirmation_send() is called with the MEMBER'S OWN token, so `authenticated` is
+    -- the role PostgREST arrives as -- and that is the design rather than a convenience: the
+    -- database verifies the signature and derives auth.uid() itself, instead of the Edge
+    -- Function reading a subject out of a token nothing checked. The grant is not the
+    -- authorization; the function acts on auth.uid() and can reach no other row. It returns
+    -- no address, which is the §7 half, and 37_email_confirmation asserts that separately.
+    ('claim_confirmation_send() -> authenticated'),
+
+    -- ensure_email_confirmation() appears NOWHERE above, deliberately, and that is the
+    -- assertion: both of its callers are SECURITY DEFINER, so the inner call runs with the
+    -- definer's rights. Compare ensure_profile(uuid), absent for the same reason since 0058.
+
 
     -- ── Still on the PUBLIC default, each for a reason ────────
     --
@@ -382,6 +414,12 @@ select set_eq(
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-0000000000f1', 'grant-subject@t.local'),
   ('00000000-0000-0000-0000-0000000000f2', 'grant-actor@t.local');
+
+-- 0060 gates every contribution on a confirmed address, and a fixture account created here
+-- is an ordinary confirmed member. The UNCONFIRMED case has one file of its own
+-- (37_email_confirmation); asserting it in thirty-five others would be thirty-five copies
+-- of one boundary, all of them drifting separately.
+update public.email_confirmations set confirmed_at = now() where confirmed_at is null;
 
 insert into public.user_roles (user_id, role, granted_by)
 values ('00000000-0000-0000-0000-0000000000f1', 'moderator',

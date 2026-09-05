@@ -19,6 +19,12 @@ insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-0000000000a1', 'slot-one@t.local'),
   ('00000000-0000-0000-0000-0000000000a2', 'slot-two@t.local');
 
+-- 0060 gates every contribution on a confirmed address, and a fixture account created here
+-- is an ordinary confirmed member. The UNCONFIRMED case has one file of its own
+-- (37_email_confirmation); asserting it in thirty-five others would be thirty-five copies
+-- of one boundary, all of them drifting separately.
+update public.email_confirmations set confirmed_at = now() where confirmed_at is null;
+
 -- upload_quota and posts are both unreadable by the caller we impersonate below, so the
 -- harness needs owner-rights observers to check that a refusal really wrote nothing.
 create function pg_temp.quota_count(p_user uuid) returns integer

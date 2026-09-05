@@ -1,16 +1,22 @@
 Ramallah Memory Atlas — handoff. Read CLAUDE.md fully first; it governs this repo and
 overrides your defaults.
 
+**The 5 Sep session's report is `docs/session-report-2026-09-05-confirmation.md`.** Read
+its §0 before deploying anything: **migration 0060 must be applied BEFORE the Edge Functions
+are redeployed**, or every upload breaks in the window between the two. The front end needs
+no ordering — it degrades to today's behaviour against a database without 0060, deliberately
+and testably.
+
+That session did two things. It fixed the form-labelling defect (`UI.labelFor`, commit
+`3ca6d5d`) — the critical `select-name` on the share sheet, two unlabelled inputs beside it,
+and two more on the admin sign-in that nothing had ever looked at. And it **built deferred
+email confirmation**, which had been stopped at §12 since 3 Sep: Amro answered both open
+questions on 5 Sep — **mechanism B**, and **gate all four**.
+
 **The 3 Sep session's report is `docs/session-report-2026-09-03-auth.md`** — the password
 reset that shipped (where a Supabase reset link ACTUALLY lands, and the §7 hold that must
-not be "fixed"), and the deferred-email-confirmation mechanism, which stopped at §12 with
-no code and **is still the one thing waiting on Amro's answer rather than on work**.
-
-**5 Sep, a defect fix and nothing else:** every visible caption is now bound to the control
-it names (`UI.labelFor`), which closes the critical `select-name` and the two unlabelled
-inputs the 2 Sep sweep reported on the share sheet, and two more nobody had looked at on the
-admin sign-in. Commit `3ca6d5d`. The remaining a11y findings are colour contrast only, and
-those stay a palette decision with an owner.
+not be "fixed"), and §2's measurement of why "signed in AND unconfirmed" is not reachable by
+configuration in this GoTrue, which is what 0060 is built on.
 
 **The 2 Sep session's report is `docs/session-report-2026-09-02-testing.md`** — the
 authenticated-E2E blocker removed, the mutation pass, the privacy suite, where the time
@@ -50,17 +56,32 @@ against the deployed pipeline, not argued.
 2. **`node scripts/monitor.mjs`** — new. Publish age (gate 5), storage against §2's
    thresholds, and §9's budget, against the deployed system. `--selftest` needs no
    credential. **`unknown` is not `ok`** — a check that could not look says so.
-3. `supabase migration list --linked`. 59 migrations, all paired at the end of this session.
-4. **`node scripts/pgtap-deployed.mjs --tap`** — 37 files, 669 assertions, 3 known-red.
+3. `supabase migration list --linked`. **60 migrations in the repo; 0060 is NOT applied to
+   the deployed database** — see the report's §0 for the order it has to go in.
+4. **`node scripts/pgtap-deployed.mjs --tap`** — 38 files, 695 assertions. **Until 0060 is
+   applied it must be run with the migration as its own prelude**, because every fixture now
+   confirms its accounts:
+
+   ```
+   node scripts/pgtap-deployed.mjs --tap \
+     --prelude supabase/migrations/20260905090000_email_confirmation.sql
+   ```
+
+   That is 4 red, all four known: `20_publish_cron` 14/23/24 as always, and nothing else.
+   After the migration is applied, drop the `--prelude` and it is 3 red again.
 5. **The testing suites added 2 Sep.** They need `node scripts/harness-bootstrap.mjs --all`
    once (it writes `.harness.vars`, git-ignored) and a scratch `node_modules` holding
    `playwright` + `axe-core` for the two browser ones:
    ```
    node scripts/harness-bootstrap.mjs --status        live / stale, per role
    node scripts/e2e-authenticated.mjs            61   1 known-red: takedown 207, see below
-   PLAYWRIGHT_DIR=… node scripts/e2e-browser.mjs 73   green
+   PLAYWRIGHT_DIR=… node scripts/e2e-browser.mjs 103  green
    node scripts/privacy-shards-test.mjs          44   green
-   node scripts/mutation-pass.mjs                15   15 killed
+   node scripts/mutation-pass.mjs                21   13 KILLED, 0 SURVIVED, 8 INCONCLUSIVE
+                                                     until 0060 is applied — see the report's
+                                                     §2.9; PLAYWRIGHT_DIR needed for the three
+                                                     browser ones, and re-run a browser-guarded
+                                                     INCONCLUSIVE on its own before believing it
    PLAYWRIGHT_DIR=… AXE_DIR=… node scripts/a11y-sweep.mjs  34, 0 failed, 6 findings
    node scripts/perf-probe.mjs                        measurement, no pass/fail
    deno run -A scripts/load-test-300.ts               measurement, no pass/fail
@@ -70,10 +91,11 @@ against the deployed pipeline, not argued.
    node scripts/frontend-csp-test.mjs      14    node scripts/frontend-fonts-test.mjs   14
    node scripts/frontend-auth-test.mjs     69    node scripts/frontend-rtl-test.mjs     12
    node scripts/frontend-view-test.mjs     53    node scripts/monitor.mjs --selftest    19
-   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs   99.9/150 KiB
+   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs  104.8/150 KiB
    node scripts/frontend-cors-test.mjs      6
    deno test supabase/functions/publish/   96    deno run … backup.ts --selftest        26
-   deno test … request-upload/             15    deno run … restore-verify.ts --selftest 25
+   deno test … request-upload/             22    deno run … restore-verify.ts --selftest 25
+   deno test … resend-confirmation/        11
    ```
 
 ---
@@ -151,12 +173,13 @@ to prevent, reappearing inside the monitor. Adding the secret is what makes it g
   panel on `/me`. What is still his: custom SMTP, so no reset mail has ever been sent or
   clicked, and one optional dashboard line adding `<origin>/reset` to the Auth redirect
   allowlist (without it the link lands at the site root, which is handled and tested).
-- **Deferred email confirmation is stopped at §12 and is the one thing blocked on an
-  ANSWER rather than on work.** `docs/session-report-2026-09-03-auth.md` §2 measures why
-  "signed in AND unconfirmed" is not reachable by configuration in this GoTrue, lays out
-  three mechanisms, and recommends one. Two answers are owed: which mechanism, and whether
-  comments and likes/saves are gated behind confirmation too. No code was written for it and
-  none should be until both are answered.
+- ~~**Deferred email confirmation is stopped at §12.**~~ **BUILT 5 Sep** — migration 0060,
+  `resend-confirmation`, and the client half. Amro answered both questions that day:
+  mechanism B (autoconfirm plus a project-owned flag, stamped only from a session whose
+  `amr` names a mailed link) and "gate all four" (posts, uploads, comments, likes/saves).
+  Reporting is deliberately NOT gated — §7's removal request is the control a person *in* a
+  photograph reaches for. What is still his: apply the migration, deploy the functions in
+  that order, and turn "Confirm email" off when he wants it to actually defer.
 - **A signup that needs email confirmation loses the handle the member typed.** `claimHandle()`
   runs only when signup returns a session, so a member who confirms by email lands with 0057's
   placeholder `member_<hex>` instead of the name they chose. Fixing it means persisting the

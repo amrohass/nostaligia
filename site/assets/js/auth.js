@@ -137,7 +137,9 @@
     return global.fetch(AUTH + path, {
       method: opts.method || 'POST',
       headers: headers,
-      body: JSON.stringify(payload)
+      /* A GET with a body is a TypeError in every browser, not a request that is merely
+         odd — and `JSON.stringify(null)` is the string "null", which is a body. */
+      body: opts.method === 'GET' ? undefined : JSON.stringify(payload)
     }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (body) {
         if (!res.ok) {
@@ -306,6 +308,44 @@
           access_token: held.access_token,
           refresh_token: held.refresh_token,
           expires_in: held.expires_in,
+          user: body
+        });
+      });
+    },
+
+    /**
+     * A mailed CONFIRMATION link, adopted (0060).
+     *
+     * NOT beginRecovery, and the difference is deliberate rather than an oversight. A
+     * recovery link is HELD because the member's intent is "set a password" and a link
+     * opened on a borrowed device must not leave a session behind if they abandon that.
+     * A confirmation link is a SIGN-IN link — that is what a GoTrue magic link is — so
+     * adopting it is what the member clicking it in their own mail is asking for, and
+     * refusing to would strand them at a screen saying "now go and sign in".
+     *
+     * §7's borrowed-device concern is not dismissed, it is bounded: the refresh token
+     * lives in sessionStorage and dies with the tab, so what a confirmation link leaves
+     * behind is a session in the tab the person who clicked it is looking at.
+     *
+     * The user is fetched rather than assembled from the fragment, because the fragment
+     * carries tokens and no profile — and `adopt` with a null user is a session that
+     * isSignedIn() reports as absent.
+     */
+    adoptMailedLink: function (tokens) {
+      if (!tokens || !tokens.access_token) {
+        return Promise.reject(AuthError('auth.err.linkExpired'));
+      }
+      return request('/user', null, {
+        method: 'GET',
+        token: tokens.access_token,
+        /* A link that has been spent or has aged out answers 401/403 here, exactly as a
+           dead recovery link does at PUT /user. Same message, same next action. */
+        statusKeys: { 401: 'auth.err.linkExpired', 403: 'auth.err.linkExpired' }
+      }).then(function (body) {
+        return adopt({
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token,
+          expires_in: tokens.expires_in,
           user: body
         });
       });

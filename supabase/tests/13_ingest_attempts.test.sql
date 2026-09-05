@@ -16,6 +16,12 @@ select plan(17);
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-0000000000c1', 'attempts-one@t.local');
 
+-- 0060 gates every contribution on a confirmed address, and a fixture account created here
+-- is an ordinary confirmed member. The UNCONFIRMED case has one file of its own
+-- (37_email_confirmation); asserting it in thirty-five others would be thirty-five copies
+-- of one boundary, all of them drifting separately.
+update public.email_confirmations set confirmed_at = now() where confirmed_at is null;
+
 insert into public.posts (id, kind, title_en, body_en, created_by,
                           ingest_object_key, ingest_state)
 values

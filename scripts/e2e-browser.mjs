@@ -671,6 +671,242 @@ try {
     ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
     await page.context().close();
   }
+  /* ── 6 · 0060's confirmation gate ──────────────────── */
+
+  section(6, 'email confirmation — what an unconfirmed account can and cannot do');
+  {
+    /* THE DOUBLE, named plainly. `email_confirmation_status` is answered in the page so
+       this file can drive BOTH states, which no real account can do on demand: the harness
+       accounts are confirmed, and the deployed database does not have 0060 yet.
+       What that costs, stated rather than glossed: this section proves the CLIENT half —
+       which screen opens, what reaches the wire, what the member is told. The DATABASE half
+       is 37_email_confirmation, which proves the writes are actually refused. Neither file
+       is evidence for the other's claim, and the gate is only real because both exist.
+
+       A RegExp, not a string. Playwright treats a string as a GLOB and these URLs carry no
+       query string today — but the file's own note above says to use one anywhere a URL
+       under test might, and an RPC path is exactly the kind that grows a `?select=`. */
+    const STATUS_RPC = /\/rest\/v1\/rpc\/email_confirmation_status/;
+    const CONFIRM_RPC = /\/rest\/v1\/rpc\/confirm_email/;
+    const RESEND_FN = /\/functions\/v1\/resend-confirmation/;
+
+    /** A page signed in as the harness member, with the confirmation status forced. */
+    async function memberPage(confirmed, opts = {}) {
+      const page = await newPage();
+      const session = await mintDisposable('member');
+      let statusCalls = 0;
+      await page.route(STATUS_RPC, (route) => {
+        statusCalls++;
+        if (opts.statusFails) return route.fulfill({ status: 500, body: '{}' });
+        const value = typeof confirmed === 'function' ? confirmed(statusCalls) : confirmed;
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ signed_in: true, confirmed: value }),
+        });
+      });
+      await page.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
+      await page.evaluate((t) => sessionStorage.setItem('rma.refresh', t), session.refresh_token);
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await ready(page);
+      await page.waitForFunction(() => !!(window.AUTH && window.AUTH.user()), null, { timeout: 20000 });
+      await page.waitForTimeout(1500);
+      page.session = session;
+      return page;
+    }
+
+    const shareControl = '#masthead .masthead__actions .btn--primary';
+
+    /* ── the CONTROL first ──────────────────────────────
+       A CONFIRMED member reaches the share sheet. Without this, "the sheet did not open"
+       below is indistinguishable from a button that never worked — which is the failure
+       mode this repository keeps finding in its own tests. */
+    {
+      const page = await memberPage(true);
+      await page.click(shareControl);
+      await page.waitForSelector('form.dialog--sheet', { timeout: 10000 }).catch(() => {});
+      ck(await page.locator('form.dialog--sheet').count() > 0,
+         `CONTROL: a CONFIRMED member presses Share and gets the sheet`);
+      ck(await page.locator('.dialog--gate').count() === 0,
+         `...and no confirmation dialog in front of it`);
+      ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
+
+    /* ── and now the same press, unconfirmed ──────────────── */
+    {
+      const page = await memberPage(false);
+      await page.click(shareControl);
+      await page.waitForSelector('.dialog--gate', { timeout: 10000 }).catch(() => {});
+
+      ck(await page.locator('form.dialog--sheet').count() === 0,
+         `an UNCONFIRMED member pressing Share does NOT get the sheet`,
+         'refusing after they have written a description spends their effort to tell them a rule we knew');
+      ck(await page.locator('.dialog--gate').count() > 0,
+         `...they get the confirmation screen instead`);
+
+      /* §9's bidi rule. An address on an Arabic-first line reorders without <bdi>, and
+         "which address did it go to" is the one fact this screen exists to deliver. */
+      const echoed = await page.locator('.dialog--gate bdi').first().textContent().catch(() => '');
+      ck((echoed ?? '').trim() === page.session.email,
+         `...and it names the address the link went to, in a <bdi> — "${(echoed ?? '').trim()}"`);
+
+      const buttons = await page.locator('.dialog--gate button').count();
+      ck(buttons >= 3,
+         `...with the resend IN it rather than described (${buttons} actions)`,
+         'a screen that says "check your email" and offers no way to be sent another one is a dead end');
+
+      ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
+
+    /* ── what the resend actually puts on the wire ────────── */
+    {
+      const page = await memberPage(false);
+      const sends = [];
+      await page.route(RESEND_FN, (route) => {
+        sends.push(JSON.parse(route.request().postData() ?? '{}'));
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '{"sent":true}' });
+      });
+
+      await page.click(shareControl);
+      await page.waitForSelector('.dialog--gate .btn--primary', { timeout: 10000 });
+      await page.click('.dialog--gate .btn--primary');
+      await page.waitForTimeout(2000);
+
+      ck(sends.length === 1, `pressing "send the link again" reaches resend-confirmation once (${sends.length})`);
+      ck(sends[0]?.turnstile_token === 'harness-stub-token',
+         `...carrying a Turnstile token, which GoTrue is what verifies`);
+      /* The one assertion here that is about SECURITY rather than about wiring. An endpoint
+         that mailed an address a browser supplied would be an open relay; the address comes
+         out of the caller's own verified token, server-side, and must not be in the body at
+         all — not even correctly, because a correct one today is a parameter tomorrow. */
+      ck(!('email' in (sends[0] ?? {})),
+         `...and NO email address — the server reads that from the token it just verified`,
+         JSON.stringify(sends[0] ?? {}));
+
+      const status = await page.locator('.dialog--gate .form-status').first();
+      ck(await status.count() > 0 && !(await status.isHidden()),
+         `...and the member is told the link is on its way`);
+      ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
+
+    /* ── "I opened the link" resumes what they pressed ───────
+       §9: the gate preserves intent. This is a SECOND gate in front of the same actions, so
+       it has to keep the same promise — a member who pressed Share, confirmed, and then had
+       to find Share again would have been returned to the archive by a screen whose entire
+       job was to let them through. */
+    {
+      const page = await memberPage((call) => call > 1);   // false first, true on the recheck
+      await page.click(shareControl);
+      await page.waitForSelector('.dialog--gate', { timeout: 10000 });
+
+      await page.click('.dialog--gate .btn--ghost');
+      await page.waitForSelector('form.dialog--sheet', { timeout: 10000 }).catch(() => {});
+
+      ck(await page.locator('form.dialog--sheet').count() > 0,
+         `after confirming, "check again" RESUMES the share sheet (§9's intent, through two gates)`);
+      ck(await page.locator('.dialog--gate').count() === 0,
+         `...and the confirmation screen is gone rather than stacked behind it`);
+      ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
+
+    /* ── the comment box, and the control beside it ──────── */
+    {
+      const page = await memberPage(false);
+      await page.locator('.memory').first().click();
+      await page.waitForSelector('#viewer', { timeout: 15000 });
+      await page.waitForTimeout(1500);
+
+      ck(await page.locator('.comment-form').count() === 0,
+         `an unconfirmed member gets no comment BOX`);
+      ck(await page.locator('.locked-prompt').count() > 0,
+         `...but a prompt that opens the confirmation screen — not a disabled control`);
+
+      /* NOT gated, and this is a judgement rather than an omission. §7 makes the removal
+         request the control a person IN a photograph reaches for, and that person has most
+         likely just made an account for this one purpose. A mail round trip in front of it
+         would silence exactly who it is for. */
+      const report = page.locator('#viewer .rail-action').last();
+      await report.click();
+      await page.waitForTimeout(1200);
+      ck(await page.locator('form.dialog--form').count() > 0,
+         `REPORTING is NOT gated on confirmation — §7's removal request stays reachable`,
+         'gating it would silence the person the control exists for');
+      ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
+
+    /* ── a status we could not read must not lock anybody out ── */
+    {
+      const page = await memberPage(false, { statusFails: true });
+      await page.click(shareControl);
+      await page.waitForTimeout(2000);
+      ck(await page.locator('form.dialog--sheet').count() > 0,
+         `a FAILED status request does not lock a member out — the sheet still opens`,
+         'null is "we have not been told", and the database is the boundary either way');
+      ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
+
+    /* ── the landing: a mailed link confirms, and says so ──── */
+    {
+      const page = await newPage();
+      const session = await mintDisposable('member');
+      const stamps = [];
+      await page.route(CONFIRM_RPC, (route) => {
+        stamps.push(route.request().url());
+        return route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({ confirmed: true, confirmed_at: new Date().toISOString() }),
+        });
+      });
+      await page.route(STATUS_RPC, (route) => route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ signed_in: true, confirmed: true }),
+      }));
+
+      const fragment = `#access_token=${session.access_token}` +
+        `&refresh_token=${session.refresh_token}&expires_in=3600&token_type=bearer&type=signup`;
+      await page.goto(`${ORIGIN}/${fragment}`, { waitUntil: 'domcontentloaded' });
+      await ready(page);
+      await page.waitForTimeout(3000);
+
+      ck(await page.evaluate(() => !!(window.AUTH && window.AUTH.user())),
+         `a CONFIRMATION link signs the member in — unlike a recovery link, which is held`);
+      ck(stamps.length === 1,
+         `...and stamps the flag exactly once, with the session the link carried (${stamps.length})`);
+      const hash = await page.evaluate(() => location.hash);
+      ck(hash === '',
+         `...and the tokens are gone from the address bar — hash is "${hash}"`,
+         'a session in an address bar survives into history and into a screenshot');
+      const where = await page.evaluate(() => location.pathname);
+      ck(where !== '/reset',
+         `...and it does NOT land on /reset, which would ask a confirmed member for a new password (${where})`);
+      ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
+
+    /* ── /me says which state the account is in ─────────── */
+    {
+      const page = await memberPage(false);
+      await page.goto(`${ORIGIN}/me`, { waitUntil: 'domcontentloaded' });
+      await ready(page);
+      await page.waitForSelector('.account', { timeout: 20000 }).catch(() => {});
+      await page.waitForTimeout(1500);
+
+      const rows = await page.locator('.account__row').count();
+      ck(rows >= 2, `the account panel carries the email row beside the password one (${rows})`);
+      const hint = await text(page, '.account__row .privacy-row__hint');
+      ck(/غير مؤكَّد|not confirmed/i.test(hint),
+         `...and it says the address is not confirmed — "${hint.trim()}"`,
+         'a member who cannot contribute has to be able to find out here, not by pressing Share');
+      ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
+  }
 } finally {
   await browser.close();
   server.close();

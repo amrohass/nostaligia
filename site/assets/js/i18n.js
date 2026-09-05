@@ -209,7 +209,51 @@
                             en: 'These are yours alone and are not shown to anyone.' },
     'account.password':   { ar: 'تغيير كلمة المرور', en: 'Change your password' },
     'account.passwordHint': { ar: 'سنرسل رابطًا إلى بريدك المسجَّل.', en: 'We will send a link to your registered email.' },
+    // 0060's row, beside the password one. State first, action second: a member who has
+    // confirmed needs to be told so once, and one who has not needs a button.
+    'account.email':        { ar: 'بريدك الإلكتروني', en: 'Your email address' },
+    'account.emailOk':      { ar: 'مؤكَّد — يمكنك المشاركة والتعليق.',
+                              en: 'Confirmed — you can contribute and comment.' },
+    'account.emailNo':      { ar: 'غير مؤكَّد — لا يمكنك المشاركة أو التعليق بعد.',
+                              en: 'Not confirmed — you cannot contribute or comment yet.' },
+    'account.emailConfirm': { ar: 'أكّده الآن', en: 'Confirm it now' },
 
+    // ── Email confirmation (0060, approved 5 Sep 2026) ──────
+    // An unconfirmed account may browse everything and contribute nothing, so every string
+    // here has to end in something to DO. §9's "the gate always preserves intent" and
+    // "never a dead end" both bite hardest on a screen a member cannot get past alone.
+    'confirm.title':    { ar: 'أكّد بريدك الإلكتروني', en: 'Confirm your email' },
+    'confirm.blurb':    { ar: 'المشاركة والتعليق والإعجاب والحفظ تحتاج إلى عنوان مؤكَّد. الرابط أُرسل إلى',
+                          en: 'Sharing, commenting, liking and saving need a confirmed address. The link went to' },
+    'confirm.hint':     { ar: 'افتح الرابط من بريدك ثم عد إلى هنا. إن لم تصل الرسالة، تحقّق من مجلد البريد غير المرغوب فيه.',
+                          en: 'Open the link from your email, then come back here. If it has not arrived, check your spam folder.' },
+    'confirm.send':     { ar: 'أرسل الرابط مرة أخرى', en: 'Send the link again' },
+    'confirm.recheck':  { ar: 'فتحتُ الرابط — تحقّق مرة أخرى', en: 'I opened the link — check again' },
+    'confirm.sent':     { ar: 'أرسلنا رابطًا جديدًا إلى بريدك.', en: 'A new link is on its way to your inbox.' },
+    'confirm.stillNo':  { ar: 'ما زال البريد غير مؤكَّد. افتح الرابط من الرسالة ثم عد إلى هنا.',
+                          en: 'Still not confirmed. Open the link in the email, then come back here.' },
+    'confirm.done':     { ar: 'تم تأكيد بريدك. أهلًا بك.', en: 'Your email is confirmed. Welcome.' },
+    'confirm.locked':   { ar: 'أكّد بريدك لتتمكن من التعليق', en: 'Confirm your email to comment' },
+    // Five refusals, five next actions. Merged into one they would suggest none of them —
+    // the same argument the reset dialog makes for keeping its four apart.
+    'confirm.err.tooSoon':   { ar: 'طلبت رابطًا قبل قليل. انتظر لحظة ثم حاول مجددًا.',
+                               en: 'You asked a moment ago. Wait a little, then try again.' },
+    'confirm.err.already':   { ar: 'بريدك مؤكَّد بالفعل — أعد تحميل الصفحة إن بدا غير ذلك.',
+                               en: 'Your email is already confirmed — reload the page if it still says otherwise.' },
+    'confirm.err.mailLimit': { ar: 'لم نستطع إرسال رابط التأكيد — هذا حدّ عندنا وليس خطأً منك. حاول لاحقًا.',
+                               en: 'We could not send the confirmation link — our limit, not something you did. Try again later.' },
+    'confirm.err.noAddress': { ar: 'لا يوجد عنوان بريد على هذا الحساب.',
+                               en: 'There is no email address on this account.' },
+    'confirm.err.captcha':   { ar: 'لم يكتمل التحقق من أنك لست روبوتًا. حاول مرة أخرى.',
+                               en: 'The human check did not complete. Try again.' },
+    'confirm.err.generic':   { ar: 'تعذّر إرسال الرابط. حاول مرة أخرى.',
+                               en: 'The link could not be sent. Try again.' },
+
+
+    // 0060. request-upload refuses BEFORE the signed URL, so this is what a member sees
+    // rather than the quota_check_failed 502 the trigger alone would have produced.
+    'up.err.unconfirmed': { ar: 'أكّد بريدك الإلكتروني قبل رفع أي شيء — الرابط في بريدك.',
+                            en: 'Confirm your email address before uploading — the link is in your inbox.' },
 
     // ── Upload refusals ─────────────────────────────────────
     // One message per refusal request-upload and complete-upload can return. A generic

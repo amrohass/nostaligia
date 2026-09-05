@@ -72,6 +72,17 @@
     signedIn: false,
     account: null,        // { id, email, role } from AUTH
 
+    /* 0060. THREE values, and the third is not a bug: true, false, and null for "we have
+       not been told". Null must behave like true — a status request that failed must not
+       lock a member out of contributing, because the database is the boundary and will
+       refuse them if they really are unconfirmed. A client that guessed `false` here would
+       turn one failed request into an archive nobody can write to. */
+    confirmed: null,
+
+    /* Tokens from a confirmation link, between captureRecovery() and boot. Null on every
+       ordinary visit, like `recovery` below. */
+    mailedLink: null,
+
     decade: 'all',
     viewer: null,         // { index }
     editOpen: false,
@@ -89,6 +100,10 @@
   function adoptAccount(account) {
     state.account = account ? { id: account.id, email: account.email, role: account.role, handle: null } : null;
     state.signedIn = account !== null;
+    /* Back to "not been told" rather than to false. The next account to sign in here is a
+       different person, and carrying the last one's answer would either lock them out or
+       let them through on somebody else's proof. */
+    state.confirmed = null;
     if (!account) { state.liked = {}; state.saved = {}; state.likeDelta = {}; }
   }
 
@@ -217,6 +232,25 @@
         expires_in: Number(q.get('expires_in')) || 3600
       });
       state.recovery = { stage: 'set', linkKind: 'recovery', error: null };
+    } else if (token) {
+      /* 0060. Any OTHER mailed link carrying a session — signup, magiclink, invite. Held
+         for boot rather than adopted here, because adopting means a network round trip and
+         this function runs before the first paint; §1's "browsing is open" says nothing
+         waits on a session.
+
+         The fragment is still replaced out of the URL immediately, for the reason the
+         header above gives: a session in an address bar survives into history and into a
+         screenshot, and whether it arrived from a reset link or a confirmation link makes
+         no difference to that. */
+      state.mailedLink = {
+        access_token: token,
+        refresh_token: q.get('refresh_token'),
+        expires_in: Number(q.get('expires_in')) || 3600
+      };
+      /* NOT to /reset. This link is not a password reset and sending it there would put a
+         confirmed member on a screen asking them to type a new password. */
+      global.history.replaceState(null, '', path() === RECOVERY_PATH ? '/' : path());
+      return true;
     } else if (failed) {
       /* Every error GoTrue can put on a verify redirect — otp_expired, access_denied, a
          server_error — has the same answer for the person reading it: that link is no good,
@@ -663,9 +697,9 @@
     var saved = Boolean(state.saved[entry.id]);
     return [
       railAction(el('span', { text: liked ? '♥' : '♡' }), num(likeCount(entry)), t('viewer.like'),
-        guard(function () { toggleLike(entry); }), liked),
+        contribute(function () { toggleLike(entry); }), liked),
       railAction(el('span', { text: saved ? '★' : '✩' }), t('viewer.save'), t('viewer.save'),
-        guard(function () { toggleSave(entry); }), saved),
+        contribute(function () { toggleSave(entry); }), saved),
       railAction(el('span', { text: '⚑' }), t('viewer.report'), t('viewer.report'),
         guard(function () { openReport('post', entry.id); }))
     ];
@@ -770,13 +804,14 @@
         el('div.comments__subject', null, bdi(pick(titlePair(entry))))
       ]),
       list,
-      state.signedIn ? commentForm(entry) : el('button.locked-prompt', {
-        type: 'button',
-        onclick: function () { openGate(); }
-      }, [
-        el('span.locked-prompt__lock', null, ICONS.lock('#26281F')),
-        el('span', { text: t('comments.locked') })
-      ])
+      !state.signedIn
+        ? lockedPrompt(t('comments.locked'), function () { openGate(); })
+        /* 0060. The prompt rather than a disabled box: a member typing a remark and then
+           being refused has spent the effort before learning the rule, and the refusal
+           they would get is a bare RLS 403 with nothing in it about email. */
+        : !confirmedEnough()
+        ? lockedPrompt(t('confirm.locked'), function () { openConfirmDialog(null); })
+        : commentForm(entry)
     ];
   }
 
@@ -1057,6 +1092,209 @@
       if (!state.signedIn) { openGate(action); return; }
       action();
     };
+  }
+
+  /* ── 0060 · a confirmed address ──────────────────────────────
+
+     What is gated and what is NOT, because the line matters more than the mechanism.
+
+     Gated: share, comment, like, save — the four writes migration 0060 gates in the
+     database, and this is the client half that explains the refusal instead of producing
+     it. Step B, answered 5 Sep 2026.
+
+     NOT gated: reporting. §4 gives moderators "review reports" and §7 makes the removal
+     request the control a person IN a photograph reaches for — often somebody who has just
+     made an account for that one purpose. Gating a report behind a mail round trip would
+     silence exactly the person the control exists for. `guard()` above stays sign-in-only
+     and openReport keeps using it.
+
+     This is not the boundary either way. The boundary is 0060's policies and the trigger on
+     posts; a browser that skipped all of this would be refused by Postgres. §5: the sign-in
+     gate and the admin UI are UX only, never a guard, and so is this. */
+
+  /** False ONLY when we have been told so. See state.confirmed on why null passes. */
+  function confirmedEnough() { return state.confirmed !== false; }
+
+  /** Sign-in, then a confirmed address, then the action (§9 preserves the intent through both). */
+  function contribute(action) {
+    return function () {
+      if (!state.signedIn) { openGate(contribute(action)); return; }
+      if (!confirmedEnough()) { openConfirmDialog(action); return; }
+      action();
+    };
+  }
+
+  /**
+   * Ask the database whether this account has confirmed, and remember the answer.
+   *
+   * Not from the JWT, and there must never be a claim for it — §4's argument about role
+   * applies unchanged: a token is a snapshot, and a member who confirms in another tab
+   * would otherwise wait an hour for a refresh before the archive believed them.
+   *
+   * A failure leaves `confirmed` null, which passes. Stated at the state field and again
+   * here because the two halves are in different places and only one of them looks wrong.
+   */
+  function loadConfirmation() {
+    if (!state.signedIn) return Promise.resolve(null);
+    var id = state.account && state.account.id;
+    return DB.rpc('email_confirmation_status', {}).then(function (row) {
+      if (!state.account || state.account.id !== id) return null;   // signed out mid-flight
+      state.confirmed = row && typeof row.confirmed === 'boolean' ? row.confirmed : null;
+      return state.confirmed;
+    }, function () { return null; });
+  }
+
+  /* The Edge Function. Same shape as upload.js's post(): the anon key as apikey, the
+     member's own token as the bearer, and the refusal read from the body rather than the
+     status — resend-confirmation names its own. */
+  var CONFIRM_REFUSALS = {
+    too_soon: 'confirm.err.tooSoon',
+    already_confirmed: 'confirm.err.already',
+    over_email_send_rate_limit: 'confirm.err.mailLimit',
+    no_address: 'confirm.err.noAddress',
+    captcha_failed: 'confirm.err.captcha',
+    unauthenticated: 'auth.err.signedOut'
+  };
+
+  function sendConfirmation(captcha) {
+    return AUTH.accessToken().then(function (token) {
+      return global.fetch(
+        global.CONFIG.origins.supabase + '/functions/v1/resend-confirmation',
+        {
+          method: 'POST',
+          headers: {
+            apikey: global.CONFIG.supabase.anonKey,
+            Authorization: 'Bearer ' + token,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ turnstile_token: captcha })
+        }
+      );
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) {
+        if (res.ok) return body;
+        var e = new Error('confirm');
+        e.key = CONFIRM_REFUSALS[body && body.error] || 'confirm.err.generic';
+        throw e;
+      });
+    }, function () {
+      var e = new Error('confirm');
+      e.key = 'auth.err.offline';
+      throw e;
+    });
+  }
+
+  /**
+   * The screen a member meets instead of the thing they pressed.
+   *
+   * §9 says the gate preserves intent, and this is a second gate in front of the same
+   * actions — so it carries the pending action the same way openGate does, and runs it once
+   * the address is confirmed. A member who pressed Share and then confirmed lands back on
+   * the share sheet rather than on the archive wondering where it went.
+   *
+   * The resend is IN the dialog rather than described in it. A screen that says "check your
+   * email" and offers no way to be sent another one is a dead end for the exact member who
+   * needs it — the one whose link never arrived.
+   */
+  function openConfirmDialog(intent) {
+    var scrim;
+    var widget = null;
+    var busy = false;
+
+    function close() { closeOverlay(scrim); if (widget) widget.remove(); }
+
+    function resume() {
+      close();
+      if (typeof intent === 'function') {
+        try { intent(); } catch (e) { /* a stale intent must not break the confirmation */ }
+      }
+    }
+
+    var note = el('p.form-status', { role: 'status', hidden: true });
+    var error = el('p.form-error', { role: 'alert', hidden: true });
+    var captchaSlot = el('div.captcha');
+
+    function say(node, key) {
+      note.hidden = true; error.hidden = true;
+      node.textContent = t(key);
+      node.hidden = false;
+    }
+
+    var sendButton = el('button.btn.btn--primary.btn--block', {
+      type: 'button',
+      onclick: function () {
+        if (busy) return;
+        busy = true;
+        sendButton.disabled = true;
+        sendButton.textContent = t('auth.working');
+        widget.token().then(sendConfirmation).then(function () {
+          say(note, 'confirm.sent');
+        }).catch(function (err) {
+          say(error, (err && err.key) || 'confirm.err.generic');
+        }).then(function () {
+          busy = false;
+          sendButton.disabled = false;
+          sendButton.textContent = t('confirm.send');
+          /* Single-use, and just spent — whether it succeeded or not. Same reasoning as
+             openAuth: without the reset, a second press sends a token Cloudflare has
+             already judged and the member is told the human check failed. */
+          if (widget) widget.reset();
+        });
+      },
+      text: t('confirm.send')
+    });
+
+    var recheckButton = el('button.btn.btn--ghost.btn--block', {
+      type: 'button',
+      onclick: function () {
+        recheckButton.disabled = true;
+        loadConfirmation().then(function (ok) {
+          recheckButton.disabled = false;
+          if (ok === true) { UI.toast(t('confirm.done')); render(); resume(); return; }
+          say(error, 'confirm.stillNo');
+        });
+      },
+      text: t('confirm.recheck')
+    });
+
+    scrim = overlayShell('scrim', [
+      el('div.dialog.dialog--gate', null, [
+        el('div.dialog__lock', null, ICONS.lockLarge('#A67B24')),
+        el('h2.dialog__title', { text: t('confirm.title') }),
+        el('p.dialog__blurb', null, [
+          t('confirm.blurb') + ' ',
+          /* §9's bidi rule. An address is user content on a right-to-left line and an
+             unwrapped one reorders the moment it meets Arabic punctuation. */
+          el('bdi', { text: (state.account && state.account.email) || '' })
+        ]),
+        el('p.dialog__foot', { text: t('confirm.hint') }),
+        captchaSlot,
+        note,
+        error,
+        sendButton,
+        recheckButton,
+        el('button.dialog__opt-out', {
+          type: 'button', onclick: close, text: t('gate.keep')
+        })
+      ])
+    ], close);
+
+    widget = TURNSTILE.mount(captchaSlot);
+    return scrim;
+  }
+
+  /**
+   * A signed-out or unconfirmed reader's view of a control they cannot use yet.
+   *
+   * One shape for both, because to the person reading it they are one thing — "not yet" —
+   * and the difference is which screen opens next. It was the signed-out comment box's
+   * markup; 0060 gave it a second caller rather than a second copy.
+   */
+  function lockedPrompt(label, onClick) {
+    return el('button.locked-prompt', { type: 'button', onclick: onClick }, [
+      el('span.locked-prompt__lock', null, ICONS.lock('#26281F')),
+      el('span', { text: label })
+    ]);
   }
 
   /* ── Gate & auth ─────────────────────────────────────────── */
@@ -1398,15 +1636,34 @@
       if (state.viewer) renderViewerChrome(state.viewer.index);
     });
 
+    /* NOTHING ELSE waits on this. Every gate reads state.confirmed and null passes, so the
+       archive is fully usable while it is in flight — the database is what refuses an
+       unconfirmed write in the window before it lands.
+       The one exception is the pending intent below, and the reason is worth stating: it is
+       the ONE action that runs without the member pressing anything, so it is the one where
+       a null read would open the share sheet to somebody who is about to be refused. They
+       have just been through a sign-in round trip; one more request before they land is
+       invisible, and it is the difference between meeting the confirmation screen now and
+       meeting it after writing an archival description. */
+    var ready = loadConfirmation().then(function () {
+      /* Only what the answer can change. A full render() here would rebuild the feed under
+           a reader who has not moved, which is what onSignedIn deliberately avoids. */
+      if (route() === 'profile') render();
+      else if (state.viewer) renderViewerChrome(state.viewer.index);
+    });
+
     /* §9. The action that hit the gate runs now, and the member ends up where they were
        rather than being returned to the archive to find their own way back. */
     var pending = state.pending;
     state.pending = null;
     if (pending && pending.run) {
-      try { pending.run(); } catch (e) { /* a stale intent must not break the sign-in */ }
+      ready.then(function () {
+        try { pending.run(); } catch (e) { /* a stale intent must not break the sign-in */ }
+      });
     } else {
       UI.toast(t('login.title'));
     }
+    return ready;
   }
 
   /**
@@ -1866,6 +2123,10 @@
     /* §9's gate, with intent: a signed-out visitor who presses Share is returned to this
        sheet after signing in, not to the archive. */
     if (!state.signedIn) { openGate(openShareSheet); return; }
+    /* 0060, and BEFORE the sheet is built rather than at submit. Asking somebody to write
+       an archival description and choose a licence, and then refusing the upload, spends
+       their effort to tell them something we knew when they pressed the button. */
+    if (!confirmedEnough()) { openConfirmDialog(openShareSheet); return; }
 
     var scrim;
     var kind = 'photo';
@@ -2412,6 +2673,27 @@
       ]),
       el('p.privacy-list__note', { text: t('account.note') }),
       el('div.account__rows', null, [
+        /* 0060's row, first. It is the one that decides whether the rest of the archive is
+           writable at all, and a member who cannot contribute needs to find out here rather
+           than by pressing Share. The state is shown even when it is fine: "confirmed" said
+           once is what makes "not confirmed" legible when it appears. */
+        el('div.account__row', null, [
+          el('div', null, [
+            el('div.privacy-row__name', { text: t('account.email') }),
+            el('div.privacy-row__hint', {
+              text: state.confirmed === false ? t('account.emailNo') : t('account.emailOk')
+            })
+          ]),
+          /* No button when there is nothing to do. An action that reports success without
+             doing anything is worse than an absent one. */
+          state.confirmed === false
+            ? el('button.btn.btn--ghost', {
+                type: 'button',
+                onclick: function () { openConfirmDialog(null); },
+                text: t('account.emailConfirm')
+              })
+            : null
+        ]),
         el('div.account__row', null, [
           el('div', null, [
             el('div.privacy-row__name', { text: t('account.password') }),
@@ -3045,9 +3327,55 @@
       render();
     });
 
-  AUTH.restore().then(function (account) {
-    if (account) onSignedIn(account);
-  });
+  /* 0060. A confirmation link carries a full session and takes precedence over whatever
+     sessionStorage held: a member who opens the link is saying which account this tab is
+     for, and restoring a different one under them would confirm nothing and look like the
+     link failing. */
+  if (state.mailedLink) {
+    adoptMailedLink();
+  } else {
+    AUTH.restore().then(function (account) {
+      if (account) onSignedIn(account);
+    });
+  }
+
+  /**
+   * Adopt the session a confirmation link carried, then stamp the flag with it.
+   *
+   * The stamp is the ONLY thing that may confirm an account (0060), and it works because
+   * the session's `amr` says a link was clicked — a claim inside a signature that a browser
+   * can neither write nor edit. Nothing here asserts that the member is confirmed; it asks
+   * the database to look at the token it already holds.
+   *
+   * A dead link is not a dead end. The archive is open to a signed-out visitor, so the
+   * failure path says which link failed and then restores whatever session was already
+   * there — which for somebody re-opening an old mail on their own phone is their own.
+   */
+  function adoptMailedLink() {
+    var tokens = state.mailedLink;
+    state.mailedLink = null;
+
+    return AUTH.adoptMailedLink(tokens).then(function (account) {
+      onSignedIn(account);
+      return DB.rpc('confirm_email', {}).then(function (row) {
+        if (!row || row.confirmed !== true) return false;
+        state.confirmed = true;
+        UI.toast(t('confirm.done'));
+        render();
+        return true;
+      }, function () {
+        /* The session is real and the stamp did not land — a network blip, or a token with
+           no amr. loadConfirmation() has already run from onSignedIn, so the member is
+           signed in and sees the unconfirmed state with the resend in front of it. */
+        return false;
+      });
+    }, function (err) {
+      UI.toast(t((err && err.key) || 'auth.err.linkExpired'));
+      return AUTH.restore().then(function (account) {
+        if (account) onSignedIn(account);
+      });
+    });
+  }
 
   /* The session can end without anyone pressing sign-out — a refresh token that has been
      rotated away, or an expiry. AUTH says so; the masthead has to agree. */

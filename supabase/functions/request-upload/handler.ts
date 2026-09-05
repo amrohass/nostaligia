@@ -18,6 +18,7 @@
 //   2  auth         who is this
 //   3  Turnstile    is it a human
 //   4  caps         may this role upload something this big / this long   (§6)
+//   4b confirmed    has this account proved it holds its address          (0060)
 //   5  quota        have they had enough today                           (§6)
 //   6  signed URL   the only side effect
 //
@@ -310,6 +311,27 @@ export async function handleRequest(req: Request): Promise<Response> {
 
   const role = effectiveRole(claimedRole(jwt), dbRoleRaw as Role);
   const caps = ROLE_CAPS[role];
+
+  // ── 4b · has this account proved it holds its address (0060) ──
+  //
+  // The BOUNDARY is public.require_confirmed_email, a trigger on posts, and it holds
+  // whatever this function does — claim_upload_slot is SECURITY DEFINER, so RLS never
+  // evaluates on the upload path and the trigger is the only thing there. This check is
+  // not that boundary. It exists so the refusal has a NAME.
+  //
+  // Without it the trigger raises inside gate 6, `slotRes.ok` is false, and the member is
+  // told `quota_check_failed` with a 502 — an error that says the archive is broken when
+  // the truth is that they have an unread email. There is nothing they could do with that.
+  //
+  // Read from the database, never from the token: there is no confirmation claim in a JWT
+  // and there must not be one, for the reason §4 gives about role. A member who confirms
+  // in another tab must not have to wait an hour for a refresh.
+  const confirmedRes = await rpc("email_confirmed", {}, jwt);
+  if (confirmedRes.status === 401 || confirmedRes.status === 403) {
+    return fail("unauthenticated", 401, req);
+  }
+  if (!confirmedRes.ok) return fail("confirmation_check_failed", 502, req);
+  if (await confirmedRes.json() !== true) return fail("email_unconfirmed", 403, req);
 
   if (bytes > caps.maxBytes) {
     return fail("over_size_cap", 413, req, { role, max_bytes: caps.maxBytes });

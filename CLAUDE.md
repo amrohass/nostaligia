@@ -276,6 +276,10 @@ comments(id, post_id, body, lang, status, created_by, created_at)
    -- queue screen that was always missing.
 likes(user_id, post_id, created_at, UNIQUE(user_id, post_id))
 saves(user_id, post_id, created_at, UNIQUE(user_id, post_id))
+email_confirmations(user_id PK → auth.users, confirmed_at, last_sent_at, created_at)
+   -- 0060, 5 Sep 2026. THE confirmation flag — not auth.users.email_confirmed_at, which
+   -- GoTrue stamps at signup once "Confirm email" is off and is therefore always set and
+   -- meaningless. Service role only, no grant, no policy: §4's user_roles shape exactly.
 content_blocks(key, locale, draft, published, version, updated_by, updated_at)
 reports(id, target_type, target_id, reason, reported_by, status, created_at)
 moderation_actions(id, actor, action, target_type, target_id, target_key, note, created_at)
@@ -319,6 +323,33 @@ and must never be trusted for authorization.
 | Edit site copy (`content_blocks`) | | | ✓ |
 | Manage users / roles | | | ✓ |
 | Trigger takedown | | ✓ | ✓ |
+
+- **Amended 5 Sep 2026 — the first three member rows require a CONFIRMED address.** Approved
+  the same day, as "mechanism B" out of the three measured in
+  `docs/session-report-2026-09-03-auth.md` §2, together with the answer to its Step B: an
+  unconfirmed account may do NONE of the four things a member does. Browsing is untouched —
+  §1's "browsing is open" is not conditional on anything.
+  **Why the project owns the flag.** GoTrue v2.196.0 cannot grant a session to an unconfirmed
+  account: `mailer_autoconfirm: false` returns no session at all, `true` stamps
+  `email_confirmed_at` at signup and sends nothing. So deferred confirmation is not reachable
+  by configuration. `public.email_confirmations` is the flag, read by RLS through
+  `public.email_confirmed()` — the `authz_role()` pattern, unchanged.
+  **What may set it, and this is the trust boundary:** `public.confirm_email()` stamps only
+  when the calling session's `amr` names a mailed-link method. `amr` is inside a token GoTrue
+  signed, so the browser asserts nothing here that is not inside a signature. A password
+  session is refused by name.
+  **One gate that is NOT a policy.** `claim_upload_slot` is SECURITY DEFINER, so RLS on
+  `posts` never evaluates on the upload path; `posts_require_confirmed_email`, a BEFORE
+  INSERT trigger, is what closes it. The policy term stays beside it as the second
+  mechanism and is tested with the trigger disabled, because the trigger always answers
+  first and an unobservable clause is one nobody would notice going missing.
+  **Reporting is deliberately NOT gated.** §7 makes the removal request the control a person
+  *in* a photograph reaches for, and that person has most often just made an account for
+  that one purpose. A mail round trip in front of it would silence exactly who it is for.
+  **Two consequences that are Amro's, not the code's.** With confirmations off an unconfirmed
+  account can squat somebody else's address — bounded by the gate above to browsing and
+  nothing else. And `auth.users.email_confirmed_at` becomes a second flag that is a lie;
+  the comment on the table says so.
 
 Every moderator and admin action writes to `moderation_actions` AND `audit_log` with actor,
 target, timestamp, and before/after state. No privileged action may bypass this.
@@ -425,6 +456,12 @@ Written after a real compromised-key incident (~24,000% billing spike).
     moderator's admits ten 4 GB masters. They live in `public.upload_daily_limits()`;
     change them there and here together. This is a cost ceiling, not a fairness
     mechanism: raise it only against an actual R2 and Supabase bill.
+  - **Confirmation-mail interval** (set 5 Sep 2026 with 0060): one confirmation link per
+    account per **60 seconds**, ours and in front of the provider's cap — which is
+    project-wide, so without a per-account limit one member holding a button down spends
+    everybody's. It lives in `public.claim_confirmation_send()`; change it there and here
+    together. It bounds the ordinary case and not a hostile one: a client that skips the
+    Edge Function and calls GoTrue directly meets the provider's limit instead.
   - **Publish counter floor** (set in M2, approved 19 Aug 2026): likes and comments
     republish the archive **at most once an hour**; content changes are never throttled.
     Every release rewrites every shard, so an unthrottled counter signal exceeds this

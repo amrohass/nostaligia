@@ -24,6 +24,12 @@ select plan(10);
 insert into auth.users (id, email)
 values ('00000000-0000-0000-0000-00000000de01', 'decade@t.local');
 
+-- 0060 gates every contribution on a confirmed address, and a fixture account created here
+-- is an ordinary confirmed member. The UNCONFIRMED case has one file of its own
+-- (37_email_confirmation); asserting it in thirty-five others would be thirty-five copies
+-- of one boundary, all of them drifting separately.
+update public.email_confirmations set confirmed_at = now() where confirmed_at is null;
+
 /* Created BEFORE the role switch, so they are owned by the superuser this suite runs as.
    pg_temp.claimed reads public.posts, and 0015 grants `authenticated` no table-level SELECT
    on it — a helper created after `set role` would be owned by `authenticated` and SECURITY
