@@ -1,6 +1,17 @@
 Ramallah Memory Atlas — handoff. Read CLAUDE.md fully first; it governs this repo and
 overrides your defaults.
 
+**The 3 Sep session's report is `docs/session-report-2026-09-03-auth.md`** — the password
+reset that shipped (where a Supabase reset link ACTUALLY lands, and the §7 hold that must
+not be "fixed"), and the deferred-email-confirmation mechanism, which stopped at §12 with
+no code and **is still the one thing waiting on Amro's answer rather than on work**.
+
+**5 Sep, a defect fix and nothing else:** every visible caption is now bound to the control
+it names (`UI.labelFor`), which closes the critical `select-name` and the two unlabelled
+inputs the 2 Sep sweep reported on the share sheet, and two more nobody had looked at on the
+admin sign-in. Commit `3ca6d5d`. The remaining a11y findings are colour contrast only, and
+those stay a palette decision with an owner.
+
 **The 2 Sep session's report is `docs/session-report-2026-09-02-testing.md`** — the
 authenticated-E2E blocker removed, the mutation pass, the privacy suite, where the time
 actually goes, the 300-item load test, and the two §9 accessibility defects that were fixed.
@@ -47,19 +58,19 @@ against the deployed pipeline, not argued.
    ```
    node scripts/harness-bootstrap.mjs --status        live / stale, per role
    node scripts/e2e-authenticated.mjs            61   1 known-red: takedown 207, see below
-   PLAYWRIGHT_DIR=… node scripts/e2e-browser.mjs 39   green
+   PLAYWRIGHT_DIR=… node scripts/e2e-browser.mjs 73   green
    node scripts/privacy-shards-test.mjs          44   green
-   node scripts/mutation-pass.mjs                11   11 killed
-   PLAYWRIGHT_DIR=… AXE_DIR=… node scripts/a11y-sweep.mjs  23, 0 failed, 6 findings
+   node scripts/mutation-pass.mjs                15   15 killed
+   PLAYWRIGHT_DIR=… AXE_DIR=… node scripts/a11y-sweep.mjs  34, 0 failed, 6 findings
    node scripts/perf-probe.mjs                        measurement, no pass/fail
    deno run -A scripts/load-test-300.ts               measurement, no pass/fail
    ```
 6. The rest of the suite, all green at the end of this session:
    ```
    node scripts/frontend-csp-test.mjs      14    node scripts/frontend-fonts-test.mjs   14
-   node scripts/frontend-auth-test.mjs     48    node scripts/frontend-rtl-test.mjs     12
-   node scripts/frontend-view-test.mjs     46    node scripts/monitor.mjs --selftest    19
-   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs   90.8/150 KiB
+   node scripts/frontend-auth-test.mjs     69    node scripts/frontend-rtl-test.mjs     12
+   node scripts/frontend-view-test.mjs     53    node scripts/monitor.mjs --selftest    19
+   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs   99.9/150 KiB
    node scripts/frontend-cors-test.mjs      6
    deno test supabase/functions/publish/   96    deno run … backup.ts --selftest        26
    deno test … request-upload/             15    deno run … restore-verify.ts --selftest 25
@@ -135,16 +146,28 @@ to prevent, reappearing inside the monitor. Adding the secret is what makes it g
 
 ## Flagged, not built
 
-- **No password-reset flow exists.** `site/assets/js/` contains no call to `/auth/v1/recover`;
-  the "Forgot password?" control is a stub that toasts its own label. The endpoint is live and
-  correctly gated. **No decision from Amro on priority.** Worth noting beside the admin-login
-  fix: if a password is ever actually wrong, there is no way to reset it from the client.
+- ~~**No password-reset flow exists.**~~ **BUILT 3 Sep** (`afa616b`), after Amro asked for it
+  directly — request dialog, `/reset` landing with four distinct refusals, and an account
+  panel on `/me`. What is still his: custom SMTP, so no reset mail has ever been sent or
+  clicked, and one optional dashboard line adding `<origin>/reset` to the Auth redirect
+  allowlist (without it the link lands at the site root, which is handled and tested).
+- **Deferred email confirmation is stopped at §12 and is the one thing blocked on an
+  ANSWER rather than on work.** `docs/session-report-2026-09-03-auth.md` §2 measures why
+  "signed in AND unconfirmed" is not reachable by configuration in this GoTrue, lays out
+  three mechanisms, and recommends one. Two answers are owed: which mechanism, and whether
+  comments and likes/saves are gated behind confirmation too. No code was written for it and
+  none should be until both are answered.
 - **A signup that needs email confirmation loses the handle the member typed.** `claimHandle()`
   runs only when signup returns a session, so a member who confirms by email lands with 0057's
   placeholder `member_<hex>` instead of the name they chose. Fixing it means persisting the
   handle across the confirmation round-trip, which is untestable while the mail cap stands.
 - **Edge Function error rates are not collected.** The monitor reports them `unknown` rather
   than skipping them. Needs a Management API token with analytics scope.
+- **Colour contrast, and it is the whole of what `a11y-sweep` still reports.** 9 elements on
+  `/`, 6 on `/map`, 3 on `/events` and `/reset`, 16 on the dashboard — `.wordmark__secondary`,
+  `.memory__gloss`, `.site-footer__mark-sub`, `.rail__sub`, `.rail__exit`. Repainting a colour
+  system is a design decision with an owner, and `--strict` gates on it the day that decision
+  exists. The form-labelling half of that list was closed on 5 Sep; this is the rest.
 
 ---
 
