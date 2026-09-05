@@ -45,7 +45,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -320,6 +320,123 @@ const MUTATIONS = [
     },
     run: 'node scripts/frontend-view-test.mjs',
   },
+  /* 0060's four, and the shape of them is unusual enough to explain once.
+   *
+   * The migration is not applied to the deployed database yet, so these cannot ride the
+   * `--prelude` hook the SQL mutations above use: the clean run would be red before any
+   * mutation and every one of them would report INCONCLUSIVE forever. Instead the
+   * MIGRATION FILE is the source that gets mutated, and the test is run with that file as
+   * its own prelude — so the clean run applies the real migration inside the test's own
+   * rolled-back transaction and the mutated run applies a broken one. Both arms are real,
+   * and this keeps working unchanged after the migration is applied. */
+  {
+    id: 'confirm-trigger-dropped',
+    invariant: '0060 — the upload path is gated, which RLS alone cannot do',
+    catches: ['37_email_confirmation'],
+    kind: 'source',
+    file: 'supabase/migrations/20260905090000_email_confirmation.sql',
+    mutate: (src) => {
+      /* THE mutation for this migration. claim_upload_slot is SECURITY DEFINER, so RLS on
+         posts never evaluates on the one path a member uploads through: without the
+         trigger, posts_insert's confirmation term is decorative and the door is open while
+         every policy test stays green. */
+      const m = /create trigger posts_require_confirmed_email[\s\S]*?;\s*$/.exec(src);
+      if (!m) return null;
+      return src.replace(m[0], '');
+    },
+    run: 'node scripts/pgtap-deployed.mjs --tap --prelude ' +
+      'supabase/migrations/20260905090000_email_confirmation.sql 37_email_confirmation',
+  },
+  {
+    id: 'confirm-policy-term-dropped',
+    invariant: '0060 — the POLICY refuses an unconfirmed post too, not only the trigger',
+    catches: ['37_email_confirmation'],
+    kind: 'source',
+    file: 'supabase/migrations/20260905090000_email_confirmation.sql',
+    mutate: (src) => {
+      /* The other half of the pair. The trigger answers first on an ordinary insert, so
+         nothing would notice this clause going missing — which is why the test disables the
+         trigger for one statement to ask the policy directly. */
+      const wired = `    (select auth.uid()) is not null
+    and public.email_confirmed()
+    and created_by = (select auth.uid())
+    and status = 'pending'`;
+      if (!src.includes(wired)) return null;
+      return src.replace(wired, `    (select auth.uid()) is not null
+    and created_by = (select auth.uid())
+    and status = 'pending'`);
+    },
+    run: 'node scripts/pgtap-deployed.mjs --tap --prelude ' +
+      'supabase/migrations/20260905090000_email_confirmation.sql 37_email_confirmation',
+  },
+  {
+    id: 'confirm-amr-ignored',
+    invariant: '0060 — only a MAILED-LINK session may confirm an account',
+    catches: ['37_email_confirmation'],
+    kind: 'source',
+    file: 'supabase/migrations/20260905090000_email_confirmation.sql',
+    mutate: (src) => {
+      /* Accept any session. Everything still works — confirmation succeeds, the member
+         contributes — and the flag stops meaning "this person holds the mailbox", which is
+         the only thing it was ever for. A squatted address could then confirm itself. */
+      const guard = '  if not v_link then';
+      if (!src.includes(guard)) return null;
+      return src.replace(guard, '  if false then');
+    },
+    run: 'node scripts/pgtap-deployed.mjs --tap --prelude ' +
+      'supabase/migrations/20260905090000_email_confirmation.sql 37_email_confirmation',
+  },
+  {
+    id: 'confirm-unknown-locks-out',
+    invariant: "0060 — a confirmation status we could not READ must not lock a member out",
+    catches: ['e2e-browser'],
+    kind: 'source',
+    file: 'site/assets/js/public.js',
+    mutate: (src) => {
+      /* The tightening somebody would make on purpose, reading `!== false` as sloppy. It
+         is not: a single failed RPC would then close every write path in the archive for
+         everyone, and the database refuses an unconfirmed write anyway. */
+      const held = 'function confirmedEnough() { return state.confirmed !== false; }';
+      if (!src.includes(held)) return null;
+      return src.replace(held, 'function confirmedEnough() { return state.confirmed === true; }');
+    },
+    run: 'node scripts/e2e-browser.mjs',
+    note: 'needs PLAYWRIGHT_DIR in the environment',
+  },
+  {
+    id: 'confirm-share-ungated',
+    invariant: '0060 — an unconfirmed member meets the screen BEFORE writing a description',
+    catches: ['e2e-browser'],
+    kind: 'source',
+    file: 'site/assets/js/public.js',
+    mutate: (src) => {
+      const gate = '    if (!confirmedEnough()) { openConfirmDialog(openShareSheet); return; }';
+      if (!src.includes(gate)) return null;
+      return src.replace(gate, '');
+    },
+    run: 'node scripts/e2e-browser.mjs',
+    note: 'needs PLAYWRIGHT_DIR in the environment',
+  },
+  {
+    id: 'confirm-resend-sends-body-email',
+    invariant: '§7 — the address a confirmation mail goes to is never the browser\'s to name',
+    catches: ['e2e-browser'],
+    kind: 'source',
+    file: 'site/assets/js/public.js',
+    mutate: (src) => {
+      /* The helpful-looking edit: send the address so the server does not have to look it
+         up. Today it would be correct and the mail would arrive; tomorrow it is a parameter
+         an attacker sets, and the endpoint mails anybody. The server ignores it either way
+         — this mutation is caught by the CLIENT assertion, which is the point: the body is
+         where the habit forms. */
+      const body = "body: JSON.stringify({ turnstile_token: captcha })";
+      if (!src.includes(body)) return null;
+      return src.replace(body,
+        "body: JSON.stringify({ turnstile_token: captcha, email: state.account && state.account.email })");
+    },
+    run: 'node scripts/e2e-browser.mjs',
+    note: 'needs PLAYWRIGHT_DIR in the environment',
+  },
 ];
 
 if (argv.includes('--list')) {
@@ -354,12 +471,70 @@ function runSql(m) {
   return { before, after };
 }
 
+/* ── Surviving a KILL, which `finally` does not ──────────────
+ *
+ * The in-memory `original` plus a `finally` covers a crash, and the SIGINT handler beside
+ * it covers Ctrl-C. NEITHER covers the process being killed outright — a teardown, a
+ * closed terminal, an OOM — and on 5 Sep 2026 one of those left a mutated migration on
+ * disk and then something worse: a 23 KB file of NUL bytes, because NTFS had committed the
+ * restore's new SIZE and never flushed its data. The file was UNTRACKED, so git held no
+ * copy and it had to be rebuilt from the session transcript by hand.
+ *
+ * Two changes fall out, and the second is the one that would have saved the file:
+ *
+ *   1. the restore writes a temp file and RENAMES it over the target. A rename on the same
+ *      volume is atomic, so the target is either the old bytes or the new ones and never a
+ *      size with no data behind it.
+ *   2. the original is copied to a SIBLING on disk before anything is mutated, and removed
+ *      only once the restore has been read back and verified byte for byte. A killed run
+ *      leaves that sibling next to the file it belongs to, and the startup check below
+ *      refuses to run again until somebody has dealt with it.
+ *
+ * A sibling rather than the temp directory: `work` is removed on exit, which is exactly the
+ * moment the backup stops being available and starts being needed. */
+const BACKUP_SUFFIX = '.mutation-backup';
+
+/** Write `text` to `file` so that the file is never observed half-written. */
+function writeAtomic(file, text) {
+  const tmp = `${file}.mutation-tmp`;
+  writeFileSync(tmp, text, 'utf8');
+  renameSync(tmp, file);
+}
+
+/* Refuse to start on top of a previous run's wreckage. Checked against the catalogue's own
+   file list rather than by walking the tree: every file this script can touch is named in
+   it, so the check is exhaustive by construction and costs nothing. */
+{
+  const stranded = [];
+  for (const m of MUTATIONS) {
+    for (const f of [m.file, ...(m.restoreAlso ?? [])]) {
+      if (f && existsSync(f + BACKUP_SUFFIX)) stranded.push(f);
+    }
+  }
+  if (stranded.length) {
+    console.error('\nREFUSING TO RUN — a previous mutation pass was killed before it restored:\n');
+    for (const f of stranded) {
+      console.error(`  ${f}`);
+      console.error(`    its original is at ${f}${BACKUP_SUFFIX}`);
+    }
+    console.error('\nCompare each file with its backup, put the original back, and delete the');
+    console.error('backup. Do not assume the file on disk is merely mutated: a kill during the');
+    console.error('restore can leave it the right SIZE and entirely NUL (5 Sep 2026).\n');
+    process.exit(2);
+  }
+}
+
 function runSource(m) {
   const original = readFileSync(m.file, 'utf8');
   const extras = (m.restoreAlso ?? []).map((f) => [f, readFileSync(f, 'utf8')]);
+  const backups = [[m.file, original], ...extras];
+
+  /* BEFORE the first byte is mutated, and while nothing is racing it. */
+  for (const [f, text] of backups) writeFileSync(f + BACKUP_SUFFIX, text, 'utf8');
+
   const restore = () => {
-    writeFileSync(m.file, original, 'utf8');
-    for (const [f, text] of extras) writeFileSync(f, text, 'utf8');
+    writeAtomic(m.file, original);
+    for (const [f, text] of extras) writeAtomic(f, text);
   };
   /* Registered for the whole life of the mutation: a Ctrl-C between the write and the
      restore would otherwise leave a deliberately broken file in the working tree. */
@@ -369,12 +544,29 @@ function runSource(m) {
     const mutated = m.mutate(original);
     if (mutated === null) return { skipped: 'the mutation did not match — the file has changed shape' };
     if (mutated === original) return { skipped: 'the mutation was a no-op' };
-    writeFileSync(m.file, mutated, 'utf8');
+    writeAtomic(m.file, mutated);
     const after = runCmd(m.run);
     return { before, after };
   } finally {
     restore();
     process.off('SIGINT', restore);
+    /* Read back and COMPARE before dropping the backup. A restore that silently wrote
+       nothing is the failure this whole block exists for, and "we called writeFileSync" is
+       not evidence that the bytes are there. */
+    let verified = true;
+    for (const [f, text] of backups) {
+      try {
+        if (readFileSync(f, 'utf8') !== text) verified = false;
+      } catch { verified = false; }
+    }
+    if (verified) {
+      for (const [f] of backups) {
+        try { unlinkSync(f + BACKUP_SUFFIX); } catch { /* already gone */ }
+      }
+    } else {
+      console.error(`   ! RESTORE DID NOT VERIFY for ${m.file} — the original is kept at`);
+      console.error(`     ${m.file}${BACKUP_SUFFIX}. Put it back before doing anything else.`);
+    }
   }
 }
 
@@ -414,7 +606,22 @@ for (const m of selected) {
     console.log(`     ${m.catches.join(', ')} does not protect what its name says it protects.`);
   }
   if (verdict === 'INCONCLUSIVE') {
-    console.log(`     ${(r.before.out ?? '').split('\n').filter((l) => /not ok|error/i.test(l)).slice(0, 2).join('\n     ')}`);
+    /* WHY the clean run was red, and it has to speak both vocabularies.
+
+       This filter was pgTAP's alone -- `not ok` -- so for a mutation guarded by a
+       BROWSER suite it matched nothing except the word "errors" inside a line that was
+       reporting a success ("no uncaught page errors"), and then printed that as the
+       diagnosis. 5 Sep 2026: several runs were spent reading a passing assertion as the
+       explanation of a failure. e2e-browser and a11y-sweep mark a failure with a cross,
+       and both end on a counted summary line; pgTAP says `not ok`. Match all of them,
+       and say plainly when there is nothing to match rather than printing whatever the
+       filter happened to catch. */
+    const why = (r.before.out ?? '').split('\n')
+      .filter((l) => /not ok|\u2717|FAILED|\bchecks?, [1-9]/.test(l))
+      .slice(0, 6);
+    console.log(why.length
+      ? why.map((l) => `     ${l.trim()}`).join('\n')
+      : `     (exit ${r.before.code}, and no failure line in its output -- run it directly)`);
   }
   console.log('');
   results.push({ ...m, verdict });
