@@ -38,6 +38,15 @@ function ok(cond, name) {
 }
 
 const read = (rel) => readFileSync(join(root, rel), 'utf8');
+
+/* Source with comments removed. Used by the innerHTML sweep and the label scan below —
+   both of which would otherwise match the prose that DESCRIBES the construction they ban,
+   and report the explanation as the defect. */
+const codeOnly = (src) => src
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .split('\n')
+  .filter((line) => !/^\s*\/\//.test(line))
+  .join('\n');
 const jsFiles = readdirSync(join(root, 'site/assets/js'))
   .filter((f) => f.endsWith('.js'))
   .map((f) => `site/assets/js/${f}`);
@@ -205,12 +214,6 @@ console.log('# §6 — no string becomes markup');
      the served tree has one rather than assuming it. A trailing line comment on a code line
      is deliberately NOT stripped, so a commented-out innerHTML assignment still trips the
      scan. That is the safe direction to be wrong in. */
-  const codeOnly = (src) => src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n')
-    .filter((line) => !/^\s*\/\//.test(line))
-    .join('\n');
-
   // The premise of codeOnly, asserted rather than assumed: a block-comment opener inside a
   // string literal would make the stripper eat live code up to the next closer, blinding the
   // whole scan without failing anything.
@@ -257,6 +260,85 @@ console.log('# §6 — no string becomes markup');
      `public.js routes user strings through bdi() in ${bdiUses} places (a floor, not a proof)`);
 }
 
+/* ── 2b · every visible caption is attached to the control it names ─────── */
+
+console.log('# labels — a caption that names nothing');
+
+{
+  /* `el('label.field__label', { text: … })` placed beside a control is a caption and not a
+     label: the control gets no accessible name, and clicking the words does not move focus
+     into it. On 5 Sep 2026 axe found the share sheet's licence select unnamed
+     (`select-name`, critical, on the one screen §9 says a contributor MUST complete), two of
+     its text inputs unnamed beside it, and the admin sign-in's email and password boxes
+     carrying nothing but a placeholder. UI.labelFor is the fix; this is what stops the next
+     one being added the old way, one call site at a time — the same job the innerHTML sweep
+     above does, and for the same reason: nothing on screen looks different either way.
+
+     The rule is narrow on purpose. A <label> built with a PROPS OBJECT must carry `for`.
+     The two wrapping labels in this codebase (`.checkbox--wrap`, `.dropzone`) pass `null`
+     props and contain their control, which is the other correct construction and needs no
+     `for` — so they are not matched rather than being excused by name. */
+  const LABEL_CALL = /\bel\('label[^']*',\s*\{([^}]*)\}/g;
+  const detached = (rel, src) => [...src.matchAll(LABEL_CALL)]
+    .filter((m) => !/'for'\s*:/.test(m[1]))
+    .map((m) => `${rel}: ${m[0].slice(0, 60)}`);
+
+  // CONTROL first. The assertion below is "a scan found nothing", which is what a broken
+  // regex reports too. This proves the predicate catches the exact construction that was
+  // wrong, and passes the one that is right.
+  const probe = `el('label.field__label', { text: t('share.fLicense') })`;
+  const good = `el('label.note-field__label', { 'for': noteId, text: t('q.internalNote') })`;
+  ok(detached('probe', probe).length === 1 && detached('probe', good).length === 0,
+     'CONTROL: the scan catches a props <label> without for, and clears one with it');
+
+  const labelled = [];
+  const bad = [];
+  for (const rel of jsFiles) {
+    const src = codeOnly(read(rel));
+    labelled.push(...[...src.matchAll(LABEL_CALL)]);
+    bad.push(...detached(rel, src));
+  }
+  ok(labelled.length >= 2,
+     `PREMISE: ${labelled.length} <label> calls in site/ pass props — so the scan has something to judge`);
+  ok(bad.length === 0,
+     `every <label> built with props names a control${bad.length ? ' — ' + bad.join('; ') : ''}`);
+
+  /* The mechanism, not the spelling. A helper that returned a <label> without setting
+     `for`, or that overwrote an id its caller had already chosen, would satisfy the scan
+     above and still leave a control unnamed. ui.js is run against a stub, so this is the
+     real function rather than a reimplementation of it. */
+  const winU = {
+    document: {
+      createElement: () => ({
+        className: '', dataset: {}, textContent: '', attrs: {},
+        style: { setProperty() {} },
+        setAttribute(k, v) { this.attrs[k] = v; },
+        addEventListener() {}, appendChild() {},
+      }),
+      createTextNode: (text) => ({ text }),
+    },
+  };
+  new Function('window', read('site/assets/js/ui.js'))(winU);
+  const labelFor = winU.UI.labelFor;
+
+  const bare = {};
+  const madeA = labelFor('Licence', bare);
+  ok(typeof bare.id === 'string' && bare.id.length > 0,
+     `labelFor mints an id on a control that has none (${bare.id})`);
+  ok(madeA.attrs.for === bare.id,
+     `and the <label> it returns points at exactly that id (for="${madeA.attrs.for}")`);
+
+  const chosen = { id: 'already-mine' };
+  const madeB = labelFor('Bio', chosen);
+  ok(chosen.id === 'already-mine' && madeB.attrs.for === 'already-mine',
+     'a control that already has an id keeps it — the caller wins');
+
+  const one = {}, two = {};
+  labelFor('x', one);
+  labelFor('y', two);
+  ok(one.id !== two.id,
+     `two controls on one page get different ids (${one.id} ≠ ${two.id})`);
+}
 /* ── 3 · the shell and the prerendered page load the same modules ─────────── */
 
 console.log('# prerender.ts — the duplicated list, pinned');

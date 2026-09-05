@@ -24,7 +24,7 @@
 (function (global) {
   'use strict';
 
-  var el = UI.el, mount = UI.mount, qs = UI.qs;
+  var el = UI.el, mount = UI.mount, qs = UI.qs, labelFor = UI.labelFor;
   var t = function (k, v) { return I18N.t(k, v); };
 
   var main = qs('#main');
@@ -107,8 +107,8 @@
       }
     }, [
       el('h1.admin-gate__title', { text: t('admin.signInTitle') }),
-      el('label.field__label', { text: t('field.email') }), email,
-      el('label.field__label', { text: t('field.password') }), password,
+      labelFor(t('field.email'), email), email,
+      labelFor(t('field.password'), password), password,
       captchaSlot,
       note,
       button

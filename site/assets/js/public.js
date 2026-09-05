@@ -40,7 +40,7 @@
   'use strict';
 
   var el = UI.el, qs = UI.qs, mount = UI.mount, toneStyle = UI.toneStyle, ICONS = UI.ICONS;
-  var bdi = UI.bdi;
+  var bdi = UI.bdi, labelFor = UI.labelFor;
   var t = function (k, v) { return I18N.t(k, v); };
   var pick = I18N.pick, gloss = I18N.gloss, num = I18N.num;
 
@@ -1000,7 +1000,7 @@
     var scrim;
     function close() { closeOverlay(scrim); }
 
-    var kindSelect = el('select.input', { 'aria-label': t('report.kind') },
+    var kindSelect = el('select.input', null,
       ['abuse', 'removal'].map(function (id) {
         return el('option', { value: id, selected: id === 'abuse' ? true : null,
                               text: t('rp.kind.' + id) });
@@ -1036,7 +1036,7 @@
         el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
       ]),
       el('div.field', null, [
-        el('label.field__label', { text: t('report.kind') }),
+        labelFor(t('report.kind'), kindSelect),
         kindSelect,
         kindNote
       ]),
@@ -1109,16 +1109,14 @@
      contributes to it (§7). */
 
   function field(labelText, inputProps, extras) {
-    var id = 'f-' + Math.random().toString(36).slice(2, 8);
     inputProps = inputProps || {};
-    inputProps.id = id;
     inputProps['class'] = 'input' + (inputProps.email ? ' input--email' : '');
     delete inputProps.email;
+    var control = el(inputProps.multiline ? 'textarea' : 'input', stripMultiline(inputProps));
+    var label = labelFor(labelText, control);
     return el('div.field', null, [
-      extras
-        ? el('div.field__row', null, [el('label.field__label', { 'for': id }, labelText), extras])
-        : el('label.field__label', { 'for': id }, labelText),
-      el(inputProps.multiline ? 'textarea' : 'input', stripMultiline(inputProps))
+      extras ? el('div.field__row', null, [label, extras]) : label,
+      control
     ]);
   }
 
@@ -1736,7 +1734,7 @@
 
     return {
       node: el('div.field.placepick', null, [
-        el('label.field__label', { text: t('share.fPlace') }),
+        labelFor(t('share.fPlace'), input),
         input,
         results,
         summary,
@@ -1921,7 +1919,7 @@
     /* §3's EDTF-lite decade. Sent, as of migration 0047 — before that this select existed,
        defaulted to the 1960s, and was discarded, leaving every member upload with a null
        decade for a moderator to guess at. */
-    var decadeSelect = el('select.input', { 'aria-label': t('share.fDecade') },
+    var decadeSelect = el('select.input', null,
       /* Every decade the archive could hold, not only the ones it already does — a
          contributor with the earliest photograph in the collection must be able to say so.
          DATA.DECADES rather than index.json here, for the one place where the two lists
@@ -1963,7 +1961,7 @@
        control that offered a choice the server refuses would be a privacy setting that
        lies, which is worse than not offering it. */
     var PRECISIONS = ['exact', 'street', 'area', 'hidden'];
-    var precisionSelect = el('select.input', { 'aria-label': t('share.fPrecision') });
+    var precisionSelect = el('select.input');
     var precisionNote = el('p.field__hint', { text: t('share.fPrecisionNote') });
 
     function rebuildPrecision() {
@@ -2078,7 +2076,7 @@
       kindRow,
       field(t('share.fTitle'), { type: 'text', placeholder: t('share.fTitlePh'), required: true }),
       el('div.field', null, [
-        el('label.field__label', { text: t('share.fDecade') }),
+        labelFor(t('share.fDecade'), decadeSelect),
         decadeSelect
       ]),
       /* The place field was a datalist of seven hardcoded landmarks, deleted with data.js
@@ -2086,7 +2084,7 @@
          reason. This is what M4 replaces it with: the gazetteer, then a pin. */
       place.node,
       el('div.field', null, [
-        el('label.field__label', { text: t('share.fPrecision') }),
+        labelFor(t('share.fPrecision'), precisionSelect),
         precisionSelect,
         precisionNote
       ]),
@@ -2107,12 +2105,12 @@
       ]),
       el('div.field-pair', null, [
         el('div.field', null, [
-          el('label.field__label', { text: t('share.fLicense') }),
+          labelFor(t('share.fLicense'), licenseSelect),
           licenseSelect,
           el('p.field__hint', { text: t('share.fLicenseNote') })
         ]),
         el('div.field', null, [
-          el('label.field__label', { text: t('share.fProvenance') }),
+          labelFor(t('share.fProvenance'), provenanceInput),
           provenanceInput
         ])
       ]),
@@ -2444,9 +2442,9 @@
       ]);
     }
 
-    var displayInput = el('input.input', { type: 'text', 'aria-label': t('profile.displayName') });
+    var displayInput = el('input.input', { type: 'text' });
     displayInput.value = own.display_name || '';
-    var bioInput = el('textarea.input', { rows: '3', 'aria-label': t('profile.bio') });
+    var bioInput = el('textarea.input', { rows: '3' });
     bioInput.value = own.bio || '';
 
     var visibility = {};
@@ -2510,8 +2508,8 @@
           });
       }
     }, [
-      el('div.field', null, [el('label.field__label', { text: t('profile.displayName') }), displayInput]),
-      el('div.field', null, [el('label.field__label', { text: t('profile.bio') }), bioInput]),
+      el('div.field', null, [labelFor(t('profile.displayName'), displayInput), displayInput]),
+      el('div.field', null, [labelFor(t('profile.bio'), bioInput), bioInput]),
       el('div.privacy-list', null, [
         el('div.privacy-list__head', null, [
           el('h3.profile__section-title', { text: t('profile.privacyTitle') }),

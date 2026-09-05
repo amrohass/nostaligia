@@ -24,6 +24,12 @@
  *
  * ── Scope, stated plainly ────────────────────────────────────
  *
+ * As of 5 Sep 2026 one class of axe finding is no longer merely reported: an accessible
+ * NAME. The form-labelling decision has been made and made everywhere (UI.labelFor), so a
+ * control that arrives without a name is a regression rather than new scope, and it fails
+ * this run. Colour contrast is still a palette decision with an owner and is still only
+ * reported.
+ *
  * axe catches roughly a third of real accessibility defects and cannot judge whether a
  * label makes sense in Arabic, whether the reading order matches the visual one, or
  * whether a screen reader announces the decade slider usefully. A clean run here is a
@@ -129,6 +135,15 @@ const ready = async (page) => {
 
 /* ── axe, run the same way everywhere ───────────────────────── */
 
+/* Rules that answer "does this control have an accessible name". Not a severity filter:
+   `label` is serious and `select-name` critical, and both are the same defect wearing a
+   different element. Everything else axe reports stays a finding. */
+const NAME_RULES = new Set([
+  'select-name', 'label', 'aria-input-field-name', 'aria-toggle-field-name',
+  'aria-command-name', 'button-name', 'input-button-name', 'input-image-alt',
+  'link-name', 'image-alt', 'frame-title', 'form-field-multiple-labels',
+]);
+
 async function axe(page, label) {
   await page.addScriptTag({ content: AXE_SOURCE });
   const results = await page.evaluate(async () => {
@@ -143,10 +158,17 @@ async function axe(page, label) {
       sample: v.nodes.slice(0, 2).map((n) => n.target.join(' ')),
     }));
   });
-  const serious = results.filter((v) => v.impact === 'critical' || v.impact === 'serious');
-  found(serious.length === 0, `${label}: no critical or serious axe violations`,
-     serious.map((v) => `${v.impact} · ${v.id} (${v.n}×) — ${v.help}\n          ${v.sample.join('\n          ')}`).join('\n        '));
-  for (const v of results.filter((x) => !serious.includes(x))) {
+  const show = (v) => `${v.impact} · ${v.id} (${v.n}×) — ${v.help}\n          ${v.sample.join('\n          ')}`;
+
+  const unnamed = results.filter((v) => NAME_RULES.has(v.id));
+  ck(unnamed.length === 0, `${label}: every control has an accessible name`,
+     unnamed.map(show).join('\n        '));
+
+  const rest = results.filter((v) => !NAME_RULES.has(v.id));
+  const serious = rest.filter((v) => v.impact === 'critical' || v.impact === 'serious');
+  found(serious.length === 0, `${label}: no other critical or serious axe violations`,
+     serious.map(show).join('\n        '));
+  for (const v of rest.filter((x) => !serious.includes(x))) {
     findings.push(`${label}: ${v.impact} · ${v.id} (${v.n}×) — ${v.help}`);
   }
   return results;
@@ -336,11 +358,14 @@ try {
       ck(description.required, `and it is marked required (§9)`, JSON.stringify(description));
       ck(description.labelled, `and it has an accessible name — "${description.name}"`);
     }
-    /* Not one of §9's six, so reported rather than gated — but it is on the upload form,
-       which is the one screen in the archive a contributor MUST complete, so it is the
-       finding on this page most worth somebody's attention. */
+    /* Was `found` — reported, not gated — until 5 Sep 2026, when the three fields it had
+       been reporting were fixed. It is the one screen in the archive a contributor MUST
+       complete, and the decision it was waiting on has been made, so it is a gate now.
+       Kept alongside the axe run below rather than folded into it: this asserts the
+       ASSOCIATION (`labels`), which is what makes the caption clickable, where axe accepts
+       any source of a name including an aria-label nobody can click. */
     const unlabelled = fields.filter((f) => !f.labelled);
-    found(unlabelled.length === 0, `every field on the upload form has an accessible name`,
+    ck(unlabelled.length === 0, `every field on the upload form has an accessible name`,
        unlabelled.map((f) => `${f.tag} ${f.id || '(no id)'}`).join(', '));
 
     await axe(page, 'the upload dialog');
@@ -351,6 +376,41 @@ try {
 
   section(5, 'the admin dashboard — the surface a moderator uses every day');
   {
+    /* Signed OUT first. The sign-in screen is a surface in its own right and the pass
+       below skips it by arriving with a session already in sessionStorage — which is why
+       its email and password boxes went until 5 Sep 2026 with nothing but a placeholder
+       on them. Nothing here had ever looked at this screen. */
+    const gate = await newPage();
+    await gate.goto(`${ORIGIN}/admin.html`, { waitUntil: 'domcontentloaded' });
+    await gate.waitForSelector('.admin-gate__title', { timeout: 20000 });
+    await gate.waitForTimeout(1200);
+
+    /* And axe alone would NOT have caught what was wrong here, which is worth stating at
+       the check rather than discovering later: axe's `label` rule accepts a non-empty
+       PLACEHOLDER as an accessible name, and both boxes had one. So the axe pass below is
+       green on this screen with or without the fix — it is kept for everything else it
+       looks at, and this is the assertion that actually discriminates.
+
+       A placeholder is not a label. It disappears the moment anybody types, it is not a
+       click target, and WCAG 2.1 treats it as a hint. `labels.length` is the association
+       itself and is the only thing here that can tell the two apart. */
+    const gateFields = await gate.evaluate(() => Array.from(
+      document.querySelectorAll('form input:not([type="hidden"])'),
+    ).map((el) => ({
+      type: el.type, id: el.id, placeholder: el.placeholder || '',
+      associated: !!el.labels?.length,
+    })));
+    ck(gateFields.length >= 2,
+       `CONTROL: the sign-in form has ${gateFields.length} inputs to judge`,
+       JSON.stringify(gateFields));
+    const gateLoose = gateFields.filter((f) => !f.associated);
+    ck(gateLoose.length === 0,
+       `every sign-in box is bound to a <label>, not merely placeheld`,
+       gateLoose.map((f) => `${f.type} placeholder="${f.placeholder}"`).join(', '));
+
+    await axe(gate, 'the admin sign-in screen');
+    await gate.context().close();
+
     const page = await newPage();
     const session = await mintDisposable('admin');
     await page.goto(`${ORIGIN}/admin.html`, { waitUntil: 'domcontentloaded' });
@@ -374,9 +434,10 @@ if (failures.length) {
 
 if (findings.length) {
   console.log(`\nFINDINGS — real accessibility defects OUTSIDE §9's six named requirements.`);
-  console.log(`Reported for a decision, not fixed here: repainting a colour system or`);
-  console.log(`relabelling a form is a design change with an owner. Run with --strict to`);
-  console.log(`gate on them once that decision exists.\n`);
+  console.log(`Reported for a decision, not fixed here: repainting a colour system is a`);
+  console.log(`design change with an owner. Run with --strict to gate on them once that`);
+  console.log(`decision exists. (Accessible NAMES left this list on 5 Sep 2026 — that`);
+  console.log(`decision was made, and they fail the run above instead.)\n`);
   for (const f of [...new Set(findings)]) console.log(`  ! ${f}`);
 }
 

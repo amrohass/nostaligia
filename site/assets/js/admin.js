@@ -25,7 +25,7 @@
   'use strict';
 
   var el = UI.el, qs = UI.qs, mount = UI.mount, toneStyle = UI.toneStyle, ICONS = UI.ICONS;
-  var bdi = UI.bdi;
+  var bdi = UI.bdi, labelFor = UI.labelFor;
   var t = function (k, v) { return I18N.t(k, v); };
   var pick = I18N.pick, gloss = I18N.gloss, num = I18N.num;
 
@@ -884,7 +884,6 @@
     var search = el('input.input', {
       type: 'text',
       placeholder: t('q.locationSearch'),
-      'aria-label': t('q.locationSearch'),
       oninput: function () {
         global.clearTimeout(timer);
         var term = search.value.trim();
@@ -953,7 +952,7 @@
       ]),
       summary,
       el('div.field', null, [
-        el('label.field__label', { text: t('q.locationSearch') }),
+        labelFor(t('q.locationSearch'), search),
         search,
         results
       ]),
@@ -1197,8 +1196,7 @@
     });
     var aliasInput = el('input.input', {
       type: 'text',
-      placeholder: t('pl.aliasesPh'),
-      'aria-label': t('pl.aliases')
+      placeholder: t('pl.aliasesPh')
     });
     aliasInput.value = ((editing && editing.aliases) || []).join('، ');
 
@@ -1271,12 +1269,18 @@
       ]),
       names.node,
       el('div.field', null, [
-        el('label.field__label', { text: t('pl.aliases') }),
+        labelFor(t('pl.aliases'), aliasInput),
         aliasInput,
         el('p.field__hint', { text: t('pl.aliasesWhy') })
       ]),
       el('div.field', null, [
-        el('label.field__label', { text: t('pl.point') }),
+        /* A <span>, not a <label>: this caption heads a BUTTON and a note, and the button
+           already carries its own text. A <label> with no `for` names nothing — keeping the
+           element only to preserve a font size would leave a lie in the accessibility tree
+           and an exception in the scan that guards the rest (frontend-view-test §2b).
+           `.field__label` is a class selector and `.field` is a flex column, so nothing
+           about how it renders moves. */
+        el('span.field__label', { text: t('pl.point') }),
         el('button.abtn.abtn--ghost', {
           type: 'button',
           onclick: function () {

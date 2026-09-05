@@ -285,6 +285,41 @@ const MUTATIONS = [
     run: 'deno test --allow-all worker/src/ladder.test.ts',
     note: 'the -map_metadata -1 flag, which IS the strip; the end-to-end gate needs R2',
   },
+  {
+    id: 'label-detached',
+    invariant: 'a visible caption is ATTACHED to its control, so the control has a name',
+    catches: ['frontend-view-test'],
+    kind: 'source',
+    file: 'site/assets/js/ui.js',
+    mutate: (src) => {
+      /* The tidy-up this guards against: keep the caption, drop the association. Nothing
+         on screen moves — the same words in the same font, in the same place — and every
+         control the helper names loses its accessible name in one edit. This is the shape
+         the defect had before 5 Sep 2026, and the source scan alone would NOT catch it,
+         because a caption with no props is how the two wrapping labels are legitimately
+         built. The mechanism assertion is what catches it. */
+      const wired = "return el('label.field__label', { 'for': control.id }, text);";
+      if (!src.includes(wired)) return null;
+      return src.replace(wired, "return el('label.field__label', null, text);");
+    },
+    run: 'node scripts/frontend-view-test.mjs',
+  },
+  {
+    id: 'label-caption-only',
+    invariant: 'no <label> is built with props that name no control',
+    catches: ['frontend-view-test'],
+    kind: 'source',
+    file: 'site/assets/js/public.js',
+    mutate: (src) => {
+      /* The old construction, put back at ONE call site — which is exactly how it would
+         return: somebody adds a field and copies the block above it. The licence select is
+         the one that was actually wrong, and axe called it `select-name`, critical. */
+      const wired = "labelFor(t('share.fLicense'), licenseSelect),";
+      if (!src.includes(wired)) return null;
+      return src.replace(wired, "el('label.field__label', { text: t('share.fLicense') }),");
+    },
+    run: 'node scripts/frontend-view-test.mjs',
+  },
 ];
 
 if (argv.includes('--list')) {

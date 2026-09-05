@@ -60,6 +60,31 @@
     return node;
   }
 
+  /**
+   * A visible caption, ATTACHED to the control it names.
+   *
+   * A caption placed beside a control, with no `for`, is a caption and nothing more: the
+   * control gets no accessible name, and clicking the words does not move focus into it.
+   * Both halves were true across this codebase until 5 Sep 2026 — axe found the licence
+   * select on the share sheet unnamed (`select-name`, critical, on the one screen §9 says
+   * a contributor MUST complete), two of its text inputs unnamed beside it, and the admin
+   * sign-in's email and password boxes carrying nothing but a placeholder.
+   *
+   * Several of the others had been papered over with `aria-label`, which supplies the name
+   * and leaves the click broken — and duplicates a string that then drifts from the one on
+   * screen. This does both jobs with the association HTML already has. It is the same
+   * `for`/`id` pairing public.js's own field() has always used, hoisted here so admin.js
+   * and admin-boot.js can reach it too. scripts/frontend-view-test.mjs is the ratchet that
+   * keeps the old construction from coming back one call site at a time.
+   *
+   * The id is minted only when the control has none, so a caller that set its own keeps it.
+   */
+  var labelSeq = 0;
+  function labelFor(text, control) {
+    if (!control.id) control.id = 'f' + (++labelSeq) + Math.random().toString(36).slice(2, 6);
+    return el('label.field__label', { 'for': control.id }, text);
+  }
+
   /* An SVG element, in the SVG namespace.
 
      createElement('svg') produces an HTMLUnknownElement that renders as nothing — SVG needs
@@ -266,8 +291,7 @@
         lang: lang,
         rows: opts.multiline ? (opts.rows || '3') : null,
         type: opts.multiline ? null : (opts.type || 'text'),
-        placeholder: placeholder || '',
-        'aria-label': label + ' (' + (lang === 'ar' ? 'العربية' : 'English') + ')'
+        placeholder: placeholder || ''
       });
       node.value = text || '';
       return node;
@@ -279,9 +303,13 @@
     return {
       ar: ar,
       en: en,
+      /* labelFor rather than a bare caption plus an aria-label, which is what these two
+         carried until 5 Sep 2026. The aria-label named the side "<label> (العربية)" while
+         the words above it read "<label> — العربية" — one string on screen, a different
+         one announced, and neither clickable. */
       node: el('div.field-pair', null, [
-        el('div.field', null, [el('label.field__label', null, [label, ' — العربية']), ar]),
-        el('div.field', null, [el('label.field__label', null, [label, ' — English']), en])
+        el('div.field', null, [labelFor([label, ' — العربية'], ar), ar]),
+        el('div.field', null, [labelFor([label, ' — English'], en), en])
       ]),
       read: function () { return { ar: ar.value.trim(), en: en.value.trim() }; }
     };
@@ -386,6 +414,7 @@
 
   global.UI = {
     el: el,
+    labelFor: labelFor,
     svgEl: svgEl,
     bdi: bdi,
     append: append,
