@@ -5,10 +5,10 @@
   'use strict';
 
   global.CONFIG = Object.freeze({
-    // PLACEHOLDER_* until the production host and domain are provisioned. Nothing else in
+    // Every origin the front end knows, resolved from config/site.json. Nothing else in
     // the repository may contain a hostname -- that is what makes this a one-file change.
     domains: Object.freeze({
-          "site": "PLACEHOLDER_DOMAIN",
+          "site": "ramallahnostalgia.org",
           "cdn": "pub-18aab56b95304deb89be2ad31e43b413.r2.dev",
           "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co",
           "turnstile": "challenges.cloudflare.com",
@@ -16,7 +16,7 @@
     }),
 
     origins: Object.freeze({
-      site: 'https://PLACEHOLDER_DOMAIN',
+      site: 'https://ramallahnostalgia.org',
       cdn: 'https://pub-18aab56b95304deb89be2ad31e43b413.r2.dev',
       supabase: 'https://pjqvtmhizbnimqyxjbyq.supabase.co',
       turnstile: 'https://challenges.cloudflare.com',

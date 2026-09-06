@@ -34,7 +34,7 @@
   ],
 
   "domains": {
-    "site": "PLACEHOLDER_DOMAIN",
+    "site": "ramallahnostalgia.org",
     "cdn": "pub-18aab56b95304deb89be2ad31e43b413.r2.dev",
     "supabase": "pjqvtmhizbnimqyxjbyq.supabase.co",
     "turnstile": "challenges.cloudflare.com",
@@ -96,19 +96,31 @@
     "only its deployment. That is a real seam -- nothing can prove the hosted secret still",
     "matches this list -- so re-run the generator and re-set the secret in the same breath.",
     "",
-    "STAGING ONLY. No production custom domain is provisioned yet, so PLACEHOLDER_DOMAIN is",
-    "deliberately not expanded into this list: `https://PLACEHOLDER_DOMAIN` is not an origin",
-    "any browser will ever send, and the generator refuses it rather than shipping a line",
-    "that looks configured and matches nothing.",
+    "PRODUCTION, 6 Sep 2026. ramallahnostalgia.org is live on Pages with SSL, so the real",
+    "origin is in this list and PLACEHOLDER_DOMAIN is gone from this file entirely.",
     "",
-    "The localhost entry is http, not https, and is the one value here that would be a",
-    "defect on a live site -- a plain-http origin in a CORS allowlist is reachable by",
-    "anyone who can spoof http on the network. It is acceptable only because this list is",
-    "staging: when the production origin is added it REPLACES these two rather than",
-    "joining them."
+    "It was ADDED rather than made to REPLACE the two below, which is the opposite of what",
+    "this paragraph used to promise, and the reason is what this array actually feeds. It is",
+    "not only the Edge Function allowlist: scripts/provision-r2-cors.ts reads THIS array to",
+    "build the R2 bucket CORS policy, and PutBucketCors REPLACES a policy rather than merging",
+    "into it. So honouring 'replace these two' would have written a bucket policy admitting",
+    "production alone -- silently breaking the staging site's archive reads and every local",
+    "probe on :3000, which is the same failure this change exists to fix, pointed the other",
+    "way. A strict superset cannot regress a read path; a replacement can.",
+    "",
+    "The localhost entry is http, not https, and is still the one value here that would be a",
+    "defect on a live site -- a plain-http origin in a CORS allowlist is reachable by anyone",
+    "who can spoof http on the network. It is kept rather than endorsed: it is ALREADY",
+    "deployed in UPLOAD_ALLOWED_ORIGINS on this same Supabase project, so keeping it takes on",
+    "no risk that is not already taken, and dropping it breaks scripts/e2e-browser.mjs and the",
+    "browser audit. Retiring both staging entries is Amro's call once neither the staging site",
+    "nor the local harness needs to read the archive. It is a one-line edit here, the",
+    "generator prints the secret to re-set, and the BUCKET policy has to be re-applied in the",
+    "same breath or the two quietly disagree."
   ],
   "function_cors": {
     "upload_allowed_origins": [
+      "https://ramallahnostalgia.org",
       "https://nostaligia.pages.dev",
       "http://localhost:3000"
     ]
@@ -172,12 +184,19 @@
     "og:url, and the base for og:image. It has to be an absolute origin because a crawler",
     "resolves nothing: WhatsApp fetches the URL it was given and reads the tags verbatim.",
     "",
-    "STAGING ONLY, exactly like function_cors. PLACEHOLDER_DOMAIN is not an origin any",
-    "crawler will resolve, so the staging Pages origin is the honest value until a production",
-    "domain is provisioned -- at which point it REPLACES this rather than joining it."
+    "PRODUCTION, 6 Sep 2026. This is one canonical value rather than an allowlist, so replacing",
+    "is the only option and it is replaced: a prerendered page now says it lives at",
+    "ramallahnostalgia.org.",
+    "",
+    "IT IS NOT LIVE UNTIL TWO THINGS HAPPEN, and neither of them is in this repository. The",
+    "publisher reads SITE_ORIGIN from its environment, so: `supabase secrets set` (the generator",
+    "prints the line), and THEN a republish. Pages already written still carry the old host --",
+    "section 2 rewrites them in place on every publish and nothing rewrites them on their own.",
+    "Until both happen, a link shared out of this archive carries an og:url naming a host that",
+    "is not this one."
   ],
   "function_env": {
-    "site_origin": "https://nostaligia.pages.dev"
+    "site_origin": "https://ramallahnostalgia.org"
   },
 
   "_csp_comment": [

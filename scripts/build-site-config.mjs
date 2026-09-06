@@ -218,7 +218,7 @@ const js = `/* ${GENERATED}
   'use strict';
 
   global.CONFIG = Object.freeze({
-    // PLACEHOLDER_* until the production host and domain are provisioned. Nothing else in
+    // Every origin the front end knows, resolved from config/site.json. Nothing else in
     // the repository may contain a hostname -- that is what makes this a one-file change.
     domains: Object.freeze(${JSON.stringify(cfg.domains, null, 6).replace(/\n/g, '\n    ')}),
 
