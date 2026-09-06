@@ -56,19 +56,27 @@ against the deployed pipeline, not argued.
 2. **`node scripts/monitor.mjs`** — new. Publish age (gate 5), storage against §2's
    thresholds, and §9's budget, against the deployed system. `--selftest` needs no
    credential. **`unknown` is not `ok`** — a check that could not look says so.
-3. `supabase migration list --linked`. **60 migrations in the repo; 0060 is NOT applied to
-   the deployed database** — see the report's §0 for the order it has to go in.
-4. **`node scripts/pgtap-deployed.mjs --tap`** — 38 files, 695 assertions. **Until 0060 is
-   applied it must be run with the migration as its own prelude**, because every fixture now
-   confirms its accounts:
+3. `supabase migration list --linked`. **61 migrations in the repo; 0060 AND 0061 are NOT
+   applied to the deployed database** (verified 6 Sep: 59 remote, 61 local). 0060's order
+   against the Edge Functions is in the 5 Sep report's §0 and is the strict one. 0061 is
+   copy only — no schema, no function, no ordering constraint — but note that applying it
+   **dispatches a publish**, because seeding a `published` block fires
+   `bump_publish_revision('content')`. That is wanted: it is how the new section goes live.
+4. **`node scripts/pgtap-deployed.mjs --tap`** — 39 files, 706 assertions. **Until 0060 and
+   0061 are applied it must be run with both spliced in as a prelude** — every fixture
+   confirms its accounts (0060), and `38_removal_copy` reads copy that only 0061 seeds. The
+   flag takes ONE file, so concatenate them:
 
    ```
-   node scripts/pgtap-deployed.mjs --tap \
-     --prelude supabase/migrations/20260905090000_email_confirmation.sql
+   cat supabase/migrations/20260905090000_email_confirmation.sql \
+       supabase/migrations/20260906090000_removal_copy.sql > /tmp/prelude.sql
+   node scripts/pgtap-deployed.mjs --tap --prelude /tmp/prelude.sql
    ```
 
-   That is 4 red, all four known: `20_publish_cron` 14/23/24 as always, and nothing else.
-   After the migration is applied, drop the `--prelude` and it is 3 red again.
+   That is 3 red, all three known: `20_publish_cron` 14/23/24 as always, and nothing else.
+   After both migrations are applied, drop the `--prelude` and it is the same 3.
+   The prelude is spliced INSIDE each file's own transaction and rolled back with it, so
+   this writes nothing to the deployed database — including 0061's copy.
 5. **The testing suites added 2 Sep.** They need `node scripts/harness-bootstrap.mjs --all`
    once (it writes `.harness.vars`, git-ignored) and a scratch `node_modules` holding
    `playwright` + `axe-core` for the two browser ones:
@@ -132,8 +140,14 @@ against the deployed pipeline, not argued.
    below.
 3. **Spend Cap ON.** Organization → Billing → Cost Control. §6 names it as one of four cost
    layers and no launch gate covers it, so nothing else will catch it being off.
-4. **Gate 4: a named human on the takedown path** with a stated response time. Still nobody.
-   The path itself is verified end to end at 2.9 s.
+4. ~~**Gate 4: a named human on the takedown path.**~~ **DISCHARGED 6 Sep** — Amro, 48
+   hours, in-platform reports plus `reports@ramallahnostalgia.org`. The path itself was
+   already verified end to end at 2.9 s. **Two things of his are now hard preconditions for
+   public launch, both in `docs/takedown-runbook.md` §7:** create the Cloudflare Email
+   Routing rule for that address once the domain is Active (it is published copy the moment
+   0061 applies, and bounces until the rule exists), and set `CLOUDFLARE_ZONE_ID` /
+   `CLOUDFLARE_PURGE_TOKEN` in the *same change* that puts a cached custom domain in front
+   of R2. F29's co-maintainer break-glass is still unmet and is recorded as such.
 5. **The pen test.** Not scheduled. §11: the public launch date is set after it.
 6. Custom SMTP, the ~300 seed items, the second Cloudflare account's R2 credentials — all
    unchanged and all still Amro's. (Deliberately off this session's list.)
@@ -160,7 +174,7 @@ to prevent, reappearing inside the monitor. Adding the secret is what makes it g
 | 1 · RLS denial matrix green | **passing**, in CI and against the deployed database. |
 | 2 · EXIF verified on a real photo with GPS | **DISCHARGED.** |
 | 3 · One tested restore | **DISCHARGED 1 Sep.** Amro ruled the local-Docker target sufficient; CLAUDE.md §11 records the standard so it is not re-argued. No further restore work is owed. |
-| 4 · A named human on the takedown path | **still nobody.** Amro. |
+| 4 · A named human on the takedown path | **DISCHARGED 6 Sep.** Amro, 48 hours, two intake paths. `docs/takedown-runbook.md` + migration 0061. **Two of his own items must land before public launch** — the email alias and the purge token; see the runbook §7. |
 | 5 · Publish-age monitoring separating `held_by_operator` from `unchanged` | **DISCHARGED 1 Sep.** Proved live: a hold was set on the deployed pipeline, the monitor reported ALERT six seconds later naming it an operator hold, and returned to ok when released. |
 | Pen test | not scheduled. Amro. |
 

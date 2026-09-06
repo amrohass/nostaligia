@@ -627,6 +627,30 @@ harms someone other than the maintainer.
      ref by name, for the day a scratch project exists — as a wider test, not as an
      outstanding obligation. **No further restore work is owed for launch.**
 4. **A named human on the takedown path** with a stated response time.
+   - **DISCHARGED 6 Sep 2026 by Amro's decision, and it is settled rather than left open.**
+     The named human is **Amro**, sole maintainer; the commitment is **48 hours** — the
+     number `page.contact.body` and `page.support.body` have already published, so the site
+     makes one promise rather than three. Q6 of `reconciled-plan.md` recommended 24; 48 is
+     the maintainer's call. The runbook is `docs/takedown-runbook.md` and the public copy is
+     migration 0061, seeded into `content_blocks` like all other copy (§9).
+     **Two intake paths, and the second is what the gate actually turned on.** §4 puts the
+     report control behind the sign-in gate, and 0053 widened *who may file* a removal
+     request — "the person with the strongest claim is frequently NOT its uploader; they are
+     the person in it" — without widening *who can reach the form*. So a subject, family or
+     rights holder with no account had no route at all, and the archive would have been
+     asking exactly the population §7 protects to open an account before it would hear them
+     ask to be removed from it. `reports@ramallahnostalgia.org` is that route, and F21 is not
+     closed without it. Mail carries no `reports` row, so a request arriving there is filed
+     through the same control afterwards or it is absent from the permanent record.
+     **What is still Amro's, and the gate is not public-ready until both land:** the
+     Cloudflare Email Routing rule for that address (published copy bounces until it
+     exists), and `CLOUDFLARE_ZONE_ID` / `CLOUDFLARE_PURGE_TOKEN` in the same change that
+     puts a cached custom domain in front of R2 — §8 step 2 is a no-op today, which is
+     harmless only because the `r2.dev` dev URL is not edge-cached.
+     **F29's co-maintainer break-glass remains UNMET and is recorded rather than implied
+     discharged:** one person holds every credential, so the 48-hour commitment is bounded
+     by one person's availability. The intake queues durably in both paths; what an absence
+     risks is the response, not the record.
 5. **Publish-age monitoring separates a held pipeline from an idle one** — an operator hold
    left set stops the archive as silently as a broken cron, so the alert must report
    `held_by_operator` distinctly from `unchanged` and fire on the first.
