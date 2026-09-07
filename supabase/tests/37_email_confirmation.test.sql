@@ -33,9 +33,9 @@
 begin;
 create extension if not exists pgtap;
 
--- 3 the predicate · 10 the four writes · 2 the definer path · 5 the amr boundary
+-- 3 the predicate · 11 the four writes · 2 the definer path · 5 the amr boundary
 -- 2 the grants · 2 provisioning · 2 the mail rate limit
-select plan(26);
+select plan(27);
 
 -- ── Fixtures ─────────────────────────────────────────────────
 --
@@ -220,6 +220,25 @@ select throws_ok($$
           '00000000-0000-0000-0000-00000000ef01') $$,
   '42501', null,
   '...nor save');
+
+-- The pair the header promises and this file was missing, 6 Sep 2026. `saves` was the one
+-- gated write with a refusal and no "can" beside it: its positive arm lived in
+-- 05_matrix's cell ('member','saves','insert','allow'), a different file with different
+-- fixtures. Measured rather than argued — `revoke insert on public.saves from
+-- authenticated` spliced in as a mutation left THIS file green with the save path dead for
+-- everybody, while 05 went red. Both were true, and an unpaired "cannot" in the file whose
+-- own header forbids one is how the next reader learns it is optional.
+set local request.jwt.claims to
+  '{"sub":"00000000-0000-0000-0000-00000000e0c1","role":"authenticated"}';
+
+select lives_ok($$
+  insert into public.saves (user_id, post_id)
+  values ('00000000-0000-0000-0000-00000000e0c1',
+          '00000000-0000-0000-0000-00000000ef01') $$,
+  'CONTROL: a confirmed member may save — so the refusal above was the gate, not a dead grant');
+
+set local request.jwt.claims to
+  '{"sub":"00000000-0000-0000-0000-00000000e0c2","role":"authenticated"}';
 
 -- ═══ 14–15 · The path no policy governs ══════════════════════
 --

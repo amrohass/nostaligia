@@ -79,6 +79,16 @@ comment on column public.email_confirmations.confirmed_at is
 -- a member who can write this table confirms themselves.
 revoke all on public.email_confirmations from anon, authenticated;
 
+-- service_role, explicitly. BYPASSRLS exempts a role from ROW policies and grants no table
+-- privilege, and this Supabase version's default privileges give a new table none — so
+-- without this the table is unreachable by the only role that is supposed to own it, and
+-- the failure is invisible until something tries to write. 07_triggers asserts exactly this
+-- for every table in `public` and went red on this one the first time the migration was
+-- applied to a database; it is not hypothetical. Nothing in the app path depends on it
+-- today (every caller is SECURITY DEFINER, owned by postgres), which is precisely why it
+-- would have gone unnoticed until a restore, an export or a backfill needed it.
+grant select, insert, update, delete on public.email_confirmations to service_role;
+
 alter table public.email_confirmations enable row level security;
 
 -- ═══ 2 · A row exists as soon as the account does ════════════
