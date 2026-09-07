@@ -91,6 +91,17 @@
   --font-en: 'Inter', system-ui, sans-serif;
   --font-mono: ui-monospace, Menlo, Consolas, monospace;
 
+  /* Layout — the page gutter and the grid's own gap.
+     Tokens rather than repeated numbers because the map panel, the decade slider and the
+     card grid are one column of content stacked on /map: they were inset 32px, 32px and
+     36px, and the four-pixel difference was invisible while the list under the map was a
+     single column and is a visible step now that it is a grid the width of the page.
+     Consumed only through logical properties (§9) — see .grid, .mapview, .decade-slider. */
+  --gutter: 32px;
+  --gutter-sm: 16px;
+  --grid-gap: 20px;
+  --grid-gap-sm: 12px;
+
   /* Radius */
   --r-sm: 6px;
   --r-md: 9px;

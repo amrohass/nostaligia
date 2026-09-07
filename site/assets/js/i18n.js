@@ -50,7 +50,15 @@
     'donate.cta':     { ar: 'تبرّع الآن',         en: 'Donate' },
 
     // ── Viewer ──────────────────────────────────────────────
+    /* The viewer opens OVER another view, and this button says which one it will put the
+       reader back on — so there is one string per destination rather than one that names
+       the archive whatever happened. `viewer.back` stays the archive's, and is also the
+       dead-end link on a profile that does not resolve. */
     'viewer.back':      { ar: '× العودة إلى الأرشيف',  en: '× Back to the archive' },
+    'viewer.backTo.map':     { ar: '× العودة إلى الخريطة',      en: '× Back to the map' },
+    'viewer.backTo.events':  { ar: '× العودة إلى الفعاليات',    en: '× Back to the events' },
+    'viewer.backTo.mine':    { ar: '× العودة إلى ملفّي',        en: '× Back to my profile' },
+    'viewer.backTo.profile': { ar: '× العودة إلى الملف الشخصي', en: '× Back to the profile' },
     'viewer.next':      { ar: 'مرّر للأسفل للذكرى التالية ↓', en: 'Scroll down for the next memory ↓' },
     'viewer.save':      { ar: 'حفظ',      en: 'Save' },
     'viewer.like':      { ar: 'إعجاب',    en: 'Like' },
@@ -216,6 +224,10 @@
                               en: 'Confirmed — you can contribute and comment.' },
     'account.emailNo':      { ar: 'غير مؤكَّد — لا يمكنك المشاركة أو التعليق بعد.',
                               en: 'Not confirmed — you cannot contribute or comment yet.' },
+    /* The third state. Not a failure message: browsing and every control on this page work
+       exactly the same, and the only honest thing to say is that we did not get an answer. */
+    'account.emailUnknown': { ar: 'تعذّر التحقّق من حالة بريدك الآن.',
+                              en: 'We could not check your email status just now.' },
     'account.emailConfirm': { ar: 'أكّده الآن', en: 'Confirm it now' },
 
     // ── Email confirmation (0060, approved 5 Sep 2026) ──────
@@ -670,9 +682,16 @@
     'field.handlePh':   { ar: 'مثال: ramallah_1967', en: 'e.g. ramallah_1967' },
     'field.handleNote': { ar: 'اسم تختاره أنت ويظهر للجميع — ليس اسمك الحقيقي',
                           en: 'A public name you choose — not your legal name' },
+    /* Three outcomes, not one. Until 6 Sep 2026 every refusal on this path said "taken",
+       including the primary-key conflict that was the real defect — so the one message
+       that could be checked (is that name free?) was true of a name nobody had. */
     'signup.err.handleRequired': { ar: 'اختر اسمًا مستعارًا.', en: 'Choose a handle.' },
     'signup.err.handleTaken':    { ar: 'هذا الاسم المستعار محجوز. غيّره من صفحتك.',
                                    en: 'That handle is taken. Change it from your profile.' },
+    'signup.err.handleBad':      { ar: 'هذا الاسم المستعار غير مقبول. اختر غيره من صفحتك.',
+                                   en: 'That handle is not allowed. Pick another from your profile.' },
+    'signup.err.handleKept':     { ar: 'تعذّر حفظ الاسم المستعار الآن — حسابك يحمل اسمًا مؤقتًا يمكنك تغييره من صفحتك.',
+                                   en: 'Your handle could not be saved just now — your account has a temporary one you can change from your profile.' },
 
     // ── A member's own submissions (M3) ─────────────────────
     // The surface a refused upload never had. §6 holds `expect_by` until a timing probe

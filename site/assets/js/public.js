@@ -88,6 +88,17 @@
     editOpen: false,
     releaseTrap: null,
 
+    /* The path the viewer's own back button returns to — the last route that was not an
+       item. §9 asks the front end to return a reader where they were, and until 6 Sep 2026
+       this button was the literal string '/': a reader who opened a memory from /map, from
+       /events or from somebody's profile was put back at the top of the archive, having to
+       find their way to the view they had been reading. The browser's Back always worked,
+       which is exactly why nothing looked broken.
+       Not a stack. There is only ever one thing to go back TO from the viewer, because the
+       viewer is the only route that opens over another one; a stack would accumulate
+       entries the browser's own history already holds and does better. */
+    lastView: '/',
+
     /* §9: "The sign-in gate always preserves intent — the pending action and its item
        survive the auth round-trip and the user returns exactly where they were." */
     pending: null,
@@ -148,6 +159,34 @@
   function routedPageSlug() {
     var seg = segments();
     return seg[0] === 'page' && seg[1] ? seg[1] : null;
+  }
+
+  /**
+   * Where the in-page back button goes, and what it says.
+   *
+   * `state.lastView` is written by render() on every route that is not an item, including
+   * the ones reached with the browser's own Back — popstate re-renders, so walking back
+   * into /map and opening a memory from there returns to /map and not to wherever the
+   * reader had been before that.
+   *
+   * A deep link from WhatsApp lands on /item/{id} having rendered no other view, and the
+   * default is then the archive: it is where that reader has not been, but it is the only
+   * place in this site they can be sent that is not a lie about where they came from.
+   */
+  function backTarget() { return state.lastView || '/'; }
+
+  /* Literal keys, one per destination, rather than one interpolated string. §9 wants every
+     string through I18N with both languages, and "back to {x}" is not one sentence in
+     Arabic and English — nor is it one sentence for a possessive ("my profile") and a
+     definite ("the map"). Literal keys also keep the view test's key sweep able to see
+     them, which a concatenated key would not be. */
+  function backLabel() {
+    var head = backTarget().split('/').filter(Boolean)[0] || '';
+    if (head === 'map') return t('viewer.backTo.map');
+    if (head === 'events') return t('viewer.backTo.events');
+    if (head === 'me') return t('viewer.backTo.mine');
+    if (head === 'u') return t('viewer.backTo.profile');
+    return t('viewer.back');
   }
 
   /**
@@ -400,11 +439,21 @@
 
   /* ── The feed ────────────────────────────────────────────── */
 
+  /* How many columns the masonry runs at this width — the whole of the grid's responsive
+     behaviour, in one place, for every surface that uses cardGrid().
+
+     The tiers above 1040 were added 6 Sep 2026. Four was the last stop at any width, so a
+     card on a 1920 or 2560 screen grew to two or three times the size it has at 1040 and
+     the archive read as a page that had stopped scaling — which is what §9's "mobile is a
+     faithful echo of desktop" rules out in the other direction too. The tiers keep the card
+     roughly the width it has always had and add columns instead. */
   function columnCount() {
     var width = global.innerWidth;
     if (width < 700) return 2;
     if (width < 1040) return 3;
-    return 4;
+    if (width < 1440) return 4;
+    if (width < 1900) return 5;
+    return 6;
   }
 
   /**
@@ -547,15 +596,35 @@
     }, parts);
   }
 
-  function renderArchive() {
+  /**
+   * THE grid. §1 calls for "the same grid language" on all three public surfaces, and the
+   * way that stopped being true was not a redesign: /map built `.grid` with a single
+   * `.grid__col` inside it, which is a one-column flexbox — a plain list wearing the grid's
+   * class names, at every viewport width, while the archive beside it ran four columns.
+   *
+   * So the masonry is one function now rather than a shape each caller reproduces. Columns
+   * come from columnCount(), which is the whole of the responsive behaviour (§9's "mobile
+   * is a faithful echo of desktop", in both directions), and `decorate` is the one thing
+   * the located list adds — a precision line under each card.
+   */
+  function cardGrid(entries, decorate) {
     var count = columnCount();
     var columns = [];
     for (var c = 0; c < count; c++) columns.push([]);
-    state.feed.forEach(function (entry, i) { columns[i % count].push(memoryCard(entry)); });
+    entries.forEach(function (entry, i) {
+      var card = memoryCard(entry);
+      if (decorate) decorate(card, entry);
+      columns[i % count].push(card);
+    });
+    return el('div.grid', { dataset: { cols: String(count) } }, columns.map(function (cards) {
+      return el('div.grid__col', null, cards);
+    }));
+  }
 
+  function renderArchive() {
     var more = state.page < state.pages;
 
-    return el('div', { dataset: { cols: String(count) } }, [
+    return el('div', null, [
       el('section.hero', null, [
         el('h1.hero__line', { text: copyText('hero.line') }),
         el('p.hero__blurb', { text: copyText('hero.blurb') }),
@@ -565,9 +634,7 @@
         ])
       ]),
       state.feed.length
-        ? el('div.grid', null, columns.map(function (cards) {
-            return el('div.grid__col', null, cards);
-          }))
+        ? cardGrid(state.feed)
         : el('p.profile__empty', { text: state.error ? t(state.error) : t('feed.empty') }),
       more
         ? el('div.feed-end', null, [
@@ -871,7 +938,7 @@
       el('div.viewer__stage', null, [
         scroller,
         el('div.viewer__topbar', null, [
-          el('a.viewer__close', { href: '/', text: t('viewer.back') }),
+          el('a.viewer__close', { href: backTarget(), text: backLabel() }),
           el('span.viewer__position')
         ]),
         el('div.viewer__rail'),
@@ -887,8 +954,19 @@
 
     scroller.scrollTop = index * scroller.clientHeight;
 
-    state.releaseTrap = UI.trapFocus(overlay, closeViewer);
+    state.releaseTrap = UI.trapFocus(overlay, leaveViewer);
     global.addEventListener('keydown', onViewerKey);
+  }
+
+  /* Escape and the back button do the same thing, and until 6 Sep 2026 they did not:
+     Escape called closeViewer() directly, which removes the overlay and leaves the address
+     bar on /item/{id}. The reader was then looking at the archive at a URL naming a memory
+     — so a refresh reopened the viewer they had just dismissed, and the link they would
+     have copied was not the page in front of them. */
+  function leaveViewer() {
+    var to = backTarget();
+    if (to === path()) { closeViewer(); return; }
+    navigate(to);
   }
 
   /** Fetches the item shard for the focused slide and upgrades it in place. */
@@ -1499,7 +1577,11 @@
           }
           return mode === 'signup'
             ? AUTH.signUp(email, password, captcha).then(function (result) {
-              if (result.confirmationRequired) return { signedUp: true, account: null };
+              /* No session yet, so there is no token to write the profile with. The name
+                 is held for the sign-in that follows the confirmation link rather than
+                 discarded — which is what happened here until 6 Sep 2026, and which turns
+                 on the moment "Confirm email" is switched on with the custom SMTP. */
+              if (result.confirmationRequired) { rememberHandle(handle); return { signedUp: true, account: null }; }
               return claimHandle(handle).then(function () {
                 return { signedUp: true, account: result.user };
               });
@@ -1607,31 +1689,97 @@
   }
 
   /**
-   * The profile row, written once, by its owner.
+   * The chosen handle, written onto the profile the account already has.
    *
-   * §3 makes the handle mandatory and user-chosen, and 0004 deliberately has NO trigger
-   * creating a profile at signup — "auto-generating one would either leak the email local
-   * part or invent a name for someone". So this is the explicit onboarding step that
-   * comment names, and it is here rather than in auth.js because it is a profiles INSERT
-   * under 0017's policy, not an auth call.
+   * ── The defect this replaces, because it is worth not repeating ──
+   *
+   * This was an INSERT, and it had been correct: 0004 says in so many words that there is
+   * "deliberately NO trigger creating a profile on signup", so the browser wrote the row.
+   * On 31 Aug 2026 migration 0057 found `public.profiles` empty against eleven accounts —
+   * this INSERT had never once succeeded on the deployed site — and fixed it the other way
+   * round, with an `after insert on auth.users` trigger that provisions a row carrying a
+   * placeholder `member_<12 hex>` handle.
+   *
+   * Both changes were right and together they were the bug. By the time this ran the row
+   * existed, so the INSERT was a PRIMARY KEY conflict on `id` — nothing to do with handles
+   * at all — PostgREST answered 409, and the catch-all below reported it as "that handle is
+   * taken". Every member since has been told their chosen name was unavailable and left
+   * wearing `member_5f4d89d9f9bd`, which is exactly what §7 means by an identity that
+   * "exists, is unique and is theirs" being a placeholder rather than a name.
+   *
+   * So it is an UPDATE. 0004 grants `update (handle, display_name, …)` to `authenticated`
+   * and 0017's profiles_update restricts it to `id = auth.uid()`, so the member renames
+   * their own row and nobody else's — the same policy M5's editor will use for the same
+   * column. `select=handle` because DB.patch requires one (0015 revoked table-level SELECT);
+   * it also gives us an empty array when the filter matched no row, which is the one
+   * outcome a status code cannot distinguish from success.
    *
    * A refusal is reported and the sign-up is NOT rolled back: the account exists, the
-   * session works, and a taken handle is something the member fixes on their own profile
-   * rather than a reason to make them sign up again.
+   * session works, and a name that is taken or not allowed is something the member fixes on
+   * their own profile rather than a reason to make them sign up again. What changed is that
+   * they are now told WHICH of those it was.
    */
   function claimHandle(handle) {
     var account = AUTH.user();
     if (!account) return Promise.resolve();
-    return DB.insert('profiles', { id: account.id, handle: handle, display_name: handle })
-      .catch(function () {
-        UI.toast(t('signup.err.handleTaken'));
+    return DB.patch('profiles', 'id=eq.' + encodeURIComponent(account.id) + '&select=handle',
+      { handle: handle, display_name: handle })
+      .then(function (rows) {
+        /* 0057 provisions a row for every account, so no match means the profile is gone
+           or the policy refused — not that the handle was unavailable. Saying "taken" here
+           is what hid the original defect for a week. */
+        if (!rows || !rows.length) { UI.toast(t('signup.err.handleKept')); return; }
+        if (state.account) {
+          state.account.handle = rows[0].handle;
+          state.account.display_name = handle;
+        }
+        renderMasthead();
+      }, function (err) {
+        /* 409 is the normalized-handle unique index (0004) and means what the member
+           thinks it means. Everything else — the reserved-handle trigger and both CHECK
+           constraints raise 23514, which PostgREST answers 400 — means the name itself is
+           not one this archive will take. Two different things for the member to do, so
+           two messages. */
+        UI.toast(t(err && err.status === 409 ? 'signup.err.handleTaken' : 'signup.err.handleBad'));
       });
+  }
+
+  /**
+   * The chosen handle, across the confirmation round trip.
+   *
+   * A signup that returns no session has nothing to write the profile with, so the name is
+   * parked until a session exists. sessionStorage rather than localStorage: this is a tab's
+   * worth of state, not a preference, and it must not outlive the browser for the next
+   * person on a shared machine (§7). It is not a credential — auth.js's rule about the
+   * access token is untouched.
+   *
+   * It is a BEST EFFORT and is bounded by what a browser can know: a member who opens the
+   * confirmation link on their phone while they signed up on a laptop arrives in a session
+   * that never saw this, and keeps the placeholder handle until they rename themselves. The
+   * alternative is sending the chosen name to the server before the address is proved,
+   * which would let anyone reserve any handle by typing an address they do not hold.
+   */
+  var PENDING_HANDLE_KEY = 'rma.pending_handle';
+
+  function rememberHandle(handle) {
+    try { global.sessionStorage.setItem(PENDING_HANDLE_KEY, handle); } catch (e) { /* private mode */ }
+  }
+
+  function claimRememberedHandle() {
+    var handle = null;
+    try {
+      handle = global.sessionStorage.getItem(PENDING_HANDLE_KEY);
+      if (handle) global.sessionStorage.removeItem(PENDING_HANDLE_KEY);
+    } catch (e) { handle = null; }
+    return handle ? claimHandle(handle) : Promise.resolve();
   }
 
   function onSignedIn(account) {
     adoptAccount(account);
     renderMasthead();
-    loadOwnHandle();
+    /* The parked handle first: loadOwnHandle would otherwise read the placeholder and put
+       its initial in the masthead a moment before the real name replaces it. */
+    claimRememberedHandle().then(function () { return loadOwnHandle(); });
     refreshEngagement(state.feed.map(function (r) { return r.id; })).then(function () {
       if (state.viewer) renderViewerChrome(state.viewer.index);
     });
@@ -2680,8 +2828,15 @@
         el('div.account__row', null, [
           el('div', null, [
             el('div.privacy-row__name', { text: t('account.email') }),
+            /* THREE states, because state.confirmed has three and the other two places
+               that read it say so. Null is "we have not been told" — a status request that
+               failed, or a database that does not have 0060 yet — and collapsing it into
+               "confirmed" made this row assert something nothing had checked. It is the
+               one row on the page whose whole job is to report a fact. */
             el('div.privacy-row__hint', {
-              text: state.confirmed === false ? t('account.emailNo') : t('account.emailOk')
+              text: state.confirmed === false ? t('account.emailNo')
+                  : state.confirmed === true ? t('account.emailOk')
+                  : t('account.emailUnknown')
             })
           ]),
           /* No button when there is nothing to do. An action that reports success without
@@ -2969,13 +3124,15 @@
 
   function locatedCards(visible) {
     if (!visible.length) return el('p.profile__empty', { text: t('map.empty') });
-    return el('div.grid', null, [el('div.grid__col', null, visible.map(function (row) {
-      var card = memoryCard(row);
+    /* The archive's own masonry, not a hand-built copy of its class names — see cardGrid.
+       §1: the map's list is "the same grid language", which means the same columns at the
+       same widths, and the only difference is the precision line §7 asks for under each
+       card. */
+    return cardGrid(visible, function (card, row) {
       card.appendChild(el('div.located__where', {
         text: t('map.precision.' + (row.precision || 'area'))
       }));
-      return card;
-    }))]);
+    });
   }
 
   /* The slider moves, and the map and the list follow — without a re-render.
@@ -3145,6 +3302,11 @@
   function render() {
     var name = route();
 
+    /* Before anything is mounted, and only when this is not an item: /item/{id} renders
+       the archive UNDER the viewer, so recording it here would make the back button point
+       at the memory the reader is trying to leave. */
+    if (!routedItemId()) state.lastView = path();
+
     renderMasthead();
     renderFooter();
 
@@ -3292,9 +3454,15 @@
     global.clearTimeout(resizeTimer);
     resizeTimer = global.setTimeout(function () {
       var next = columnCount();
-      if (next !== lastColumns && route() === 'archive' && !state.viewer) {
-        lastColumns = next;
-        mount(qs('#view'), renderArchive());
+      if (next === lastColumns || state.viewer) return;
+      lastColumns = next;
+      if (route() === 'archive') mount(qs('#view'), renderArchive());
+      /* /map reflows too, and it is the list node alone rather than render(): a full
+         re-render on /map would rebuild the panel around a canvas the reader may have
+         panned and would scroll them back to the top. Same in-place update applyDecade
+         makes for the same reason. */
+      else if (route() === 'map' && mapState.listNode) {
+        mount(mapState.listNode, locatedCards(visibleItems()));
       }
     }, 150);
   });

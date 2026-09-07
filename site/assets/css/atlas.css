@@ -267,8 +267,9 @@ html[lang="en"] .hero__stats li { font: 500 12px var(--font-en); }
 
 .grid {
   display: flex;
-  gap: 20px;
-  padding: 8px 36px 0;
+  gap: var(--grid-gap);
+  padding-block-start: 8px;
+  padding-inline: var(--gutter);
   align-items: flex-start;
 }
 
@@ -277,7 +278,7 @@ html[lang="en"] .hero__stats li { font: 500 12px var(--font-en); }
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--grid-gap);
 }
 
 .memory {
@@ -1180,7 +1181,8 @@ html[lang="en"] .located__where { font: 500 10.5px var(--font-en); }
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 4px 32px 14px;
+  padding-block: 4px 14px;
+  padding-inline: var(--gutter);
 }
 .decade-slider__label {
   font: 600 11.5px var(--font-ar);
@@ -1213,7 +1215,8 @@ html[lang="en"] .decade-slider__value { font: 600 12px var(--font-en); }
    bar hides, which resizes the canvas mid-pan and reads as the map twitching. */
 .mapview {
   position: relative;
-  margin: 0 32px 18px;
+  margin-block: 0 18px;
+  margin-inline: var(--gutter);
   aspect-ratio: 16 / 10;
   max-height: 620px;
   border: 1px solid var(--olive-a22);
@@ -1245,7 +1248,8 @@ html[lang="en"] .decade-slider__value { font: 600 12px var(--font-en); }
   pointer-events: none;
 }
 .mapview__note {
-  margin: 0 32px 14px;
+  margin-block: 0 14px;
+  margin-inline: var(--gutter);
   padding: 10px 14px;
   border-radius: var(--r-md);
   background: var(--gold-a12);
@@ -1801,8 +1805,8 @@ html[lang="en"] .authpage__back { font: 400 12px var(--font-en); }
    decade rail as a swipeable chip row, viewer comments as a bottom bar. */
 
 @media (max-width: 900px) {
-  .grid { gap: 12px; padding-inline: 16px; }
-  .grid__col { gap: 12px; }
+  .grid { gap: var(--grid-gap-sm); padding-inline: var(--gutter-sm); }
+  .grid__col { gap: var(--grid-gap-sm); }
 
   /* WCAG 2.5.8 wants a 24px target. These are standalone navigation links in a column, not
      links inside a sentence, so the inline-text exception does not apply to them — they
@@ -1926,10 +1930,10 @@ html[lang="en"] .authpage__back { font: 400 12px var(--font-en); }
   /* Section 9: "Mobile is a faithful echo of desktop, not a reduced version." The map
      stays, at a taller aspect because a phone is narrow -- 16/10 on a 360px screen is
      a letterbox nobody can read a city in. */
-  .decade-slider { padding: 4px 16px 12px; gap: 8px; }
+  .decade-slider { padding-block: 4px 12px; padding-inline: var(--gutter-sm); gap: 8px; }
   .decade-slider__label { display: none; }
-  .mapview { margin: 0 16px 14px; aspect-ratio: 3 / 4; max-height: none; }
-  .mapview__note { margin: 0 16px 12px; }
+  .mapview { margin-block: 0 14px; margin-inline: var(--gutter-sm); aspect-ratio: 3 / 4; max-height: none; }
+  .mapview__note { margin-block: 0 12px; margin-inline: var(--gutter-sm); }
 
   .dialog { padding: 24px 20px 20px; }
   .dialog--form,

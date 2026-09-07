@@ -140,6 +140,17 @@ jobs:
       - name: the CORS preflight covers what the front end sends
         run: node scripts/frontend-cors-test.mjs
 
+      # public.js RENDERED. The only front-end job that boots the whole shell and asks the
+      # resulting tree questions, because the four defects it covers are all values that do
+      # not exist until a render: the viewer's back target (a hardcoded '/' from M3 until
+      # 6 Sep, so a memory opened from /map returned the reader to the archive), the map's
+      # list being `.grid` around a single column (the archive's class names with none of
+      # its layout), whether that grid moves with the viewport, and whether the handle a
+      # member typed at signup is written with an UPDATE rather than an INSERT into a row
+      # 0057's trigger has already created. Every one of them passes a source scan.
+      - name: public.js rendered — back navigation, the located grid, the chosen handle
+        run: node scripts/frontend-nav-test.mjs
+
       # M4. Two binary format readers written from the specs — a PMTiles archive and a
       # vector tile — decoding files this test builds byte by byte. Nothing else in the
       # repository can tell whether they are right: a checked-in fixture would make every
