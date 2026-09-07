@@ -547,6 +547,131 @@ console.log('# /me — the password-reset and confirmation controls');
      '...and offers no confirm button, because it does not know there is anything to do');
 }
 
+/* ═══ 6 · the handle can be CHANGED after signup ════════════════════════════
+   Section 4 proves a NEW member's chosen handle survives signup. This is the other half,
+   and it is the one the deployed database needed: claimHandle() runs only at signup, so
+   every account created before 7 Sep 2026 — all sixteen on the live system, the
+   maintainer's among them — holds 0057's `member_<12 hex>` placeholder, and the profile
+   editor wrote display_name, bio and visibility and never `handle`. Nothing could repair
+   them, while signup.err.handleTaken and handleKept both told members to "change it from
+   your page".
+
+   Asserted through the real form, because the interesting behaviour is in the submit
+   handler: WHICH keys the PATCH carries, and which refusal the member is shown. */
+
+console.log('# /me — renaming yourself');
+
+{
+  const account = { id: 'u-1', email: 'x@t.local', role: 'member' };
+  const PLACEHOLDER = 'member_5f4d89d9f9bd';
+
+  /** A /me boot whose profile row carries `handle`, and whose patch answers `answer`. */
+  async function editorWin(handle, answer) {
+    const calls = [];
+    const DB = {
+      select: () => Promise.resolve([{ handle, display_name: null }]),
+      insert: () => Promise.resolve(null),
+      patch: (table, filter, body) => {
+        calls.push({ table, filter, body });
+        return answer ? answer(body) : Promise.resolve([{ handle: body.handle || handle }]);
+      },
+      del: () => Promise.resolve(null),
+      rpc: (name) => {
+        if (name === 'profile_view') {
+          return Promise.resolve([{
+            id: account.id, handle, display_name: null, avatar_path: null,
+            role_cache: 'member', bio: null,
+            visibility: { bio: 'public', personalInfo: 'public', contributions: 'public', comments: 'public' },
+            member_since: 2026, is_own: true, is_deleted: false,
+          }]);
+        }
+        if (name === 'email_confirmation_status') return Promise.resolve({ confirmed: true });
+        return Promise.resolve([]);
+      },
+      mediaUrl: () => null,
+    };
+    const AUTH = {
+      user: () => account,
+      accessToken: () => Promise.resolve('token'),
+      restore: () => Promise.resolve(account),
+      onChange: () => {}, signOut: () => {},
+      signIn: () => Promise.resolve(account),
+      signUp: () => Promise.resolve({ confirmationRequired: false, user: account }),
+      requestPasswordReset: () => Promise.resolve(true),
+      beginRecovery: () => {}, adoptMailedLink: () => Promise.resolve(account),
+    };
+    const TURNSTILE = {
+      mount: () => ({ token: () => Promise.resolve('c'), reset: () => {}, remove: () => {} }),
+    };
+    const win = await boot({ pathname: '/me', overrides: { DB, AUTH, TURNSTILE } });
+    for (let i = 0; i < 14; i++) await settle();
+
+    // Open the editor by its own toggle, not by reaching into state.
+    const toggle = view(win).querySelectorAll('button')
+      .find((b) => textOf(b) === win.I18N.t('profile.editTitle'));
+    if (toggle) { toggle.fire('click'); for (let i = 0; i < 6; i++) await settle(); }
+    return { win, calls, form: win.document.querySelector('form.profile__edit-form') };
+  }
+
+  const opened = await editorWin(PLACEHOLDER);
+  ok(opened.form !== null, 'CONTROL: the profile editor opens from its own toggle');
+
+  const field = opened.form && opened.form.querySelector('input[autocomplete=username]');
+  ok(field !== null && field !== undefined,
+     'the editor offers a handle field — the control signup.err.handleTaken already points at');
+  ok(field && field.value === PLACEHOLDER,
+     `...prefilled with the handle the member currently has (${field ? field.value : 'nothing'})`);
+
+  /* A save that does NOT touch the handle must not send one. Sending an unchanged handle
+     puts the reserved-handle trigger and both CHECK constraints in front of a save that
+     was about a bio — so a member editing a bio could be refused over a name they never
+     touched. */
+  const untouched = await editorWin(PLACEHOLDER);
+  untouched.form.querySelector('textarea').value = 'a new bio';
+  untouched.form.fire('submit');
+  for (let i = 0; i < 8; i++) await settle();
+  ok(untouched.calls.length === 1, `CONTROL: an edit sends exactly one PATCH (${untouched.calls.length})`);
+  ok(untouched.calls[0] && !('handle' in untouched.calls[0].body),
+     `an unchanged handle is NOT sent (${untouched.calls[0] ? Object.keys(untouched.calls[0].body).join(', ') : 'no call'})`);
+  ok(untouched.calls[0] && untouched.calls[0].body.bio === 'a new bio',
+     '...while the field that did change is');
+
+  // And the rename itself reaches the database.
+  const renamed = await editorWin(PLACEHOLDER);
+  renamed.form.querySelector('input[autocomplete=username]').value = 'ramallah_1967';
+  renamed.form.fire('submit');
+  for (let i = 0; i < 8; i++) await settle();
+  ok(renamed.calls[0] && renamed.calls[0].body.handle === 'ramallah_1967',
+     `a changed handle IS sent (${renamed.calls[0] ? JSON.stringify(renamed.calls[0].body.handle) : 'no call'})`);
+  ok(renamed.calls[0] && /id=eq\.u-1/.test(renamed.calls[0].filter)
+     && /select=/.test(renamed.calls[0].filter),
+     `...onto their own row only, with the select= DB.patch requires (${renamed.calls[0] ? renamed.calls[0].filter : ''})`);
+
+  /* The two refusals, told apart. They are different things for the member to do, and
+     0004's unique index and the reserved-handle trigger answer with different codes. */
+  const taken = await editorWin(PLACEHOLDER, (body) => (body.handle
+    ? Promise.reject(Object.assign(new Error('conflict'), { key: 'admin.err.conflict', status: 409 }))
+    : Promise.resolve([{ handle: PLACEHOLDER }])));
+  taken.form.querySelector('input[autocomplete=username]').value = 'taken_name';
+  taken.form.fire('submit');
+  for (let i = 0; i < 8; i++) await settle();
+  const takenNote = textOf(taken.form.querySelector('.form-error'));
+  ok(takenNote === taken.win.I18N.t('signup.err.handleTaken'),
+     `409 is reported as a name someone else holds ("${takenNote}")`);
+
+  const bad = await editorWin(PLACEHOLDER, (body) => (body.handle
+    ? Promise.reject(Object.assign(new Error('check'), { key: 'admin.err.generic', status: 400 }))
+    : Promise.resolve([{ handle: PLACEHOLDER }])));
+  bad.form.querySelector('input[autocomplete=username]').value = 'admin';
+  bad.form.fire('submit');
+  for (let i = 0; i < 8; i++) await settle();
+  const badNote = textOf(bad.form.querySelector('.form-error'));
+  ok(badNote === bad.win.I18N.t('signup.err.handleBad'),
+     `400 is reported as a name the archive will not take, which is a different fix ("${badNote}")`);
+  ok(badNote !== bad.win.I18N.t('signup.err.handleTaken'),
+     '...and specifically not "taken", which is the conflation that hid the original defect');
+}
+
 console.log(`\n1..${passed + failed}`);
 if (failed) {
   console.error(`\n${failed} assertion(s) failed.`);

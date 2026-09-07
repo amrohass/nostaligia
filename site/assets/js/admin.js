@@ -397,10 +397,12 @@
     var assets = row.media_assets || [];
     var master = null;
     var thumb = null;
+    var poster = null;
     var renditions = [];
     assets.forEach(function (a) {
       if (a.role === 'master') master = a;
       else if (a.role === 'thumb') thumb = a;
+      else if (a.role === 'poster') poster = a;
       else if (a.role === 'rendition') renditions.push(a);
     });
 
@@ -446,9 +448,68 @@
               master && master.bytes ? Math.round(master.bytes / 1024) + ' KB' : null]
         .filter(Boolean).join(' · '),
       thumbUrl: thumb ? cdnUrl(thumb) : null,
+      posterUrl: poster ? cdnUrl(poster) : (thumb ? cdnUrl(thumb) : null),
       previewUrl: renditions.length ? cdnUrl(renditions[0]) : null,
       previewMime: renditions.length ? renditions[0].mime : null
     };
+  }
+
+  /**
+   * What the moderator is actually being asked to approve.
+   *
+   * This did not exist until 7 Sep 2026, and its absence was the defect: mapRow has
+   * computed `thumbUrl` and `previewUrl` since M1 and NOTHING read them. queueDetail
+   * rendered `.submitted-plate` — a tone-coloured block carrying the mime and the pixel
+   * dimensions — so a reviewer approving a photograph saw a gradient and a caption, and
+   * every approval in this archive's history was made without looking at the image.
+   *
+   * It was invisible because the plate is not an error state: it is the prototype's
+   * placeholder, it renders cleanly, and the text beside it is real metadata. Nothing
+   * about it says "the picture is missing".
+   *
+   * The derivative is what is shown, never the master. §3 — "NEVER serve a row with
+   * bucket='originals' through the public CDN path" — and cdnUrl returns null for anything
+   * outside `public`, so the rule is the URL builder's rather than this function's. The
+   * derivative exists before approval: the worker writes it at ingest and QUEUE_QUERY
+   * already filters `ingest_state=eq.ready`, so a row that reaches this pane has one.
+   *
+   * Mirrors public.js's mediaNode() by shape rather than by import — admin.js is loaded on
+   * its own page and shares no module with the archive — so a reviewer and a reader are
+   * looking at the same rendition through the same element.
+   */
+  function reviewMedia(item) {
+    var mime = item.previewMime || '';
+
+    if (item.previewUrl && mime.indexOf('video/') === 0) {
+      return el('video.submitted-plate__media', {
+        src: item.previewUrl,
+        poster: item.posterUrl,
+        controls: true,
+        preload: 'none',
+        playsinline: true,
+        'aria-label': pick(item.title)
+      });
+    }
+    if (item.previewUrl && mime.indexOf('audio/') === 0) {
+      /* Audio has no frame to look at, so the poster (or thumb) stays visible above the
+         transport rather than being replaced by it. */
+      return el('div.submitted-plate__audio', null, [
+        item.posterUrl
+          ? el('img.submitted-plate__art', { src: item.posterUrl, alt: pick(item.title) })
+          : null,
+        el('audio.submitted-plate__audio-el', {
+          src: item.previewUrl, controls: true, preload: 'none', 'aria-label': pick(item.title)
+        })
+      ]);
+    }
+    if (item.previewUrl) {
+      return el('img.submitted-plate__media', {
+        src: item.previewUrl, alt: pick(item.title), decoding: 'async'
+      });
+    }
+    /* No derivative at all. The plate is right here and only here — it says the archive
+       has nothing to show, which is itself a review finding. */
+    return el('span.mono', { text: t('feed.noPreview') });
   }
 
   function loadQueue() {
@@ -558,10 +619,14 @@
     return el('div.pane-detail', null, [
       el('div.pane-detail__scroll', null, [
         el('div.pane-detail__media', null, [
+          /* The media first, then the numbers under it. `item.plate` — mime, dimensions,
+             size — was the whole of this pane and is now a caption beside the thing it
+             describes, which is what it was always meant to be. */
           el('div.submitted-plate.plate', { style: toneStyle(item.tone) }, [
-            el('span.mono', { text: item.plate }),
+            reviewMedia(item),
             el('span.submitted-plate__status', { text: t('q.awaiting') })
           ]),
+          el('p.submitted-plate__meta.mono', { text: item.plate }),
           item.thumbs && item.thumbs.length > 1
             ? el('div.thumbs', null, item.thumbs.map(function (tone, i) {
                 return el('button.thumb', {

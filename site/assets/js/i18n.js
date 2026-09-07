@@ -407,6 +407,12 @@
     'profile.privacyNote':   { ar: 'اسمك وصورتك ودورك تظهر دائمًا — بها تُنسب الذكريات إلى أصحابها.',
                                en: 'Your name, avatar and role are always shown — they are how memories stay attributed.' },
     'profile.displayName':   { ar: 'الاسم المعروض', en: 'Display name' },
+    /* The handle editor, added 7 Sep 2026. signup.err.handleTaken and handleKept have
+       both told members to "change it from your page" since M3, and until now there was
+       no such control — so the copy named a screen that did not exist. */
+    'profile.handleHint':    { ar: 'اسمك المستعار ظاهر للجميع ولا يتكرر. تغييره يغيّر رابط ملفك.',
+                               en: 'Your handle is public and unique. Changing it changes your profile link.' },
+    'profile.handleSaved':   { ar: 'تم تغيير اسمك المستعار.', en: 'Your handle has been changed.' },
     'profile.bio':           { ar: 'نبذة', en: 'Bio' },
     'profile.save':          { ar: 'حفظ الملف', en: 'Save profile' },
     'profile.saved':         { ar: 'حُفظ ملفك الشخصي.', en: 'Your profile is saved.' },

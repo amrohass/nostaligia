@@ -2879,6 +2879,23 @@
       ]);
     }
 
+    /* THE HANDLE, editable — added 7 Sep 2026, and it is the half of the handle defect
+       that the INSERT→PATCH fix could not reach.
+
+       That fix made claimHandle() work, but claimHandle only ever runs at signup. Every
+       account created before it — all of them, on the deployed database, including the
+       maintainer's — holds 0057's placeholder `member_<12 hex>` in the row, and nothing
+       could change it: this form wrote display_name, bio and visibility and never
+       `handle`. So the two refusal messages that say "change it from your page", and the
+       handleKept message that promises "a temporary name you can change from your page",
+       all named a control that did not exist.
+
+       No migration: 0004 grants `update (handle, display_name, …)` to `authenticated` and
+       0017's profiles_update restricts it to `id = auth.uid()`, both live since 11 Aug.
+       This is the same policy claimHandle() already uses on the same column. */
+    var handleInput = el('input.input', { type: 'text', autocomplete: 'username' });
+    handleInput.value = own.handle || '';
+
     var displayInput = el('input.input', { type: 'text' });
     displayInput.value = own.display_name || '';
     var bioInput = el('textarea.input', { rows: '3' });
@@ -2924,27 +2941,61 @@
         /* select= is REQUIRED and is not tidiness: `Prefer: return=representation` with no
            select is a SELECT of `*`, and 0015 revoked table-level SELECT on profiles. See
            db.js — this is the defect the lifecycle harness found on posts. */
+        var patch = {
+          display_name: displayInput.value.trim() || null,
+          bio: bioInput.value.trim() || null,
+          visibility: visibility
+        };
+
+        /* Sent ONLY when it changed. An unchanged handle re-sent is a write of the value
+           the row already holds — harmless against the unique index, but it puts the
+           reserved-handle trigger and both CHECK constraints in front of a save that was
+           about a bio, and a member editing their bio must not be refused over a name
+           they did not touch. */
+        var wantedHandle = handleInput.value.trim();
+        var handleChanged = wantedHandle && wantedHandle !== (own.handle || '');
+        if (handleChanged) patch.handle = wantedHandle;
+
         DB.patch('profiles', 'id=eq.' + encodeURIComponent(state.account.id) + '&select=handle',
-          { display_name: displayInput.value.trim() || null,
-            bio: bioInput.value.trim() || null,
-            visibility: visibility })
+          patch)
           .then(function (rows) {
             if (!rows || !rows.length) {
               note.textContent = t('admin.err.denied');
               note.hidden = false;
               return;
             }
-            UI.toast(t('profile.saved'));
+            /* The masthead carries the handle's initial, and the profile route is keyed by
+               it, so a rename that is not adopted here leaves the page addressing the old
+               name until a reload. */
+            if (handleChanged && state.account) {
+              state.account.handle = rows[0].handle;
+              renderMasthead();
+            }
+            UI.toast(t(handleChanged ? 'profile.handleSaved' : 'profile.saved'));
             state.editOpen = false;
             profileCache.key = null;
             loadProfile();
           })
           .catch(function (err) {
-            note.textContent = t(err && err.key ? err.key : 'admin.err.generic');
+            /* Same split as claimHandle(): 409 is the normalized-handle unique index
+               (0004) and means taken; the reserved-handle trigger and both CHECKs raise
+               23514, which PostgREST answers 400, and mean the name itself is not one this
+               archive will take. Only when a handle was actually sent — otherwise a 409
+               from anywhere else would be reported as a name collision. */
+            if (handleChanged && err && (err.status === 409 || err.status === 400)) {
+              note.textContent = t(err.status === 409 ? 'signup.err.handleTaken' : 'signup.err.handleBad');
+            } else {
+              note.textContent = t(err && err.key ? err.key : 'admin.err.generic');
+            }
             note.hidden = false;
           });
       }
     }, [
+      el('div.field', null, [
+        labelFor(t('field.handle'), handleInput),
+        handleInput,
+        el('p.privacy-row__hint', { text: t('profile.handleHint') })
+      ]),
       el('div.field', null, [labelFor(t('profile.displayName'), displayInput), displayInput]),
       el('div.field', null, [labelFor(t('profile.bio'), bioInput), bioInput]),
       el('div.privacy-list', null, [

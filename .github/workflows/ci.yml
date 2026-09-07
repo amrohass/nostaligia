@@ -151,6 +151,15 @@ jobs:
       - name: public.js rendered — back navigation, the located grid, the chosen handle
         run: node scripts/frontend-nav-test.mjs
 
+      # The same technique on the dashboard, and for the same reason. admin.js computed a
+      # URL for the pending post's derivative from M1 and never rendered it, so a moderator
+      # approving a photograph saw a coloured plate and its pixel dimensions. A dead
+      # assignment is not a syntax error and not a missing global: nothing that reads the
+      # file can see it, and frontend-view-test only proves admin.js EVALUATES. It takes a
+      # rendered tree, which is what this asks.
+      - name: admin.js rendered — the moderator can see what they are approving
+        run: node scripts/frontend-admin-test.mjs
+
       # M4. Two binary format readers written from the specs — a PMTiles archive and a
       # vector tile — decoding files this test builds byte by byte. Nothing else in the
       # repository can tell whether they are right: a checked-in fixture would make every

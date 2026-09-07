@@ -315,6 +315,40 @@ html[lang="en"] .detail__warn { font: 400 11px/1.5 var(--font-en); }
   justify-content: center;
   color: var(--ink-55);
 }
+/* The derivative itself, added 7 Sep 2026 — see reviewMedia() in admin.js for why the
+   pane showed only a gradient until then. `contain` rather than `cover`: a moderator is
+   judging the whole frame, and a cropped one hides exactly the edges where a stray face
+   or a licence plate sits (§7). The plate keeps its min-height, so a portrait photograph
+   and a landscape one leave the pane the same size and the queue does not jump. */
+.submitted-plate__media {
+  max-width: 100%;
+  max-height: 460px;
+  object-fit: contain;
+  border-radius: var(--r-lg);
+}
+
+.submitted-plate__audio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px;
+}
+.submitted-plate__art {
+  max-width: 220px;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: var(--r-sm);
+}
+.submitted-plate__audio-el { width: 100%; max-width: 420px; }
+
+.submitted-plate__meta {
+  margin: 0;
+  color: var(--ink-55);
+  font-size: 11px;
+}
+
 .submitted-plate__status {
   position: absolute;
   top: 12px;
