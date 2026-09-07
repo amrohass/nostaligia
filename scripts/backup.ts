@@ -7,14 +7,31 @@
  *   deno run ... scripts/backup.ts --pin pre-launch      # a copy nothing will ever prune
  *   deno run --allow-read --allow-write scripts/backup.ts --selftest   # crypto and refusals
  *
- * ── The three decisions this implements (Amro, 31 Aug 2026) ──
+ * ── The three decisions this implements ──────────────────────
  *
- *   destination  a second R2 bucket under a DIFFERENT Cloudflare account;
+ * SUPERSEDED IN ONE PLACE, 7 Sep 2026. Amro moved the destination from a second R2 account
+ * to a LOCAL ENCRYPTED DISK, and made the local container the restore target rather than a
+ * stand-in for one. The cadence is unchanged.
+ *
+ *   destination  a LOCAL ENCRYPTED DISK — `--to-dir` (Amro, 7 Sep 2026), replacing the
+ *                second-R2-account decision of 31 Aug. The R2 path below is kept, working
+ *                and still refusing a same-account destination, because the decision that
+ *                chose it could be taken again and deleting it would make that a rewrite
+ *                rather than a flag;
  *   cadence      weekly full database, INCREMENTAL originals, plus snapshots pinned forever
- *                at pre-launch and immediately after the seed import;
- *   restore into a scratch Supabase project (scripts/restore-verify.ts) — which restores
- *                into a LOCAL container today, because the scratch project is not provisioned
- *                and a container cannot be mistaken for a hosted one.
+ *                at pre-launch and immediately after the seed import — `--pin <name>`;
+ *   restore      into a LOCAL container (scripts/restore-verify.ts). §11 records this as
+ *                sufficient: "the local-Docker target is sufficient for this gate ... No
+ *                further restore work is owed for launch."
+ *
+ * WHAT THE NEW DESTINATION COSTS, recorded rather than discovered later. A local disk is a
+ * weaker copy than a second account — same building, same disk, no geographic separation —
+ * and the manifest records `kind: "dir"` so a restore can never mistake one for the other.
+ * It also puts this job somewhere a CI runner cannot reach: a GitHub runner has no access to
+ * Amro's disk, so the weekly cadence is a scheduled task on HIS machine and not a workflow.
+ * That is not a limitation to work around; it is what "a backup you hold yourself" means,
+ * and it happens to retire the question of whether a project-wide management token belongs
+ * in CI secrets — with the destination local, it does not need to be there at all.
  *
  * "A different account" is enforced, not trusted: a destination whose account id equals the
  * source's is refused by name. A backup inside the blast radius of the thing it is backing up
@@ -92,17 +109,14 @@ const PIN = value("--pin");
 /**
  * `--to-dir <path>` — the SELF-HELD copy, on a disk rather than in the second account.
  *
- * The standing decision (Amro, 31 Aug 2026) is a second R2 bucket under a different
- * Cloudflare account, and that is still the destination this script is for. This flag does
- * not replace it and does not soften the different-account refusal, which still applies to
- * every R2 run.
+ * THIS IS NOW THE STANDING DESTINATION (Amro, 7 Sep 2026), replacing the second-R2-account
+ * decision of 31 Aug. It was built as a fallback while that account went unprovisioned; it
+ * is the choice itself now. The R2 path is kept and its different-account refusal still
+ * applies to every R2 run — see the header for why it was not deleted.
  *
- * It exists because §11 gate 3 says "one tested restore ... from a backup you hold
- * yourself", and the second account is not provisioned — so without a sink that needs no
- * credentials, the gate stays blocked on an account signup rather than on anything about
- * this system. A local encrypted copy IS a backup you hold yourself; it is a weaker one
- * (same building, same disk) and the manifest records which kind it was so a restore can
- * never mistake one for the other.
+ * A local encrypted copy IS a backup you hold yourself, which is what §11 gate 3 asks for.
+ * It is a weaker one — same building, same disk, no geographic separation — and the manifest
+ * records which kind it was so a restore can never mistake one for the other.
  *
  * The bytes are encrypted exactly as the R2 path encrypts them, read back off the disk and
  * DECRYPTED before the run reports success — same passphrase, same proof, same refusals.
@@ -219,9 +233,57 @@ async function r2(a: Account, key: string, method: "GET" | "HEAD" | "PUT", body?
  * database will reference, and the two lists can be COMPARED — an object the database names
  * and the bucket does not have is a broken archive, and it is found here instead of on the day
  * of the restore. A bucket listing cannot notice that, because it only ever sees what is there.
+ *
+ * Returns the objects to copy AND the count of masters skipped because their post is taken
+ * down — see the query. The count is returned rather than logged here so the caller reports
+ * every number in one place.
  */
-async function originalsFromDatabase(): Promise<Map<string, number>> {
-  const sql = `select storage_path, bytes from public.media_assets where bucket = 'originals' order by storage_path;`;
+/**
+ * The live masters, and a count of the ones §8 deleted on purpose.
+ *
+ * Pure and exported so `--selftest` can assert it without a database — the same reason
+ * `refusesDir` is. The rule it encodes is a judgement about what counts as archive damage,
+ * and a judgement that only exists inside a subprocess call is one no test ever sees.
+ *
+ * `!== true` rather than `=== false`: this parses JSON that came back over a CLI, and a
+ * missing or null `takedown` must mean "back it up" rather than "skip it". Erring towards
+ * copying is the only safe direction here — the cost of a wrong copy is disk, and the cost
+ * of a wrong skip is the archive's only irreplaceable bytes.
+ */
+export function splitTakenDown(
+  rows: { storage_path: string; bytes: number; takedown?: boolean | null }[],
+): { objects: Map<string, number>; takenDown: number } {
+  const live = rows.filter((r) => r.takedown !== true);
+  return {
+    objects: new Map(live.map((r) => [r.storage_path, Number(r.bytes)])),
+    takenDown: rows.length - live.length,
+  };
+}
+
+async function originalsFromDatabase(): Promise<{ objects: Map<string, number>; takenDown: number }> {
+  /* TAKEN-DOWN POSTS ARE EXCLUDED, and this is a correctness fix rather than a filter —
+     found 7 Sep 2026 by running the dry run against the deployed archive.
+   *
+   * §8 deletes the bytes on takedown, immediately and without waiting for a publish. The
+   * `media_assets` ROW stays, deliberately: it is part of the permanent record of what was
+   * removed. So every taken-down post left a row naming an object that is correctly gone,
+   * and this query — which asked only `bucket = 'originals'` — collected all of them and
+   * reported each as "an object the DATABASE names and the BUCKET does not match ... an
+   * archive problem". Six of the nine on the deployed system, every one of them §8 working
+   * exactly as designed.
+   *
+   * That matters twice. An orphan report that is mostly correct behaviour is one nobody
+   * reads by the third week, and it grows by one line per takedown for ever — so the day a
+   * REAL missing master appears it arrives in a list already full of false ones. And the
+   * copy loop would otherwise try to fetch bytes §8 deleted on purpose, which is at best a
+   * wasted HEAD per takedown per run and at worst, on a bucket where a takedown had renamed
+   * rather than deleted, a backup that quietly re-acquires removed content.
+   *
+   * They are COUNTED and reported as their own line rather than silently dropped — a value
+   * excluded without saying so is this codebase's own recurring defect. */
+  const sql = `select a.storage_path, a.bytes, p.takedown from public.media_assets a `
+    + `join public.posts p on p.id = a.post_id `
+    + `where a.bucket = 'originals' order by a.storage_path;`;
   const file = await scratchFile(".sql");
   await Deno.writeTextFile(file, sql);
   try {
@@ -233,8 +295,7 @@ async function originalsFromDatabase(): Promise<Map<string, number>> {
     if (code !== 0) throw new Error(`media_assets query exited ${code}\n${new TextDecoder().decode(stderr)}`);
     const json = /\{[\s\S]*\}/.exec(text);
     if (!json) throw new Error(`media_assets query returned nothing parseable:\n${text.slice(0, 400)}`);
-    const rows = JSON.parse(json[0]).rows as { storage_path: string; bytes: number }[];
-    return new Map(rows.map((r) => [r.storage_path, Number(r.bytes)]));
+    return splitTakenDown(JSON.parse(json[0]).rows);
   } finally {
     await Deno.remove(file).catch(() => {});
   }
@@ -800,6 +861,35 @@ async function selftest() {
        "CONTROL: with no temp roots known, nothing is refused for being temporary");
   }
 
+  /* ── Taken-down masters are not archive damage (7 Sep 2026) ──
+     §8 deletes the bytes and keeps the row. Six of the nine on the deployed system were
+     being reported as "an object the DATABASE names and the BUCKET does not match", which
+     is §8 working exactly as designed being announced as a fault. */
+  {
+    const rows = [
+      { storage_path: "a/1", bytes: 10, takedown: false },
+      { storage_path: "b/2", bytes: 20, takedown: true },
+      { storage_path: "c/3", bytes: 30, takedown: false },
+    ];
+    const split = splitTakenDown(rows);
+    ok(split.objects.size === 2, `a taken-down master is not copied (${split.objects.size} of 3)`);
+    ok(!split.objects.has("b/2"), "...and specifically not the taken-down one");
+    ok(split.takenDown === 1,
+       `...and it is COUNTED rather than silently dropped (${split.takenDown})`);
+    ok(split.objects.get("a/1") === 10 && split.objects.get("c/3") === 30,
+       "CONTROL: the live masters keep their sizes — the filter discriminates");
+
+    /* The direction the ambiguity must fall. This parses JSON off a CLI, and a row whose
+       `takedown` did not survive that trip must be BACKED UP rather than skipped: a wrong
+       copy costs disk, a wrong skip costs the archive's only irreplaceable bytes. */
+    const odd = splitTakenDown([
+      { storage_path: "d/4", bytes: 40 },
+      { storage_path: "e/5", bytes: 50, takedown: null },
+    ]);
+    ok(odd.objects.size === 2 && odd.takenDown === 0,
+       `a missing or null takedown is treated as live, never as deleted (${odd.objects.size})`);
+  }
+
   console.log(`\n1..${passed + failed}`);
   if (failed) { console.log(`${failed} assertion(s) failed.`); Deno.exit(1); }
   console.log(`All ${passed} assertions passed.`);
@@ -979,9 +1069,15 @@ if (!import.meta.main) {
 
   /* 2 · originals, incrementally */
   console.log("\n== originals (incremental) ==");
-  const here = await originalsFromDatabase();
+  const { objects: here, takenDown } = await originalsFromDatabase();
   const total = [...here.values()].reduce((a, b) => a + b, 0);
   console.log(`  media_assets names ${here.size} objects in originals/, ${total.toLocaleString()} bytes`);
+  /* Said out loud, every run. §8 deleted these bytes on purpose and their rows remain as the
+     record of that — so they are neither copied nor counted as damage, and a reader who is
+     not told would have to work out why the object count is short. */
+  if (takenDown) {
+    console.log(`  ${takenDown} master(s) skipped: their post is taken down and §8 deleted the bytes on purpose`);
+  }
 
   let copied = 0, skipped = 0, bytes = 0;
   const orphans: string[] = [];
