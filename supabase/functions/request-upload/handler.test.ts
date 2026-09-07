@@ -179,6 +179,50 @@ Deno.test("the post kind must be declared, and must be one the schema knows", as
   }
 });
 
+// ── 0063 · the submission that uploads nothing ───────────────
+//
+// Amro's decision, 7 Sep 2026: a post may skip media ONLY if kind='event'. These are the
+// gate-1 half — the refusals that cost nothing and need no credential. The quota and the
+// row it writes are 40_event_without_media's.
+
+Deno.test("only an event may ask to skip media", async () => {
+  const base = { media: false, turnstile_token: "x" };
+  // The refusal names the KIND, not a missing mime: a client asking to submit a photograph
+  // with no photograph has misunderstood something, and "unsupported_type" would send them
+  // looking at their file picker for a file they deliberately did not attach.
+  assertEquals((await refusal({ ...base, kind: "media" })).error, "media_required", "media");
+  assertEquals((await refusal({ ...base, kind: "voice" })).error, "media_required", "voice");
+
+  // The control. Without it, a handler that refused `media: false` outright would pass both
+  // assertions above and the whole feature would be unreachable.
+  const ev = await refusal({ ...base, kind: "event" });
+  assert(
+    ev.error !== "media_required" && ev.error !== "unsupported_type",
+    `an event gets past gate 1 with no file (got ${ev.error})`,
+  );
+});
+
+Deno.test("a listing that names a file is refused rather than having it ignored", async () => {
+  // This codebase's standing rule: a value named in a call and silently discarded is worse
+  // than one refused, because nobody finds out. A caller sending both `media: false` and a
+  // size has contradicted itself and should be told which half was wrong.
+  const base = { media: false, kind: "event", turnstile_token: "x" };
+  assertEquals((await refusal({ ...base, bytes: 1024 })).error, "media_fields_on_listing", "bytes");
+  assertEquals((await refusal({ ...base, mime: "image/jpeg" })).error, "media_fields_on_listing", "mime");
+  assertEquals((await refusal({ ...base, duration_s: 12 })).error, "media_fields_on_listing", "duration");
+});
+
+Deno.test("`media: false` must be explicit — a missing mime is still a bad upload", async () => {
+  // Inferring the listing path from an absent mime would mean a client that lost the field
+  // to a serialisation bug quietly filing a listing instead of being told its upload was
+  // malformed. The ordinary refusal must survive.
+  assertEquals(
+    (await refusal({ kind: "event", bytes: 1024, turnstile_token: "x" })).error,
+    "unsupported_type",
+    "an event with no `media: false` and no mime is a malformed UPLOAD",
+  );
+});
+
 Deno.test("a malformed body is refused before anything reads a field from it", async () => {
   const res = await handleRequest(
     new Request("https://example.test/request-upload", {

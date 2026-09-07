@@ -3,13 +3,115 @@ overrides your defaults.
 
 ---
 
-## 7 Sep 2026 — the newest session, read this part first
+## 8 Sep 2026 — the newest session, read this part first
 
-**One thing must be applied before the front end is trusted: migration `0062`.** Same rule
-as 0060 — **migration FIRST, then the front end.** Reversed, an event submission still 500s
-exactly as it does today; in the right order, an event sent from the old front end is
-refused by name instead. 0062 is `20260907090000_event_submission.sql`; it is **not applied
-to the deployed database yet**.
+**The full report is `docs/session-report-2026-09-07-events-and-backup.md`.** Five items:
+events without media, Docker, the backup and a real restore, the `/item/*` OG check, and one
+CLAUDE.md amendment.
+
+**Both pending migrations are now APPLIED. There is no migration debt.** 0062 (yesterday's
+blocking step) and 0063 (this session's) are both live, `supabase migration list --linked`
+shows every row `local == remote`, and the suite runs with **no `--prelude`**:
+
+```
+node scripts/pgtap-deployed.mjs --tap     41 files, 755 assertions, 3 red
+```
+
+**The 3 red are the same 3 as always** — `20_publish_cron` 14/23/24. Nothing else.
+
+### Events can now be submitted with no media at all (0063)
+
+Amro's decision, relayed and final: **a post may skip media ONLY if `kind='event'`.**
+`media` and `voice` require at least one `media_assets` row, unconditionally. CLAUDE.md §1
+carries the amendment; §3 and §6 carry the quota.
+
+Four things about it that are easy to get backwards:
+
+1. **The listing path is NOT its own endpoint.** `claim_event_slot` is reached through
+   `request-upload` (`media: false`), because §6 requires Turnstile on submit and a second
+   door would be a second copy of the auth/Turnstile/confirmation gate order. The day the
+   two copies disagree, one of them is an uncaptcha'd write path. Do not "simplify" this
+   into a direct `DB.rpc` call.
+2. **`posts_approved_has_media` is DEFERRABLE INITIALLY *IMMEDIATE*.** Deferred-by-default
+   was the first draft and was wrong three ways: it moved every approval's error to commit,
+   it left pending trigger events so `ALTER TABLE ... DISABLE TRIGGER` failed 55006 in
+   `37_email_confirmation`, and it meant the trigger never fired in a pgTAP file at all — so
+   a test would pass whether or not it existed. **17 test files now carry
+   `set constraints public.posts_approved_has_media deferred;` after `create extension`**,
+   because their fixtures insert a post and its media in one transaction. That line is the
+   documented opt-in, not a workaround.
+3. **The WHEN clause carries `not new.takedown`, and it is a §8 requirement.**
+   `request_takedown` only does `set takedown = true` — status stays `approved`, kind stays
+   `media` — so without that term a takedown of any pre-0063 media-less post would be
+   REFUSED. Proved load-bearing by mutation (`event-takedown-blocked` kills exactly one
+   assertion).
+4. **The quota is `upload_quota.event_count`, not `count`.** Member 10 / moderator+admin 100
+   per day, in `public.event_daily_limits()`. Neither quota may spend the other, and both
+   directions are tested.
+
+`parse_event_fields` is shared by `claim_upload_slot` and `claim_event_slot` so the
+with-media and without-media rules cannot drift. The proof the extraction was faithful is
+that **`39_event_submission` passes 25/25 unedited**.
+
+### Docker is FIXED — and stop diagnosing it with `docker info`
+
+Server 29.7.2, the Supabase stack runs. No reinstall and no reboot were needed.
+
+- **`docker info` still hangs to timeout even on a healthy daemon.** `docker version` and
+  `docker ps` answer instantly. The old instruction to check `docker info` is what made this
+  look broken for longer than it was.
+- **Do not diagnose the distro by looking for files in it.** `wsl -d docker-desktop -e sh`
+  lands in the *bootstrap* namespace: it shows a 127 MB rootfs and no `dockerd` binary even
+  when `dockerd` is running from that exact path. That reading cost this session an hour.
+- What fixed it: `wsl --unregister docker-desktop`, then restart Docker Desktop so it
+  rebuilds the rootfs from `docker-desktop.iso`. **The 17.6 GB `docker_data.vhdx` survives**
+  — it is outside the distro's BasePath (`wsl\main`). Check the registry
+  (`HKCU:\...\Lxss`) before ever running that command.
+
+### The backup ran complete for the first time, and the restore found two defects
+
+Six of six dumps, `dumps_that_could_not_run: []`, `completeness_gaps: []`, quarantine never
+copied. The restore into local Docker passed everything the gate cares about — **`every
+post's author exists`** and **`roles resolve through authz_role()`** among them.
+
+Two defects, both in the verifier rather than the backup:
+
+- `restore-verify.ts` reported the six taken-down masters as missing objects. `backup.ts`
+  stopped copying those on 7 Sep and its pair never got the change — **six false failures on
+  every run for ever, describing §8 working.** Fixed.
+- `idempotentTriggers()` failed the restore on any CONSTRAINT trigger, "so the day one is
+  added the restore says so". 0063 adds the first. Now made idempotent with its own
+  `DROP TRIGGER IF EXISTS`; an unparseable one still refuses.
+
+**Two caveats.** The passphrase was session-generated, not Amro's — the mechanism is proved,
+his operational backup is still his to run. And **there is no D: drive on this machine**,
+which the runbook's `D:/rma-backups` assumes. §11 gate 3 stays discharged either way.
+
+### `/item/*` OG tags: the prerender is NOT broken, the route is missing
+
+Measured against the live domain:
+
+```
+ramallahnostalgia.org/item/<id>/   200, ZERO og: tags   ← the SPA shell
+<r2>/item/<id>/index.html          200, FULL og: set    ← correct, with a real og:image
+```
+
+`og:url` already names `ramallahnostalgia.org`, so `SITE_ORIGIN` is right. **Do not rebuild
+the prerender step.** The gap is the Cloudflare route CLAUDE.md §2 has recorded since 21 Aug
+as "not yet provisionable" — and it is provisionable now. It is Amro's.
+
+### Two corrections to this file's own command list
+
+- **`deno test supabase/functions/...` needs `-A`.** Without it, 7 of the publish tests fail
+  on `NotCapable: Requires read access to "site/index.html"` — which reads like a broken
+  suite and is a missing flag. With it: publish 96, request-upload 25 (was 22; 0063 added
+  three gate-1 tests), resend-confirmation 11.
+- `frontend-auth-test.mjs` is **73** now, not 70.
+
+---
+
+## 7 Sep 2026 — the session before (its migration debt is now cleared)
+
 
 **Events were never submittable.** The share sheet has had an "event" button since M3 and it
 could never have worked: `claim_upload_slot` never set `event_starts_at`, so
@@ -37,7 +139,11 @@ planned). And the refusal-map test's migration pointer was hand-maintained with 
 saying to repoint it; it finds the newest definition now, and immediately reported all eight
 of 0062's new refusals as unmapped, which is what it is for.
 
-**Docker is wedged and the database backup cannot be taken.** The process starts, the WSL
+~~**Docker is wedged and the database backup cannot be taken.**~~ **RESOLVED 8 Sep — see the
+top of this file. The diagnosis below is superseded, and one line of it is actively
+misleading: `docker info` hangs to timeout even on a HEALTHY daemon, so it is not the check
+to judge this by.** Kept for the asymmetry in its last paragraph, which is still true.
+The process starts, the WSL
 `docker-desktop` distro reports `Running`, and the daemon's pipe never answers. `--selftest`,
 the `originals/` sync, `triggers.sql` and `function_acl.sql` all work; `schema`, `data`,
 `auth`, `roles` and `restore-verify` are blocked. **`supabase db dump --linked --schema
@@ -117,41 +223,40 @@ against the deployed pipeline, not argued.
 2. **`node scripts/monitor.mjs`** — new. Publish age (gate 5), storage against §2's
    thresholds, and §9's budget, against the deployed system. `--selftest` needs no
    credential. **`unknown` is not `ok`** — a check that could not look says so.
-3. `supabase migration list --linked`. **62 migrations in the repo. 0060 and 0061 ARE now
-   applied** (verified 7 Sep: every row `local == remote`, no drift). **0062 is NOT** — it
-   is this session's, and its order against the front end is the strict one: **migration
-   first**. Note that applying 0061 **dispatched a publish**, because seeding a `published`
-   block fires `bump_publish_revision('content')`; that was wanted and has happened.
-4. **`node scripts/pgtap-deployed.mjs --tap`** — **40 files, 732 assertions**. **Until 0062
-   is applied it must be run with it spliced in as a prelude**, or `39_event_submission`
-   fails on a function that does not exist yet:
+3. `supabase migration list --linked`. **63 migrations in the repo and every one is applied**
+   (verified 8 Sep: every row `local == remote`, no drift). There is no migration debt and
+   no prelude to remember. When you ADD one, the order against the front end is still the
+   strict one: **migration first** — 0060, 0062 and 0063 were all deployed that way.
+4. **`node scripts/pgtap-deployed.mjs --tap`** — **41 files, 755 assertions, 3 red.** No
+   `--prelude` needed any more.
 
-   ```
-   node scripts/pgtap-deployed.mjs --tap \
-     --prelude supabase/migrations/20260907090000_event_submission.sql
-   ```
+   The 3 are the same 3 as always: `20_publish_cron` 14/23/24. Anything else is yours.
 
-   That is **3 red, all three known**: `20_publish_cron` 14/23/24 as always, and nothing
-   else. After 0062 is applied, drop the `--prelude` and it is the same 3.
-   The prelude is spliced INSIDE each file's own transaction and rolled back with it, so
-   this writes nothing to the deployed database.
+   **Watch the assertion TOTAL, not just the red count.** If it reads short of 755, a file
+   died before `finish()` and its remaining assertions silently stopped being counted —
+   they do not go red, they stop existing. That is how `18_publishable_posts` hid 17
+   assertions until 7 Sep, and how `40_event_without_media` announced three separate
+   mistakes on 8 Sep. The runner prints `suite declares N` beside the total for exactly
+   this comparison.
 
-   **It was 715 of 732 until 7 Sep and the gap was not visible as a failure.**
-   `18_publishable_posts` raised 21000 on a scalar subquery and *aborted*, so its 17
-   assertions stopped being counted rather than going red. If that total is ever short
-   again, look for a file that died before `finish()` — not for a red line.
+   `--prelude <file.sql>` still exists and is how you test an unapplied migration: it is
+   spliced INSIDE each file's own transaction and rolled back with it, so it writes nothing
+   to the deployed database.
 5. **The testing suites added 2 Sep.** They need `node scripts/harness-bootstrap.mjs --all`
    once (it writes `.harness.vars`, git-ignored) and a scratch `node_modules` holding
    `playwright` + `axe-core` for the two browser ones:
    ```
    node scripts/harness-bootstrap.mjs --status        live / stale, per role
-   node scripts/e2e-authenticated.mjs            61   1 known-red: takedown 207, see below
+   node scripts/e2e-authenticated.mjs            62   1 known-red: takedown 207, see below
    PLAYWRIGHT_DIR=… node scripts/e2e-browser.mjs 103  green
    node scripts/privacy-shards-test.mjs          44   green
-   node scripts/mutation-pass.mjs                21   13 KILLED, 0 SURVIVED, 8 INCONCLUSIVE
-                                                     until 0060 is applied — see the report's
-                                                     §2.9; PLAYWRIGHT_DIR needed for the three
-                                                     browser ones, and re-run a browser-guarded
+   node scripts/mutation-pass.mjs                24   0063 added three (event-exemption-widens,
+                                                     event-listing-quota-shared,
+                                                     event-takedown-blocked); all three KILLED
+                                                     on 8 Sep. It takes an id filter:
+                                                     `node scripts/mutation-pass.mjs event-`.
+                                                     PLAYWRIGHT_DIR needed for the three browser
+                                                     ones, and re-run a browser-guarded
                                                      INCONCLUSIVE on its own before believing it
    PLAYWRIGHT_DIR=… AXE_DIR=… node scripts/a11y-sweep.mjs  34, 0 failed, 6 findings
    node scripts/perf-probe.mjs                        measurement, no pass/fail
@@ -160,14 +265,16 @@ against the deployed pipeline, not argued.
 6. The rest of the suite, all green at the end of this session:
    ```
    node scripts/frontend-csp-test.mjs      14    node scripts/frontend-fonts-test.mjs   14
-   node scripts/frontend-auth-test.mjs     70    node scripts/frontend-rtl-test.mjs     12
+   node scripts/frontend-auth-test.mjs     73    node scripts/frontend-rtl-test.mjs     12
    node scripts/frontend-view-test.mjs     53    node scripts/monitor.mjs --selftest    19
-   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs  113.4/150 KiB
+   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs  114.8/150 KiB
    node scripts/frontend-cors-test.mjs      6    node scripts/frontend-nav-test.mjs     80
    node scripts/frontend-admin-test.mjs    16
-   deno test supabase/functions/publish/   96    deno run … backup.ts --selftest        31
-   deno test … request-upload/             22    deno run … restore-verify.ts --selftest 25
-   deno test … resend-confirmation/        11
+   deno test -A supabase/functions/publish/ 96   deno run … backup.ts --selftest        31
+   deno test -A … request-upload/          25    deno run … restore-verify.ts --selftest 29
+   deno test -A … resend-confirmation/     11
+   ^^ the -A is REQUIRED: without it 7 publish tests fail on NotCapable (read access
+      to site/index.html), which reads like a broken suite and is a missing flag.
    ```
 
    `frontend-admin-test.mjs` is new on 7 Sep and is the only thing in this repository that

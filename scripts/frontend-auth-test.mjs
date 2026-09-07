@@ -225,24 +225,44 @@ console.log('# upload.js — the refusal map');
    * refusals — which no browser ever sees, and every one of which would be reported as an
    * unmapped message the upload path is missing. */
   const MIGRATIONS = join(root, 'supabase/migrations');
-  const definers = readdirSync(MIGRATIONS)
-    .filter((f) => f.endsWith('.sql'))
-    .filter((f) => readFileSync(join(MIGRATIONS, f), 'utf8')
-      .includes('create or replace function public.claim_upload_slot'))
-    .sort();
-  ok(definers.length > 0,
-     `CONTROL: found the migrations defining claim_upload_slot (${definers.length}, newest ${definers[definers.length - 1]})`);
-  const migrationText = readFileSync(join(MIGRATIONS, definers[definers.length - 1]), 'utf8');
-  // Sliced to claim_upload_slot's own body. 0049 also defined set_post_location, whose
-  // refusals are a moderator's and reach this map through nothing — scanning a whole file
-  // reports them as messages the upload path forgot. 0052 carries only claim_upload_slot,
-  // but the slice stays: it is what makes the pointer safe to move again.
-  const claimSlot = migrationText.slice(
-    migrationText.indexOf('create or replace function public.claim_upload_slot'),
-    migrationText.indexOf('comment on function public.claim_upload_slot'));
-  const fromSlot = [...claimSlot.matchAll(/'reason',\s*'([a-z_]+)'/g)].map(m => m[1]);
+
+  /* Read out of whichever migration currently defines each function, sliced to that
+     function's own body.
+     ── 0063 made this a LIST rather than one name, and the reason is the seam ──
+     The submission path is three functions now, not one: 0063 moved the event refusals out
+     of claim_upload_slot into parse_event_fields so the with-media and without-media paths
+     could not drift, and added claim_event_slot beside them. Scanning only
+     claim_upload_slot then reported eight live refusals as STALE — messages upload.js maps
+     to reasons "nothing emits" — which is precisely backwards: they are emitted, by a
+     function this scan had not been told about.
+     The slice per function stays for the reason it always did: 0049 also defined
+     set_post_location, whose refusals are a moderator's and reach this map through
+     nothing. And each function is looked up independently, so moving one to a new
+     migration does not silently take the others' refusals with it. */
+  const scanFunction = (fn) => {
+    const definers = readdirSync(MIGRATIONS)
+      .filter((f) => f.endsWith('.sql'))
+      .filter((f) => readFileSync(join(MIGRATIONS, f), 'utf8')
+        .includes(`create or replace function public.${fn}`))
+      .sort();
+    ok(definers.length > 0,
+       `CONTROL: found the migrations defining ${fn} (${definers.length}, newest ${definers[definers.length - 1] ?? 'NONE'})`);
+    if (definers.length === 0) return [];
+    const text = readFileSync(join(MIGRATIONS, definers[definers.length - 1]), 'utf8');
+    const body = text.slice(
+      text.indexOf(`create or replace function public.${fn}`),
+      text.indexOf(`comment on function public.${fn}`));
+    return [...body.matchAll(/'reason',\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  };
+
+  const fromSlot = [
+    ...scanFunction('claim_upload_slot'),
+    ...scanFunction('parse_event_fields'),
+    ...scanFunction('claim_event_slot'),
+    ...scanFunction('claim_event_quota'),
+  ];
   ok(fromSlot.length > 8,
-     `CONTROL: claim_upload_slot's own refusals were found in its migration (${fromSlot.length})`);
+     `CONTROL: the submission path's own refusals were found in their migrations (${fromSlot.length})`);
   for (const name of fromSlot) emitted.add(name);
 
   for (const name of ['quota_exceeded',

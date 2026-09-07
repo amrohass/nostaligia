@@ -173,6 +173,83 @@ const MUTATIONS = [
     `,
   },
   {
+    id: 'event-exemption-widens',
+    invariant: "§1 — only an event may be approved with no media",
+    catches: ['40_event_without_media'],
+    kind: 'sql',
+    sql: `
+      -- The exemption stops being about events and becomes about everything. The trigger
+      -- still exists, still fires on every approval, still has its WHEN clause — it simply
+      -- never finds anything to refuse. That is what a relaxation quietly becoming a hole
+      -- looks like from the outside, and it is why 40's "an event CAN" needs "a photograph
+      -- CANNOT" beside it.
+      --
+      -- The FUNCTION is mutated rather than the trigger, deliberately: rewriting the WHEN
+      -- clause is a different mutation (see event-takedown-blocked), and this one has to
+      -- leave the trigger's shape alone so a test that merely asserts the trigger EXISTS
+      -- goes on passing.
+      create or replace function public.require_media_unless_event()
+      returns trigger language plpgsql security definer set search_path = ''
+      as $mutant$ begin return null; end $mutant$;
+    `,
+  },
+  {
+    id: 'event-listing-quota-shared',
+    invariant: "§6 — a listing's quota is separate from the upload quota",
+    catches: ['40_event_without_media'],
+    kind: 'sql',
+    sql: `
+      -- The count-only quota is folded back into the byte quota's counter. It still
+      -- charges, still refuses at a ceiling, still returns the same shape — it simply
+      -- spends the wrong allowance, which is exactly the "consume or bypass" pair §6 names:
+      -- a listing spends an upload, and a member out of uploads is out of listings too.
+      --
+      -- Nothing about this is visible from a single successful submission, which is why the
+      -- test asserts the COUNTERS either side rather than the return value.
+      create or replace function public.claim_event_quota()
+      returns jsonb language plpgsql security definer set search_path = ''
+      set timezone = 'UTC' as $mutant$
+      declare v_uid uuid := (select auth.uid()); v_count integer;
+      begin
+        if v_uid is null then
+          return jsonb_build_object('allowed', false, 'reason', 'unauthenticated');
+        end if;
+        insert into public.upload_quota as q (user_id, day, count, bytes, event_count)
+        values (v_uid, (now() at time zone 'UTC')::date, 1, 0, 0)
+        on conflict (user_id, day) do update set count = q.count + 1
+         where q.count + 1 <= 20
+        returning q.count into v_count;
+        if v_count is null then
+          return jsonb_build_object('allowed', false, 'reason', 'event_quota_exceeded');
+        end if;
+        return jsonb_build_object('allowed', true, 'event_count', v_count,
+                                  'limit_event_count', 20);
+      end $mutant$;
+    `,
+  },
+  {
+    id: 'event-takedown-blocked',
+    invariant: "§8 — a takedown is never blocked by the media rule",
+    catches: ['40_event_without_media'],
+    kind: 'sql',
+    sql: `
+      -- The WHEN clause loses \`not new.takedown\`. Everything about the rule still works —
+      -- an event may skip media, a photograph may not — and the ONE operation §8 says must
+      -- never be bounded stops working for exactly the rows that predate the rule.
+      --
+      -- request_takedown's whole effect on posts is \`set takedown = true\`; status stays
+      -- 'approved' and kind stays 'media', so the takedown UPDATE lands on precisely the
+      -- shape this fires for. It was the shape of the first draft of migration 0063.
+      drop trigger if exists posts_approved_has_media on public.posts;
+      create constraint trigger posts_approved_has_media
+        after insert or update on public.posts
+        deferrable initially immediate
+        for each row
+        when (new.status = 'approved' and new.kind <> 'event')
+        execute function public.require_media_unless_event();
+    `,
+  },
+  {
     id: 'publishable-ignores-takedown',
     invariant: '§8 — a taken-down post is not publishable',
     catches: ['18_publishable_posts', '19_takedown'],

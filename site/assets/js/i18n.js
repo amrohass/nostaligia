@@ -286,6 +286,11 @@
                            en: 'Your session ended. Sign in and send again.' },
     'up.err.quota':      { ar: 'بلغت حدّك اليومي للرفع. جرّب غدًا.',
                            en: 'You have reached your daily upload limit. Try tomorrow.' },
+    /* 0063. A separate sentence from the one above, because it is a separate quota: a
+       member who uploaded nothing and is told they are out of upload allowance has been
+       given a reason they cannot act on or even recognise. */
+    'up.err.eventQuota': { ar: 'بلغت حدّك اليومي من الفعاليات. جرّب غدًا.',
+                           en: 'You have reached your daily limit for event listings. Try tomorrow.' },
     'up.err.title':      { ar: 'العنوان مطلوب.', en: 'A title is required.' },
     'up.err.description':{ ar: 'الوصف مطلوب — هو ما يجعل المادة قابلة للبحث لاحقًا.',
                            en: 'A description is required — it is what makes this findable later.' },
@@ -369,6 +374,13 @@
     // contradicted it. A limit shown lower than the one enforced turns an allowed upload
     // into one the member never attempts.
     'share.dropNote': { ar: 'JPG · PNG · MP3 · MP4 — حتى ٢٠٠ ميغابايت', en: 'JPG · PNG · MP3 · MP4 — up to 200 MB' },
+    /* 0063. An event may be a listing with no file at all (Amro, 7 Sep 2026), so the
+       dropzone says "if you have one" rather than asking for something the archive does
+       not need. A poster is still welcome — the ordinary upload path takes it. */
+    'share.dropEvent': { ar: 'أضف ملصقًا أو صورة إن توفّرت — اختياري',
+                         en: 'Add a poster or photo if you have one — optional' },
+    'share.dropEventNote': { ar: 'الفعالية تُنشر دون ملف. JPG · PNG · MP4 — حتى ٢٠٠ ميغابايت',
+                             en: 'A listing publishes without a file. JPG · PNG · MP4 — up to 200 MB' },
 
     // ── Rights, asked at upload (§7) ────────────────────────
     // The labels are deliberately plain-language. "CC-BY-SA-4.0" is the value stored and
@@ -686,6 +698,11 @@
     // Shown on a card whose derivative is not there — an item published before its thumb
     // landed, or one whose bytes a takedown removed from a release still in someone's cache.
     'feed.noPreview': { ar: 'لا معاينة', en: 'no preview' },
+    /* 0063. An event listing may legitimately carry no media, so the hatched plate on one is
+       not reporting a fault and must not read like it: "no preview" on a card whose item was
+       never going to have one says something is missing when nothing is. The plate itself is
+       unchanged — this is the caption on it. */
+    'feed.eventNoImage': { ar: 'فعالية', en: 'event' },
 
     // ── Comments (M3) ───────────────────────────────────────
     'comments.someone':    { ar: 'عضو', en: 'A member' },

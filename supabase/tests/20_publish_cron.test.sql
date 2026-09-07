@@ -36,6 +36,12 @@
 begin;
 create extension if not exists pgtap;
 
+/* 0063 · this file's fixtures insert an approved post and its media in one transaction,
+   which is exactly what posts_approved_has_media's DEFERRABLE exists for — media_assets
+   references posts, so the media cannot precede the row it hangs off. The rule itself is
+   NOT this file's subject; 40_event_without_media proves it, in both modes. */
+set constraints public.posts_approved_has_media deferred;
+
 -- 4 privileges · 9 the signal · 5 the debounce · 3 the mid-build race
 -- · 3 the tick and the dispatch · 2 the cron job · 1 the binding · 1 the refusal retries
 select plan(28);

@@ -573,10 +573,17 @@
     } else {
       /* No derivative to show. The hatched plate rather than a broken image: an item can be
          approved with its thumb missing (a takedown that removed the bytes and has not
-         reached this cached release yet), and a broken <img> would read as a site fault. */
+         reached this cached release yet), and a broken <img> would read as a site fault.
+
+         0063 splits the caption, because since then the two cases are genuinely different.
+         A photograph with no thumb IS something missing. An event listing without one is
+         complete — §1 lets an event carry no media at all — and captioning it "no preview"
+         would report a fault that does not exist, on the majority of event cards. */
       parts.push(el('div.memory__plate.plate', {
         style: toneStyle(avatarTone(entry.id), 'height:220px')
-      }, el('span.mono', { text: t('feed.noPreview') })));
+      }, el('span.mono', {
+        text: t(displayKind(entry) === 'event' ? 'feed.eventNoImage' : 'feed.noPreview')
+      })));
     }
 
     var body = [];
@@ -2458,6 +2465,19 @@
 
     var reviewNote = el('div.review-note', { text: t('share.review') });
 
+    /* 0063. Named rather than inline in the form array below, because applyKind() has to
+       repaint it: the same dropzone is a requirement for a photograph and an option for an
+       event, and a member who is told to choose a file for a listing that does not need one
+       will go and find one. */
+    var dropLabel = el('span', { text: t('share.drop') });
+    var dropNote = el('span.dropzone__note', { text: t('share.dropNote') });
+    var dropzone = el('label.dropzone', null, [
+      ICONS.upload(),
+      dropLabel,
+      dropNote,
+      fileInput
+    ]);
+
     /**
      * Show the fields this kind asks for, and — this is the load-bearing half — clear
      * `required` from the ones it does not.
@@ -2479,6 +2499,13 @@
       licenseSelect.required = !isEvent;
       provenanceInput.required = !isEvent;
       consentBox.required = !isEvent;
+
+      /* 0063. The file is required for a photograph and optional for an event. Said on the
+         dropzone itself rather than only enforced at submit: a member who has been asked
+         for a poster they do not have will either invent one or give up, and the archive
+         wants the listing either way. */
+      dropLabel.textContent = t(isEvent ? 'share.dropEvent' : 'share.drop');
+      dropNote.textContent = t(isEvent ? 'share.dropEventNote' : 'share.dropNote');
 
       // The promise is the same 48 hours either way; the noun is not.
       reviewNote.textContent = t(isEvent ? 'share.eventReview' : 'share.review');
@@ -2553,7 +2580,10 @@
         var submitButton = UI.qs('button[type=submit]', form);
 
         clearNotes();
-        if (!file) { fail('up.err.noFile'); return; }
+        /* 0063. A photograph without a file is nothing; an event without one is a listing,
+           which is the whole of Amro's 7 Sep decision. The check therefore follows the
+           kind rather than sitting in front of every submission. */
+        if (!file && kind !== 'event') { fail('up.err.noFile'); return; }
 
         /* The archive is Arabic-first (§9) but a contributor writes in whichever language
            they think in, and nothing here can tell which. Sending the text as `_ar` would
@@ -2635,6 +2665,11 @@
         }
 
         widget.token().then(function (captcha) {
+          /* 0063. An event with no file takes the listing path — one call, no PUT, no
+             progress bar, because there are no bytes to move. An event WITH a file still
+             goes the ordinary way: Amro's decision is that an event MAY skip media, not
+             that it must, and a poster image is a legitimate thing to contribute. */
+          if (!file) return UPLOAD.submitListing(draft, captcha, { onStage: function (name) { say('up.stage.' + name); } });
           return UPLOAD.submit(file, draft, captcha, {
             onStage: function (name) {
               say('up.stage.' + name);
@@ -2702,12 +2737,7 @@
          the form is a real <form> with no novalidate, so the browser blocks the submit
          before onsubmit runs. */
       field(t('share.fStory'), { multiline: true, required: true, placeholder: t('share.fStoryPh'), rows: '3' }),
-      el('label.dropzone', null, [
-        ICONS.upload(),
-        el('span', { text: t('share.drop') }),
-        el('span.dropzone__note', { text: t('share.dropNote') }),
-        fileInput
-      ]),
+      dropzone,
       fileChip,
       rightsFields,
       captchaSlot,

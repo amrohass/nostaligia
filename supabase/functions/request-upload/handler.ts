@@ -238,6 +238,25 @@ export async function handleRequest(req: Request): Promise<Response> {
   const durationS = body.duration_s === undefined ? null : Number(body.duration_s);
   const turnstileToken = typeof body.turnstile_token === "string" ? body.turnstile_token : "";
   const kind = typeof body.kind === "string" ? body.kind.trim() : "";
+
+  /* ── 0063 · the submission that uploads nothing ─────────────
+   *
+   * Amro's decision, 7 Sep 2026: a post may skip media ONLY if kind='event'.
+   *
+   * It arrives HERE rather than at a function of its own, and that is the security half of
+   * the decision rather than a convenience. §6 requires Turnstile on submit, and §2 calls
+   * this "the only door into the write path". A second endpoint would mean a second copy of
+   * the gate order below — auth, Turnstile, role, 0060's confirmation — and the day the two
+   * copies disagree, the one that is wrong is a write path with no captcha in front of it.
+   * So the no-media event walks through the same six gates and skips only the four that are
+   * about a file: mime, size, duration and the signed URL.
+   *
+   * `media: false` is required to be EXPLICIT. Inferring it from a missing mime would mean a
+   * client that forgot a field, or lost it to a serialisation bug, silently submitting a
+   * listing instead of being told its upload request was malformed — and `unsupported_type`
+   * is a refusal a developer can act on where a mysteriously media-less post is not.
+   */
+  const wantsNoMedia = body.media === false;
   // Passed through to claim_upload_slot rather than validated here. The database already
   // names the refusals (title_required, description_required) and enforces the matching
   // constraints, so re-checking in the client-facing layer would be a second copy of a
@@ -246,15 +265,29 @@ export async function handleRequest(req: Request): Promise<Response> {
     ? body.draft
     : {};
 
+  // Only an event may arrive with no file. Refused here, in the free gate, because a
+  // client asking to submit a media post with no media has misunderstood something, and
+  // the refusal it needs names the kind rather than a missing mime type.
+  if (wantsNoMedia && kind !== "event") return fail("media_required", 400, req);
+
   // §6 names SVG specifically, so it gets its own refusal rather than falling through
   // the allowlist as an anonymous "unsupported type". The reason is worth being able
   // to grep for in the logs.
-  if (mime.startsWith("image/svg")) return fail("svg_rejected", 415, req);
+  if (!wantsNoMedia && mime.startsWith("image/svg")) return fail("svg_rejected", 415, req);
 
-  const family = ALLOWED_MIME[mime];
-  if (!family) return fail("unsupported_type", 415, req);
+  const family = wantsNoMedia ? null : ALLOWED_MIME[mime];
+  if (!wantsNoMedia && !family) return fail("unsupported_type", 415, req);
 
-  if (!Number.isSafeInteger(bytes) || bytes <= 0) return fail("invalid_bytes", 400, req);
+  // A listing declares no size. A caller that sends one anyway is refused rather than
+  // having it ignored: this codebase's standing rule is that a value named in a call and
+  // silently discarded is worse than one refused, because nobody finds out.
+  if (wantsNoMedia) {
+    if (body.bytes !== undefined || body.mime !== undefined || body.duration_s !== undefined) {
+      return fail("media_fields_on_listing", 400, req);
+    }
+  } else if (!Number.isSafeInteger(bytes) || bytes <= 0) {
+    return fail("invalid_bytes", 400, req);
+  }
 
   // A declaration above the largest cap in §6 can never be admitted, whoever is asking.
   // It is refused HERE, in the free gate, rather than at gate 4 after a Turnstile
@@ -265,14 +298,14 @@ export async function handleRequest(req: Request): Promise<Response> {
   // This does not replace the role cap at gate 4. That one is the real limit; this only
   // rules out what no role could ever permit, which is why it can run before we know
   // who is asking.
-  if (bytes > ABSOLUTE_MAX_BYTES) {
+  if (!wantsNoMedia && bytes > ABSOLUTE_MAX_BYTES) {
     return fail("over_absolute_cap", 413, req, { max_bytes: ABSOLUTE_MAX_BYTES });
   }
 
   // Duration is meaningless for a still image and mandatory for anything timed —
   // without it the §6 duration cap is unenforceable, so absence is a refusal, not a
-  // default.
-  if (family !== "image") {
+  // default. A listing has no file and therefore no duration to cap.
+  if (!wantsNoMedia && family !== "image") {
     if (durationS === null || !Number.isFinite(durationS) || durationS <= 0) {
       return fail("duration_required", 400, req);
     }
@@ -332,6 +365,53 @@ export async function handleRequest(req: Request): Promise<Response> {
   }
   if (!confirmedRes.ok) return fail("confirmation_check_failed", 502, req);
   if (await confirmedRes.json() !== true) return fail("email_unconfirmed", 403, req);
+
+  /* ── 0063 · the listing branch, after every shared gate ─────
+   *
+   * Everything above this line has run: auth, Turnstile, the authoritative role and 0060's
+   * confirmation check. Everything below it is about a file, and a listing has none — so it
+   * charges its own count-only quota and returns without signing anything.
+   *
+   * The role caps are skipped rather than passed as zero. §6's caps are per-FILE limits and
+   * there is no file; the limit that binds here is event_daily_limits, which lives in the
+   * database with the other quotas for the reason §6 gives — "per-user daily quotas
+   * enforced in the database".
+   */
+  if (wantsNoMedia) {
+    const eventRes = await rpc("claim_event_slot", { p_draft: draft }, jwt);
+    if (!eventRes.ok) return fail("quota_check_failed", 502, req);
+    const slot = await eventRes.json();
+
+    if (slot?.allowed !== true) {
+      const reason = slot?.reason ?? "event_quota_exceeded";
+      const status = reason === "unauthenticated"
+        ? 401
+        : ["title_required", "description_required", "invalid_license", "invalid_decade",
+           "event_start_required", "invalid_event_start", "invalid_event_end",
+           "event_ends_before_start", "event_takes_no_coordinate", "invalid_organizers",
+           "too_many_organizers"].includes(reason)
+        ? 400
+        : 429;
+      return fail(reason, status, req, {
+        event_count: slot?.event_count,
+        limit_event_count: slot?.limit_event_count,
+        max: slot?.max,
+        licenses: slot?.licenses,
+      });
+    }
+
+    // No `upload`, no `object_key`: there is nothing to PUT and nothing to complete. The
+    // client's contribution is finished the moment this returns.
+    return json({
+      post_id: slot.post_id,
+      role,
+      media: false,
+      quota: {
+        event_count: slot.event_count,
+        limit_event_count: slot.limit_event_count,
+      },
+    }, 200, req);
+  }
 
   if (bytes > caps.maxBytes) {
     return fail("over_size_cap", 413, req, { role, max_bytes: caps.maxBytes });

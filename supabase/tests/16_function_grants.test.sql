@@ -77,6 +77,21 @@ select set_eq(
     ('upload_daily_limits(p_role app_role) -> authenticated'),
     ('upload_daily_limits(p_role app_role) -> service_role'),
 
+    -- 0063's listing path — a submission that uploads nothing (§1's one exception).
+    -- `authenticated` for the same reason as the four above: each runs as the submitter and
+    -- derives auth.uid() itself, so calling one directly reaches only the caller's own
+    -- quota. 40_event_without_media pins that anon reaches neither of the two that write.
+    -- parse_event_fields is pure and grantable without consequence; it is listed rather
+    -- than left off because this matrix is exact by design.
+    ('claim_event_quota() -> authenticated'),
+    ('claim_event_quota() -> service_role'),
+    ('claim_event_slot(p_draft jsonb) -> authenticated'),
+    ('claim_event_slot(p_draft jsonb) -> service_role'),
+    ('event_daily_limits(p_role app_role) -> authenticated'),
+    ('event_daily_limits(p_role app_role) -> service_role'),
+    ('parse_event_fields(p_draft jsonb) -> authenticated'),
+    ('parse_event_fields(p_draft jsonb) -> service_role'),
+
     -- The worker's entire reach. NOT authenticated: a member who could call complete_ingest
     -- would attach arbitrary storage paths to their own post.
     ('complete_ingest(p_object_key text, p_sniffed_mime text, p_assets jsonb) -> media_worker'),

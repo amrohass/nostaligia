@@ -163,7 +163,38 @@ export const CHECKS: Check[] = [
  * objects the media copy does not have — and every other check on this page passes.
  */
 export function mediaSql(): string {
-  return `select storage_path, bytes from public.media_assets where bucket = 'originals' order by storage_path;`;
+  return `select a.storage_path, a.bytes from public.media_assets a `
+    + `join public.posts p on p.id = a.post_id `
+    + `where a.bucket = 'originals' and p.takedown is distinct from true `
+    + `order by a.storage_path;`;
+}
+
+/**
+ * The taken-down masters, counted rather than resolved.
+ *
+ * ── Why this join exists at all ─────────────────────────────
+ *
+ * §8 deletes the bytes on takedown immediately and keeps the `media_assets` row as the
+ * permanent record of what was removed. So a taken-down post names an object that is
+ * CORRECTLY gone, and `backup.ts` stopped copying those on 7 Sep 2026 — it filters
+ * `takedown !== true` and reports the skipped ones on their own line.
+ *
+ * This file did not get the same change, and the asymmetry is the bug: the backup
+ * deliberately omitted six objects and the verifier then reported all six as
+ * "the backup does not have it" — six failures, on every run, for ever, describing §8
+ * working exactly as designed. That is an alert that cries wolf, and it grows by one line
+ * per takedown, so the day a REAL missing master appears it arrives in a list already full
+ * of false ones. Found by running an actual restore, which is the only thing that could
+ * have found it.
+ *
+ * `is distinct from true` rather than `= false`, matching backup.ts's `!== true`: a missing
+ * or null takedown must mean "expect the bytes" rather than "skip it". Erring towards
+ * checking is the safe direction — a false alarm is noise, a skipped check is a gap.
+ */
+export function takenDownMediaSql(): string {
+  return `select count(*) from public.media_assets a `
+    + `join public.posts p on p.id = a.post_id `
+    + `where a.bucket = 'originals' and p.takedown is true;`;
 }
 
 
@@ -276,16 +307,35 @@ const LOAD_ORDER = ["roles.sql", "schema.sql", "data.sql", "auth.sql", "triggers
  * without the collision, and without this script having to decide which of the two files it
  * trusts.
  *
- * A CONSTRAINT trigger has no `OR REPLACE` form. There are none in this schema, and rather
- * than pretend otherwise this returns them untouched and names them, so the day one is added
- * the restore says so instead of silently double-loading.
+ * ── CONSTRAINT triggers, and the day this file predicted ─────
+ *
+ * A CONSTRAINT trigger has no `OR REPLACE` form. This used to say "there are none in this
+ * schema", name any it found and FAIL the restore, so that the day one was added the restore
+ * would say so rather than silently double-load.
+ *
+ * That day is 7 Sep 2026: migration 0063 adds `posts_approved_has_media`, §1's rule that only
+ * an event may be approved with no media. The alarm worked exactly as written — and an alarm
+ * that fires correctly on every restore from now on is no longer an alarm, it is a broken
+ * verifier. So the case is HANDLED instead: a constraint trigger is preceded by its own
+ * `DROP TRIGGER IF EXISTS`, which is idempotent in the one way available to it.
+ *
+ * `unsupported` is kept and still fails the restore, for the line this cannot parse — a
+ * definition whose name or table cannot be read is one this must not guess at, and guessing
+ * would mean dropping the wrong trigger on the wrong table. Narrowed from "every constraint
+ * trigger" to "one I cannot read", which is the difference between an alarm and a wall.
  */
 export function idempotentTriggers(sql: string): { sql: string; unsupported: string[] } {
   const unsupported: string[] = [];
   const out = sql.split("\n").map((line) => {
     if (/^CREATE CONSTRAINT TRIGGER /.test(line)) {
-      unsupported.push(line.split(" ")[3] ?? line.slice(0, 60));
-      return line;
+      /* `pg_get_triggerdef` is machine-generated and fully schema-qualified, so the shape is
+         reliable: CREATE CONSTRAINT TRIGGER <name> <timing> ON <table> ... */
+      const m = /^CREATE CONSTRAINT TRIGGER (\S+) .*? ON (\S+) /.exec(line);
+      if (!m) {
+        unsupported.push(line.slice(0, 60));
+        return line;
+      }
+      return `DROP TRIGGER IF EXISTS ${m[1]} ON ${m[2]};\n${line}`;
     }
     return line.startsWith("CREATE TRIGGER ")
       ? `CREATE OR REPLACE TRIGGER ${line.slice("CREATE TRIGGER ".length)}`
@@ -367,10 +417,29 @@ function selftest() {
   ok(KNOWN_RED.every((k) => k.why.length > 40),
      "every required-red says why it must be red — an unexplained exemption is how a real failure gets waved through");
 
-  const c = idempotentTriggers("CREATE CONSTRAINT TRIGGER cc AFTER INSERT ON public.z FOR EACH ROW EXECUTE FUNCTION h();");
-  ok(c.unsupported.length === 1 && c.unsupported[0] === "cc",
-     "a CONSTRAINT trigger is named rather than rewritten — there is no OR REPLACE form for one");
-  ok(c.sql.startsWith("CREATE CONSTRAINT TRIGGER "), "and it is left exactly as it was rather than turned into invalid SQL");
+  /* 0063 added the schema's first CONSTRAINT trigger, so this is no longer hypothetical.
+     The real definition, as pg_get_triggerdef() emits it. */
+  const c = idempotentTriggers(
+    "CREATE CONSTRAINT TRIGGER posts_approved_has_media AFTER INSERT OR UPDATE ON public.posts "
+    + "DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW WHEN ((new.status = 'approved'::post_status)) "
+    + "EXECUTE FUNCTION public.require_media_unless_event();",
+  );
+  ok(c.unsupported.length === 0,
+     "a CONSTRAINT trigger no longer fails the restore — 0063 added one, and an alarm that fires on every run is a broken verifier");
+  ok(c.sql.startsWith("DROP TRIGGER IF EXISTS posts_approved_has_media ON public.posts;\n"),
+     "...it is made idempotent by its own DROP IF EXISTS, which is the only form available to it");
+  ok(c.sql.includes("CREATE CONSTRAINT TRIGGER posts_approved_has_media AFTER INSERT OR UPDATE"),
+     "CONTROL: the definition itself is untouched — this prepends a statement, it does not rewrite the SQL");
+  ok(c.sql.includes("'approved'::post_status"),
+     "CONTROL: the WHEN clause survives, so the restored trigger fires on the same rows");
+
+  /* The line this must NOT guess at. Dropping a trigger whose name or table could not be read
+     would be dropping the wrong one, so it stays a refusal. */
+  const bad = idempotentTriggers("CREATE CONSTRAINT TRIGGER weird_without_a_table_clause();");
+  ok(bad.unsupported.length === 1,
+     "a constraint trigger this cannot parse still fails the restore rather than being guessed at");
+  ok(!bad.sql.startsWith("DROP TRIGGER"),
+     "CONTROL: and no DROP is emitted for it — the refusal discriminates on parseability, not on the keyword");
 
   /* backup.ts exports encrypt/decrypt and a module body runs on import, so its main block has
      to be guarded or importing it from here would TAKE A BACKUP. Asserted against the source
@@ -635,7 +704,16 @@ if (has("--selftest")) {
     else fail(`media_assets names originals/${row.path} (${row.bytes} bytes) and the backup ${size === -1 ? "does not have it" : `has ${size} bytes`}`);
   }
   if (resolved === mediaRows.length && mediaRows.length > 0) {
-    pass(`all ${mediaRows.length} media_assets originals rows resolve against the backup's own copy, at the right size`);
+    pass(`all ${mediaRows.length} live media_assets originals rows resolve against the backup's own copy, at the right size`);
+  }
+
+  /* The taken-down ones, on their own line — the same treatment backup.ts gives them. Said
+     out loud rather than silently excluded, because a value dropped without saying so is
+     this project's own recurring defect. */
+  const takenDown = Number((await scalar(container, takenDownMediaSql())).trim()) || 0;
+  if (takenDown > 0) {
+    console.log(`  note    ${takenDown} taken-down master(s) are named by media_assets and deliberately absent`);
+    console.log(`            §8 deleted the bytes; the row is the permanent record. Not a gap.`);
   }
 
   /* ── 6 · the strongest check: the project's own suite ───────────────────── */

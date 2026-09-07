@@ -267,6 +267,28 @@ section(4, 'a moderator approves — and a member cannot');
   const m0 = await fetch(`${CDN}/manifest.json?cb=${Date.now()}`);
   releaseBeforeApproval = m0.ok ? (await m0.json()).release ?? '' : '';
 
+  /* 0063. The fixture needs a media_assets row before it can be approved at all.
+     posts_approved_has_media refuses an approved post of any kind but 'event' that has
+     none — Amro's rule of 7 Sep, "kind='media' requires ≥1 media_assets row,
+     unconditionally".
+
+     This does NOT weaken what section 6 goes on to prove. That check is about
+     `ingest_state`, not about media: the fixture claimed an upload slot and never sent
+     bytes, so its state stays 'awaiting_bytes', and publishable_posts() requires 'ready'.
+     Adding the row makes the fixture a state that can now EXIST while leaving the
+     invariant under test exactly where it was. Written with the service role because §6
+     gives media_assets no write policy and no write grant to anybody else — the processing
+     function is the only thing that writes here, and this stands in for it. */
+  const seedAsset = await svc('media_assets', {
+    method: 'POST',
+    body: JSON.stringify({
+      post_id: postId, role: 'thumb', storage_path: `${postId}/thumb.webp`,
+      bucket: 'public', mime: 'image/webp', bytes: 4096, width: 400, height: 400,
+    }),
+  });
+  ck(seedAsset.ok, `the fixture gets a media asset so it CAN be approved (${seedAsset.status})`,
+     '0063: only kind=event may be approved with no media');
+
   const auditBefore = (await body(await svc(`audit_log?target_id=eq.${postId}&select=id`))).length;
   const modActBefore = (await body(await svc(`moderation_actions?target_id=eq.${postId}&select=id`))).length;
 
@@ -375,7 +397,13 @@ section(6, 'publish fires on approval, and the item resolves where a browser rea
      `ingest_state` is not 'ready' — and `publishable_posts` (0031) requires approved AND
      not-taken-down AND ready. So it must be ABSENT from the release. An earlier draft
      asserted it was PRESENT and failed, which read like a broken publish pipeline and was
-     in fact the pipeline correctly refusing to publish an item with no media. */
+     in fact the pipeline correctly refusing to publish an item with no media.
+
+     Since 0063 the fixture also carries a media_assets row (section 4 — it could not be
+     approved otherwise). That is deliberately NOT what makes it unpublishable: the state
+     being tested here is `ingest_state`, and the row is what lets the fixture reach the
+     approved-but-not-ready state at all. If this ever goes green for the wrong reason, the
+     thing to check is ingest_state, not the asset. */
   const [state] = await body(await svc(`posts?id=eq.${postId}&select=ingest_state,status`));
   ck(state?.status === 'approved' && state?.ingest_state !== 'ready',
      `the fixture is approved but ingest_state='${state?.ingest_state}' — not publishable`);

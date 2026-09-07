@@ -127,6 +127,15 @@
     event_fields_on_non_event: 'up.err.eventFields',
     invalid_organizers: 'up.err.organizers',
     too_many_organizers: 'up.err.organizersMany',
+    /* 0063's no-media listing. `event_quota_exceeded` is the only one a member using the
+       sheet can reach, and it is a different sentence from `quota_exceeded`: that one is
+       about bytes and uploads, this one is about how many listings they have filed today,
+       and telling somebody who uploaded nothing that they are out of upload allowance is a
+       message they cannot act on. The other two are for a caller composing the request
+       themselves — both are "you sent the wrong shape", named rather than ignored. */
+    event_quota_exceeded: 'up.err.eventQuota',
+    media_required: 'up.err.noFile',
+    media_fields_on_listing: 'up.err.generic',
     duplicate_object_key: 'up.err.generic',
     quota_check_failed: 'up.err.generic',
     signing_failed: 'up.err.generic',
@@ -297,8 +306,44 @@
     });
   }
 
+  /**
+   * An event listing that uploads nothing (0063).
+   *
+   * One call where `submit` makes three, because two of the three are about bytes: there is
+   * no PUT and nothing to complete, so the member's contribution is finished when
+   * request-upload returns. It goes to the SAME endpoint deliberately — see that function's
+   * header: a second door would mean a second copy of the Turnstile and confirmation gates.
+   *
+   * `media: false` is sent explicitly rather than inferred from the absence of a file, so a
+   * bug that dropped the file from a photograph submission is refused as a malformed upload
+   * instead of quietly filing a listing the member never meant to write.
+   *
+   * @param {object} draft   { kind: 'event', title_*, body_*, event_starts_at, ... }
+   * @param {string} turnstileToken
+   * @param {object} hooks   { onStage(name) }
+   */
+  function submitListing(draft, turnstileToken, hooks) {
+    hooks = hooks || {};
+    var stage = hooks.onStage || function () {};
+    if (!turnstileToken) return Promise.reject(UploadError('up.err.robot'));
+
+    stage('requesting');
+    return global.AUTH.accessToken().then(function (token) {
+      return post('request-upload', token, {
+        media: false,
+        kind: draft.kind,
+        turnstile_token: turnstileToken,
+        draft: draft
+      });
+    }).then(function (done) {
+      stage('done');
+      return { postId: done.post_id, objectKey: null, status: 'pending' };
+    });
+  }
+
   global.UPLOAD = {
     submit: submit,
+    submitListing: submitListing,
     LICENSES: LICENSES,
     /* Exposed so the tests can assert the refusal map is exhaustive against the set of
        error names the two functions can actually emit, rather than against a copy. */

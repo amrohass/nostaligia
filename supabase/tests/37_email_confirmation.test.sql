@@ -62,6 +62,11 @@ values ('00000000-0000-0000-0000-00000000e0c3', 'moderator',
 -- posts_approved_is_attributable — and content_hash is 64 lowercase hex rather than a
 -- label. Settable directly only because this INSERT runs before any JWT is set, so
 -- posts_stamp_authorship returns early.
+-- 0063 adds a third approval constraint: an approved post that is not an event must have a
+-- media asset, and media_assets references posts so it cannot precede this row. Deferred
+-- across the pair, which is what posts_approved_has_media's DEFERRABLE is for.
+set constraints public.posts_approved_has_media deferred;
+
 insert into public.posts (id, kind, title_en, body_en, status, created_by,
                           license, provenance, consent,
                           approved_by, approved_at, content_hash)
@@ -71,6 +76,18 @@ values ('00000000-0000-0000-0000-00000000ef01', 'media', 'an approved photograph
         jsonb_build_object('granted', true, 'may_withdraw', true),
         '00000000-0000-0000-0000-00000000e0c3', now(),
         '15df9d67f8e90a98014647411681314ce17bf434981db443bf36cae14532a677');
+
+insert into public.media_assets (post_id, role, storage_path, bucket, mime, bytes)
+values ('00000000-0000-0000-0000-00000000ef01', 'thumb',
+        '00000000-0000-0000-0000-00000000ef01/thumb.webp', 'public', 'image/webp', 4096);
+
+/* Back to immediate, and this line is load-bearing rather than tidiness: it FLUSHES the
+   deferred check here, where it passes. Left deferred, the pending trigger event would
+   still be queued at line ~158, and `ALTER TABLE ... DISABLE TRIGGER` refuses a table that
+   has one — 55006, "cannot ALTER TABLE because it has pending trigger events". This file
+   disables posts_require_confirmed_email to test §4's policy term underneath it, so that
+   ALTER is the point of the exercise and not an incidental. */
+set constraints public.posts_approved_has_media immediate;
 
 -- Owner-rights readers. `authenticated` holds column subsets on posts and comments (0015),
 -- and email_confirmations is granted to nobody at all — so reading any of them through the

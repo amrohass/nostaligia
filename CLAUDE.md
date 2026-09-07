@@ -43,6 +43,25 @@ before it is public.** Browsing is open; all engagement requires sign-in.
   one release, not N. If that stops being true the answer is §2's deferred incremental diff,
   not a throttle that would make a comment appear an hour after it was written.
 
+- **Amended 7 Sep 2026 — an event may carry no media, and NOTHING else may.** Amro's
+  decision, final: a post may skip media only if `kind='event'`. `kind='media'` and
+  `kind='voice'` require at least one `media_assets` row, unconditionally — a photograph
+  with no photograph in it, or a voice note with no audio, is an empty record that a
+  moderator would have to approve on trust. Migration 0063 is where it lives, and it is a
+  trigger rather than a CHECK because the fact is in another table: `posts_approved_has_media`,
+  DEFERRABLE INITIALLY DEFERRED so that a post and its media may be inserted in one
+  transaction, which is what M5's bulk importer does and what a foreign key makes
+  unavoidable.
+  This does NOT touch D6. There is no `events` table, no second feed and no second
+  moderation queue — §3 is unchanged and both 39 and 40 assert the absence as loudly as they
+  assert the new behaviour. An event that DOES have a poster still uploads it the ordinary
+  way: the decision is that an event *may* skip media, not that it must.
+  The listing path is `claim_event_slot`, reached through `request-upload` like every other
+  submission. It is not a second door, deliberately: §6 requires Turnstile on submit, and a
+  separate endpoint would be a second copy of the auth/Turnstile/confirmation gate order —
+  the day the two disagree, one of them is a write path with no captcha in front of it.
+  Its quota is count-only and separate; see §6.
+
 Scale: ~300 items at launch, low thousands within a year. Tens of thousands of users
 worldwide. Read-dominated. Solo maintainer. Grant-funded — predictable low cost is a
 requirement, not a preference.
@@ -289,7 +308,11 @@ moderation_actions(id, actor, action, target_type, target_id, target_key, note, 
    -- until then. A row must still name a target: exactly what the old NOT NULL was for.
 audit_log(id, actor, action, target_type, target_id, before jsonb, after jsonb, created_at)
 releases(id, path, created_at, active bool)
-upload_quota(user_id, day date, count, bytes, PRIMARY KEY(user_id, day))
+upload_quota(user_id, day date, count, bytes, event_count, PRIMARY KEY(user_id, day))
+   -- event_count is 0063, 7 Sep 2026: submissions that upload NOTHING (kind='event' with no
+   -- media). Counted apart from `count` so neither quota can spend the other — a listing
+   -- costs no bytes and must not consume an allowance sized for 200 MB files, and a member
+   -- who has spent their uploads must not get unlimited listings for free.
 ```
 
 **Audit rows are permanent** — never deleted, never rotated. They are part of the archival
@@ -456,6 +479,17 @@ Written after a real compromised-key incident (~24,000% billing spike).
     moderator's admits ten 4 GB masters. They live in `public.upload_daily_limits()`;
     change them there and here together. This is a cost ceiling, not a fairness
     mechanism: raise it only against an actual R2 and Supabase bill.
+  - **Listing quota** (set with 0063, 7 Sep 2026): a submission that uploads NOTHING —
+    `kind='event'` with no media, §1's one exception to "a post carries media" — is bounded
+    separately at **member 10 / moderator + admin 100 per day**. It lives in
+    `public.event_daily_limits()` and is charged against `upload_quota.event_count`; change
+    it there and here together. **It is not the byte quota and must never be folded into
+    it.** The two bound different things and neither may spend the other: a listing costs no
+    bytes and no R2 object, so charging it against an allowance sized for 200 MB files would
+    be wrong, and letting a member who has exhausted their uploads file listings without
+    limit would be the same hole from the other side. The numbers are lower than the upload
+    counts on purpose — what a listing actually spends is a moderator's attention, and there
+    is one moderator for the whole archive.
   - **Confirmation-mail interval** (set 5 Sep 2026 with 0060): one confirmation link per
     account per **60 seconds**, ours and in front of the provider's cap — which is
     project-wide, so without a per-account limit one member holding a button down spends
@@ -500,6 +534,24 @@ is a de-anonymization vector.
   is unchanged. **M5 still owns the contributor-facing precision control**; this is only
   what happens before anyone has said otherwise, and a moderator can change either.
 - Do not store IPs, or truncate and expire them.
+- **Amended 7 Sep 2026 — the `auth` schema is not covered by the line above, and that is
+  accepted rather than unnoticed.** `auth.audit_log_entries` is GoTrue's own audit trail and
+  carries a dedicated `ip_address varchar` column beside its `payload json`. It is
+  Supabase-managed in every respect: the table is GoTrue's, the retention is the platform's,
+  and nothing this project owns writes to it or can turn it off. So the rule above governs
+  what THIS project stores — `posts`, `comments`, `reports`, every shard — and the
+  platform's auth trail is a deviation from it. No code change; the decision is Amro's,
+  taken today.
+  **Measured rather than assumed, 7 Sep 2026: the table is EMPTY on the deployed project** —
+  0 rows, against 17 accounts and months of sign-ins. So this is a deviation in what the
+  platform *reserves the right to record*, not in what it is demonstrably recording today.
+  It is written down at the shape of the table rather than at an observed row, because the
+  column exists and the behaviour is the platform's to change without telling anyone; a
+  future GoTrue that starts filling it would otherwise be a silent change to this project's
+  privacy posture. Re-check the row count if that matters to a threat model.
+  Two things follow either way: it is one more reason the `auth` schema never reaches a
+  shard or an export (§2, §7), and neither a takedown nor an account deletion reaches these
+  rows.
 - Voice notes are the most identifying medium here — a voice is biometric. Treat voice
   contributions with the same care as faces.
 
