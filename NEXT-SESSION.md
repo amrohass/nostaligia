@@ -1,6 +1,67 @@
 Ramallah Memory Atlas — handoff. Read CLAUDE.md fully first; it governs this repo and
 overrides your defaults.
 
+---
+
+## 7 Sep 2026 — the newest session, read this part first
+
+**One thing must be applied before the front end is trusted: migration `0062`.** Same rule
+as 0060 — **migration FIRST, then the front end.** Reversed, an event submission still 500s
+exactly as it does today; in the right order, an event sent from the old front end is
+refused by name instead. 0062 is `20260907090000_event_submission.sql`; it is **not applied
+to the deployed database yet**.
+
+**Events were never submittable.** The share sheet has had an "event" button since M3 and it
+could never have worked: `claim_upload_slot` never set `event_starts_at`, so
+`posts_event_needs_a_start` raised inside a SECURITY DEFINER function and reached the browser
+as a 500. Pressing "event" also changed three icons and nothing else — the form underneath
+stayed the photograph's. 0062 + the sheet's `applyKind()` fix that. D6 stands: no new table,
+no new stream, and `39_event_submission` asserts the absence of a `public.events` table as
+loudly as it asserts the new behaviour.
+
+**Three bug reports, and only two were bugs.** The admin queue rendered a placeholder because
+`mapRow()` computed `previewUrl`/`thumbUrl` from M1 and **nothing ever read them** — no RLS
+involved, the object returns 200 and the CSP already admitted it. The handle showed
+`member_<hex>` because the INSERT→PATCH fix is correct and deployed but only fires at signup,
+so all 16 existing accounts hold 0057's placeholder and the profile editor never wrote
+`handle` — there is a rename control now. **The map's list was not broken**: deployed CSS and
+JS are byte-identical to the tree, and a real browser renders 2/3/4/5/6 columns at
+390/800/1200/1440/1920. Assets ship `max-age=14400`, so a browser that loaded the page before
+the deploy serves the old layout for four hours. **A hard reload was the whole fix.**
+
+**Two defects found while verifying, both of which were hiding coverage:**
+`18_publishable_posts` asserted `redacted_post_ids()` held exactly one id; production has
+six, and its scalar subquery raised 21000 — which did not fail an assertion, it **aborted the
+file**, so all 17 of its assertions silently stopped running (the suite read 715 of 732
+planned). And the refusal-map test's migration pointer was hand-maintained with a comment
+saying to repoint it; it finds the newest definition now, and immediately reported all eight
+of 0062's new refusals as unmapped, which is what it is for.
+
+**Docker is wedged and the database backup cannot be taken.** The process starts, the WSL
+`docker-desktop` distro reports `Running`, and the daemon's pipe never answers. `--selftest`,
+the `originals/` sync, `triggers.sql` and `function_acl.sql` all work; `schema`, `data`,
+`auth`, `roles` and `restore-verify` are blocked. **`supabase db dump --linked --schema
+public` does NOT need Docker; the same command without `--schema` does** — worth knowing on
+the retry. This does **not** reopen §11 gate 3, which was discharged against a real restore
+on 1 Sep. See `docs/backup-runbook.md`.
+
+**Amro's backup destination changed to a local encrypted disk** (7 Sep), which also settles
+the flagged CI-token question: a GitHub runner cannot write to his disk, so the weekly run is
+a scheduled task on his machine and the project-wide management token never has to exist in
+CI at all.
+
+**Cross-checks, both different from what was expected.** `redirect_to` is **not** hardcoded
+to localhost anywhere in shipping code — password reset uses `location.origin + '/reset'`,
+and the confirmation mail sends **no `redirect_to` at all**, so its landing is governed
+solely by the Supabase **Site URL** dashboard setting (Amro's to confirm; unreadable from
+here). The vault entries **are** set and auto-publish works — the monitor reports `ok
+publish`, 13 releases that day.
+
+Incidental: production's CSP blocks the Cloudflare Web Analytics beacon
+(`static.cloudflareinsights.com`), so that analytics data is not being collected.
+
+---
+
 **The 5 Sep session's report is `docs/session-report-2026-09-05-confirmation.md`.** Read
 its §0 before deploying anything: **migration 0060 must be applied BEFORE the Edge Functions
 are redeployed**, or every upload breaks in the window between the two. The front end needs
@@ -56,27 +117,29 @@ against the deployed pipeline, not argued.
 2. **`node scripts/monitor.mjs`** — new. Publish age (gate 5), storage against §2's
    thresholds, and §9's budget, against the deployed system. `--selftest` needs no
    credential. **`unknown` is not `ok`** — a check that could not look says so.
-3. `supabase migration list --linked`. **61 migrations in the repo; 0060 AND 0061 are NOT
-   applied to the deployed database** (verified 6 Sep: 59 remote, 61 local). 0060's order
-   against the Edge Functions is in the 5 Sep report's §0 and is the strict one. 0061 is
-   copy only — no schema, no function, no ordering constraint — but note that applying it
-   **dispatches a publish**, because seeding a `published` block fires
-   `bump_publish_revision('content')`. That is wanted: it is how the new section goes live.
-4. **`node scripts/pgtap-deployed.mjs --tap`** — 39 files, 706 assertions. **Until 0060 and
-   0061 are applied it must be run with both spliced in as a prelude** — every fixture
-   confirms its accounts (0060), and `38_removal_copy` reads copy that only 0061 seeds. The
-   flag takes ONE file, so concatenate them:
+3. `supabase migration list --linked`. **62 migrations in the repo. 0060 and 0061 ARE now
+   applied** (verified 7 Sep: every row `local == remote`, no drift). **0062 is NOT** — it
+   is this session's, and its order against the front end is the strict one: **migration
+   first**. Note that applying 0061 **dispatched a publish**, because seeding a `published`
+   block fires `bump_publish_revision('content')`; that was wanted and has happened.
+4. **`node scripts/pgtap-deployed.mjs --tap`** — **40 files, 732 assertions**. **Until 0062
+   is applied it must be run with it spliced in as a prelude**, or `39_event_submission`
+   fails on a function that does not exist yet:
 
    ```
-   cat supabase/migrations/20260905090000_email_confirmation.sql \
-       supabase/migrations/20260906090000_removal_copy.sql > /tmp/prelude.sql
-   node scripts/pgtap-deployed.mjs --tap --prelude /tmp/prelude.sql
+   node scripts/pgtap-deployed.mjs --tap \
+     --prelude supabase/migrations/20260907090000_event_submission.sql
    ```
 
-   That is 3 red, all three known: `20_publish_cron` 14/23/24 as always, and nothing else.
-   After both migrations are applied, drop the `--prelude` and it is the same 3.
+   That is **3 red, all three known**: `20_publish_cron` 14/23/24 as always, and nothing
+   else. After 0062 is applied, drop the `--prelude` and it is the same 3.
    The prelude is spliced INSIDE each file's own transaction and rolled back with it, so
-   this writes nothing to the deployed database — including 0061's copy.
+   this writes nothing to the deployed database.
+
+   **It was 715 of 732 until 7 Sep and the gap was not visible as a failure.**
+   `18_publishable_posts` raised 21000 on a scalar subquery and *aborted*, so its 17
+   assertions stopped being counted rather than going red. If that total is ever short
+   again, look for a file that died before `finish()` — not for a red line.
 5. **The testing suites added 2 Sep.** They need `node scripts/harness-bootstrap.mjs --all`
    once (it writes `.harness.vars`, git-ignored) and a scratch `node_modules` holding
    `playwright` + `axe-core` for the two browser ones:
@@ -97,14 +160,21 @@ against the deployed pipeline, not argued.
 6. The rest of the suite, all green at the end of this session:
    ```
    node scripts/frontend-csp-test.mjs      14    node scripts/frontend-fonts-test.mjs   14
-   node scripts/frontend-auth-test.mjs     69    node scripts/frontend-rtl-test.mjs     12
+   node scripts/frontend-auth-test.mjs     70    node scripts/frontend-rtl-test.mjs     12
    node scripts/frontend-view-test.mjs     53    node scripts/monitor.mjs --selftest    19
-   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs  104.8/150 KiB
-   node scripts/frontend-cors-test.mjs      6
-   deno test supabase/functions/publish/   96    deno run … backup.ts --selftest        26
+   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs  113.4/150 KiB
+   node scripts/frontend-cors-test.mjs      6    node scripts/frontend-nav-test.mjs     80
+   node scripts/frontend-admin-test.mjs    16
+   deno test supabase/functions/publish/   96    deno run … backup.ts --selftest        31
    deno test … request-upload/             22    deno run … restore-verify.ts --selftest 25
    deno test … resend-confirmation/        11
    ```
+
+   `frontend-admin-test.mjs` is new on 7 Sep and is the only thing in this repository that
+   RENDERS `admin.js`. It exists because nothing else could see the defect it covers: a URL
+   computed since M1 and never read is not a syntax error and not a missing global, so the
+   source scans were green through it and `frontend-view-test` only ever proved the file
+   *evaluates*. It takes a rendered tree.
 
 ---
 
@@ -173,7 +243,7 @@ to prevent, reappearing inside the monitor. Adding the secret is what makes it g
 |---|---|
 | 1 · RLS denial matrix green | **passing**, in CI and against the deployed database. |
 | 2 · EXIF verified on a real photo with GPS | **DISCHARGED.** |
-| 3 · One tested restore | **DISCHARGED 1 Sep.** Amro ruled the local-Docker target sufficient; CLAUDE.md §11 records the standard so it is not re-argued. No further restore work is owed. |
+| 3 · One tested restore | **DISCHARGED 1 Sep.** Amro ruled the local-Docker target sufficient; CLAUDE.md §11 records the standard so it is not re-argued. No further restore work is owed. The ONGOING cadence is a separate thing and is blocked on Docker — `docs/backup-runbook.md`, and it does not reopen this gate. |
 | 4 · A named human on the takedown path | **DISCHARGED 6 Sep.** Amro, 48 hours, two intake paths. `docs/takedown-runbook.md` + migration 0061. **Two of his own items must land before public launch** — the email alias and the purge token; see the runbook §7. |
 | 5 · Publish-age monitoring separating `held_by_operator` from `unchanged` | **DISCHARGED 1 Sep.** Proved live: a hold was set on the deployed pipeline, the monitor reported ALERT six seconds later naming it an operator hold, and returned to ok when released. |
 | Pen test | not scheduled. Amro. |
@@ -194,10 +264,16 @@ to prevent, reappearing inside the monitor. Adding the secret is what makes it g
   Reporting is deliberately NOT gated — §7's removal request is the control a person *in* a
   photograph reaches for. What is still his: apply the migration, deploy the functions in
   that order, and turn "Confirm email" off when he wants it to actually defer.
-- **A signup that needs email confirmation loses the handle the member typed.** `claimHandle()`
-  runs only when signup returns a session, so a member who confirms by email lands with 0057's
-  placeholder `member_<hex>` instead of the name they chose. Fixing it means persisting the
-  handle across the confirmation round-trip, which is untestable while the mail cap stands.
+- ~~**A signup that needs email confirmation loses the handle the member typed.**~~
+  **CLOSED 7 Sep, in both halves.** The parked-handle path (sessionStorage across the
+  confirmation round trip) shipped in `edda228`; it is best-effort by construction and a link
+  opened on another device still keeps the placeholder. What that could never fix is every
+  account that ALREADY had one — `claimHandle()` only ever runs at signup, so all 16 accounts
+  on the deployed database, Amro's included, held `member_<hex>` with no way to change it,
+  while `signup.err.handleTaken` had been telling members to "change it from your page" since
+  M3. **The profile editor writes `handle` now.** No migration: 0004 grants
+  `update (handle, display_name)` and 0017's `profiles_update` restricts it to
+  `id = auth.uid()`, both live since 11 Aug.
 - **Edge Function error rates are not collected.** The monitor reports them `unknown` rather
   than skipping them. Needs a Management API token with analytics scope.
 - **Colour contrast, and it is the whole of what `a11y-sweep` still reports.** 9 elements on
