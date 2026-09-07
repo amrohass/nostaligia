@@ -160,6 +160,17 @@ jobs:
       - name: admin.js rendered — the moderator can see what they are approving
         run: node scripts/frontend-admin-test.mjs
 
+      # The /item/* route, which is the difference between a link that previews in WhatsApp
+      # and one that does not (§9: "a growth failure, not a polish issue"). Its failure mode
+      # is the reason it needs a test at all: a Pages Function that does not MATCH is
+      # completely silent — /item/<id> goes on serving the SPA shell with a 200 and a page
+      # that looks correct, which is exactly what it did for the eighteen days between §2
+      # recording the requirement and this closing it. Nothing observes a route that quietly
+      # is not there, so the assertions pair every "serves the page" with a path that must
+      # still reach the SPA, and pin §2's 404-on-takedown rather than a fall-through.
+      - name: the /item/* route — a shared link carries its OG tags
+        run: node scripts/frontend-item-route-test.mjs
+
       # M4. Two binary format readers written from the specs — a PMTiles archive and a
       # vector tile — decoding files this test builds byte by byte. Nothing else in the
       # repository can tell whether they are right: a checked-in fixture would make every

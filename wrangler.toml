@@ -32,6 +32,19 @@
 # NO BUILD COMMAND. CLAUDE.md §2 forbids a build step and this file does not add
 # one — Pages publishes `site/` as-is.
 #
+# `functions/` AT THE REPOSITORY ROOT IS NOT A HOLE IN THE ALLOWLIST ABOVE, and it
+# is worth being explicit because it looks like one. Pages compiles that directory
+# into a Worker; it is not part of `pages_build_output_dir` and none of its source
+# is fetchable. `/functions/item/[[path]].js` is a 404, the way every path outside
+# `site/` is. What IS reachable is the route it serves — `/item/<uuid>` — and that
+# is the point of it: CLAUDE.md §2's "the site origin must route /item/* to the R2
+# public bucket", which was recorded as a dashboard action only because the
+# production host did not exist yet. On Pages it is code, so it is reviewable,
+# testable (scripts/frontend-item-route-test.mjs) and deploys with the site.
+#
+# It is GENERATED from config/site.json like `_headers` and `_redirects`, so the
+# CDN origin and the security headers still live in exactly one place.
+#
 # `name` must match the Pages project exactly. Confirm in the dashboard after the
 # first build that the build configuration reads as managed by this file; a
 # wrangler.toml that Pages never picked up leaves the old root deploy in place and

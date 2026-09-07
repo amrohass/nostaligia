@@ -293,10 +293,112 @@ const redirects = [
   ''
 ].join('\n');
 
+// -- functions/item/[[path]].js ----------------------------------------------
+//
+// CLAUDE.md section 2 has recorded this since 21 Aug as "one deployment requirement, not yet
+// provisionable": the site origin must route /item/* to the R2 `public` bucket, or a shared
+// link falls through _redirects to the SPA shell and renders correctly for a browser while
+// carrying NO OG tags for a crawler. Section 9 calls that "a growth failure, not a polish
+// issue" -- a diaspora archive spreads on WhatsApp.
+//
+// It was written as "a Cloudflare route, not a code change" because the production host did
+// not exist. It does now, and on Cloudflare Pages the route IS code: _redirects cannot proxy
+// (its 200 rewrites are same-project only, so `/item/* <cdn>/item/:splat 200` would not
+// work), and everything else is a dashboard action nobody can review in a diff. A Pages
+// Function is the one form of this that lives in the repository, deploys with the site, and
+// can be tested.
+//
+// GENERATED rather than hand-written, and inlined rather than importing a shared module, for
+// two separate reasons:
+//   * section 2 says every origin lives in one config module. This function needs the CDN
+//     origin and the security headers, and both come from config/site.json here, so the
+//     "one-file change later" property survives. CI runs --check and fails on drift.
+//   * every file under functions/ is a ROUTE to Pages. A shared `_origins.js` beside it is
+//     an accident waiting to be served, so there is no import: the values are literals.
+//
+// The headers are re-emitted by hand because site/_headers does NOT apply to a response a
+// Function returns -- it is the static asset server's file. Without this block the one HTML
+// page most likely to be opened from a link nobody trusts would be the one page served with
+// no CSP.
+const fnHeaderEntries = [['Content-Security-Policy', policy], ...Object.entries(cfg.headers)];
+const fnHeaders = fnHeaderEntries
+  .map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(String(v))},`).join('\n');
+
+const itemFunction = `/* ${GENERATED}
+   Edit config/site.json and re-run the generator. */
+
+/* The archive origin the prerendered pages are written to (read_path.base). */
+const ARCHIVE = ${JSON.stringify(archiveBase)};
+
+/* section 6: every response this returns carries the same policy the static site does.
+   site/_headers is the asset server's and does not reach a Function's response. */
+const SECURITY = {
+${fnHeaders}
+};
+
+/* A post id and nothing else. The path segment is interpolated into an upstream URL, so it
+   is matched against the uuid shape rather than sanitised -- "reject what is not a uuid" has
+   no encoding subtleties, while "strip the dangerous parts" has years of them. Anything else
+   falls through to the SPA, which is what every /item URL did before this existed. */
+const ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+export async function onRequest(context) {
+  const { request, next } = context;
+
+  if (request.method !== 'GET' && request.method !== 'HEAD') return next();
+  if (!ARCHIVE) return next();
+
+  const url = new URL(request.url);
+  const parts = url.pathname.split('/').filter(Boolean);   // ['item', '<id>']
+  if (parts.length !== 2 || parts[0] !== 'item' || !ID.test(parts[1])) return next();
+
+  let upstream;
+  try {
+    upstream = await fetch(ARCHIVE + '/item/' + parts[1].toLowerCase() + '/index.html', {
+      method: 'GET',
+      headers: { Accept: 'text/html' },
+      redirect: 'follow',
+    });
+  } catch {
+    /* The archive is unreachable. The SPA reads the same item from its shards and renders it
+       correctly for a person; only the crawler's preview is lost. Falling through is the
+       degraded-but-working answer, and it is the behaviour that was there before. */
+    return next();
+  }
+
+  /* section 2, and it is the reason the page is DELETED on takedown rather than replaced
+     with a tombstone: "a link to an item the archive no longer has answers 404 from R2
+     rather than reaching the SPA". Falling through here would put a taken-down item back in
+     front of whoever still has the link. */
+  if (upstream.status === 404) {
+    return new Response('Not found', {
+      status: 404,
+      headers: { ...SECURITY, 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+  }
+
+  if (!upstream.ok) return next();
+
+  const headers = new Headers(SECURITY);
+  headers.set('Content-Type', 'text/html; charset=utf-8');
+  /* section 2(a): these pages are rewritten in place on every publish, so they carry a short
+     TTL rather than the release tree's year. Taken from upstream so the publisher stays the
+     one place that decides it. */
+  const cache = upstream.headers.get('Cache-Control');
+  if (cache) headers.set('Cache-Control', cache);
+
+  return new Response(request.method === 'HEAD' ? null : upstream.body, {
+    status: 200,
+    headers,
+  });
+}
+`;
+
 const outputs = [
   ['site/_headers', headers],
   ['site/_redirects', redirects],
-  ['site/assets/js/config.js', js]
+  ['site/assets/js/config.js', js],
+  ['functions/item/[[path]].js', itemFunction]
 ];
 
 let drifted = false;
