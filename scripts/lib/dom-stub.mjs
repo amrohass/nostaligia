@@ -89,6 +89,10 @@ function createNode(tagName, namespace) {
     hidden: false,
     disabled: false,
     checked: false,
+    /* `null` rather than `[]`, which is what a non-file input actually reports and what
+       public.js's `fileInput.files && fileInput.files[0]` is written against. A test sets
+       it to an array of plain objects — nothing here reads a File beyond `.name`. */
+    files: null,
     src: '',
     rows: '',
     scrollTop: 0,
@@ -129,6 +133,16 @@ function createNode(tagName, namespace) {
       if (name === 'id') this.id = String(v);
       if (name === 'class') this.className = String(v);
       if (name === 'value') this.value = String(v);
+      /* REFLECTED, because in a real DOM these are boolean attributes whose property is
+         the same state under another name. el() writes every prop it does not special-case
+         through setAttribute — so `el('div', { hidden: true })` set the attribute here and
+         left `.hidden` false, and a test asking whether a node starts hidden got the
+         opposite of what a browser shows. `.progress` and the share sheet's file chip are
+         both built that way. Without this the stub reports a node as visible that is not. */
+      if (name === 'hidden') this.hidden = true;
+      if (name === 'disabled') this.disabled = true;
+      if (name === 'checked') this.checked = true;
+      if (name === 'required') this.required = true;
     },
     getAttribute(name) {
       if (name === 'class') return this.className || null;
@@ -140,7 +154,13 @@ function createNode(tagName, namespace) {
       if (name === 'id') return Boolean(this.id);
       return name in this.attributes;
     },
-    removeAttribute(name) { delete this.attributes[name]; },
+    removeAttribute(name) {
+      delete this.attributes[name];
+      if (name === 'hidden') this.hidden = false;
+      if (name === 'disabled') this.disabled = false;
+      if (name === 'checked') this.checked = false;
+      if (name === 'required') this.required = false;
+    },
 
     appendChild(child) {
       if (this._text !== undefined) { this._text = undefined; }
@@ -161,6 +181,20 @@ function createNode(tagName, namespace) {
       if (at > -1) this.childNodes.splice(at, 1);
       child.parentNode = null;
       return child;
+    },
+    /* The kind row in public.js's share sheet swaps one icon NODE for another in place —
+       it is not markup, so there is no innerHTML to reassign (§6) — and that is the only
+       caller. Missing, it threw "node.replaceChild is not a function" the first time a
+       test pressed one of those buttons. */
+    replaceChild(next, old) {
+      const at = this.childNodes.indexOf(old);
+      if (at === -1) return old;
+      if (next.parentNode) next.parentNode.removeChild(next);
+      next.parentNode = this;
+      this.childNodes.splice(at, 1, next);
+      old.parentNode = null;
+      this._text = undefined;
+      return old;
     },
     replaceChildren(...next) {
       this.childNodes.forEach((c) => { c.parentNode = null; });

@@ -1000,6 +1000,60 @@ html[lang="en"] .dropzone { font: 500 12px var(--font-en); }
 .dropzone__note { font: 400 11px var(--font-ar); color: var(--ink-55); }
 html[lang="en"] .dropzone__note { font: 400 10.5px var(--font-en); }
 
+/* ── The upload's file chip (7 Sep 2026) ───────────────────────────
+   The one positive signal the share sheet never had. Four states, and only the last
+   earns the tick — see setFileState() in public.js on why an icon that appears when the
+   file is CHOSEN would be saying something untrue. Logical properties throughout (§9);
+   every colour is a token. */
+.filechip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 13px;
+  border-radius: var(--r-md);
+  background: var(--paper-sunken);
+  border: 1px solid var(--olive-a12);
+  font: 500 12px var(--font-ar);
+  color: var(--ink);
+}
+html[lang="en"] .filechip { font: 500 11.5px var(--font-en); }
+
+.filechip__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+/* A filename is arbitrary length and must not push the clear button off the sheet. */
+.filechip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filechip__state { font-size: 10.5px; color: var(--ink-55); }
+
+.filechip__mark {
+  flex: none;
+  inline-size: 20px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--olive-deep);
+}
+
+.filechip__clear {
+  flex: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px;
+  color: var(--ink-55);
+  border-radius: var(--r-sm);
+}
+.filechip__clear:hover { color: var(--terracotta); }
+
+.filechip--sending { border-color: var(--gold-a45); background: var(--gold-a06); }
+.filechip--done    { border-color: var(--olive-a30); background: var(--olive-a08); }
+.filechip--done .filechip__state { color: var(--olive-deep); }
+.filechip--failed  { border-color: var(--terracotta-a45); background: var(--terracotta-a04); }
+.filechip--failed .filechip__state { color: var(--terracotta); }
+
+/* 0062. The event's fields and the rights fields it is not asked — one wrapper each, so
+   applyKind() toggles a container rather than four nodes that could drift apart. */
+.field-group { display: flex; flex-direction: column; gap: 13px; }
+
 .review-note {
   background: var(--gold-a12);
   border-radius: var(--r-md);

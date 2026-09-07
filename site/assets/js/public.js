@@ -2318,6 +2318,11 @@
             var slot = node.firstChild;
             node.replaceChild(kinds[i].icon(on ? '#C05B3E' : '#3E4A2E'), slot);
           });
+          /* 0062. The sheet is built ONCE and the kind row only repainted itself, so
+             until now choosing "event" changed three icons and nothing else — the form
+             underneath stayed the photograph's, which is why pressing it produced a post
+             the database refused. */
+          applyKind();
         }
       }, [
         option.icon(active ? '#C05B3E' : '#3E4A2E'),
@@ -2392,6 +2397,148 @@
     var place = placePicker(rebuildPrecision);
     rebuildPrecision();
 
+    /* ── The event's own fields (0062) ────────────────────────
+
+       Amro's decision, 7 Sep 2026: an event gets its own field set. It stays kind='event'
+       in the one posts table — §3's "do not split by type" is untouched, and events keep
+       publishing into the same shards and the same grid.
+
+       What is NOT here is as deliberate as what is. No place picker and no precision
+       select: §7's fuzzing machinery exists because a coordinate on a family photograph is
+       most plausibly somebody's home, and a public event's venue is the thing the poster
+       was advertising. It is free text, and 0062 REFUSES a coordinate sent with an event
+       rather than dropping it. No licence, no provenance, no consent box: a listing that a
+       concert happened carries no third-party rights for a contributor to grant. */
+    var startInput = el('input.input', { type: 'datetime-local' });
+    var endInput = el('input.input', { type: 'datetime-local' });
+    var venueInput = el('input.input', { type: 'text', placeholder: t('share.fVenuePh') });
+    var organizersInput = el('input.input', { type: 'text', placeholder: t('share.fOrganizersPh') });
+
+    var eventFields = el('div.field-group', { hidden: true }, [
+      el('div.field-pair', null, [
+        el('div.field', null, [labelFor(t('share.fEventStart'), startInput), startInput]),
+        el('div.field', null, [labelFor(t('share.fEventEnd'), endInput), endInput])
+      ]),
+      el('div.field', null, [
+        labelFor(t('share.fVenue'), venueInput),
+        venueInput,
+        el('p.field__hint', { text: t('share.fVenueNote') })
+      ]),
+      el('div.field', null, [
+        labelFor(t('share.fOrganizers'), organizersInput),
+        organizersInput,
+        el('p.field__hint', { text: t('share.fOrganizersNote') })
+      ])
+    ]);
+
+    /* The fields an event is NOT asked. Grouped so one function hides them, rather than
+       four call sites that can drift apart. */
+    var placeField = el('div.field', null, [
+      labelFor(t('share.fPrecision'), precisionSelect),
+      precisionSelect,
+      precisionNote
+    ]);
+    var rightsFields = el('div.field-group', null, [
+      el('div.field-pair', null, [
+        el('div.field', null, [
+          labelFor(t('share.fLicense'), licenseSelect),
+          licenseSelect,
+          el('p.field__hint', { text: t('share.fLicenseNote') })
+        ]),
+        el('div.field', null, [
+          labelFor(t('share.fProvenance'), provenanceInput),
+          provenanceInput
+        ])
+      ]),
+      el('label.checkbox.checkbox--wrap', null, [
+        consentBox,
+        el('span', { text: t('share.consent') })
+      ])
+    ]);
+
+    var reviewNote = el('div.review-note', { text: t('share.review') });
+
+    /**
+     * Show the fields this kind asks for, and — this is the load-bearing half — clear
+     * `required` from the ones it does not.
+     *
+     * A `required` input inside a hidden container is not skipped by the browser: it
+     * blocks the submit and reports "an invalid form control is not focusable", which is a
+     * form that cannot be sent and says nothing about why. So the attribute follows the
+     * visibility rather than sitting beside it.
+     */
+    function applyKind() {
+      var isEvent = kind === 'event';
+
+      eventFields.hidden = !isEvent;
+      place.node.hidden = isEvent;
+      placeField.hidden = isEvent;
+      rightsFields.hidden = isEvent;
+
+      startInput.required = isEvent;
+      licenseSelect.required = !isEvent;
+      provenanceInput.required = !isEvent;
+      consentBox.required = !isEvent;
+
+      // The promise is the same 48 hours either way; the noun is not.
+      reviewNote.textContent = t(isEvent ? 'share.eventReview' : 'share.review');
+    }
+
+    /* ── Part 3 · the upload says something happened ──────────
+     *
+     * The sheet had no positive signal anywhere. Choosing a file changed nothing on the
+     * screen — the input is `.sr-only` inside the dropzone label, so a member could not
+     * tell whether the picker had taken their choice — and a successful upload closed the
+     * dialog behind a toast. Everything in between was an absence of errors.
+     *
+     * This is that signal and deliberately not an upload-status subsystem: one chip, four
+     * states, driven by the stages UPLOAD.submit already emits. The state that matters is
+     * `done` — the bytes are in quarantine and complete-upload has accepted them, which is
+     * the moment the member's part is over and the archive's begins.
+     */
+    var fileName = el('span.filechip__name');
+    var fileMark = el('span.filechip__mark', { 'aria-hidden': 'true', text: '' });
+    var fileState = el('span.filechip__state');
+    var fileChip = el('div.filechip', { hidden: true, role: 'status' }, [
+      fileMark,
+      el('span.filechip__text', null, [fileName, fileState]),
+      el('button.filechip__clear', {
+        type: 'button',
+        'aria-label': t('share.fileRemove'),
+        text: '×',
+        onclick: function () {
+          fileInput.value = '';
+          setFileState(null);
+        }
+      })
+    ]);
+
+    /** null hides the chip; otherwise one of chosen | sending | done | failed. */
+    function setFileState(name) {
+      var file = fileInput.files && fileInput.files[0];
+      if (!name || !file) {
+        fileChip.hidden = true;
+        fileChip.className = 'filechip';
+        return;
+      }
+      fileChip.hidden = false;
+      fileChip.className = 'filechip filechip--' + name;
+      /* Through bdi(), which is §6's render rule rather than a flourish: a filename is a
+         string the member's own device supplied, and "رام الله 1967.jpg" in an RTL
+         paragraph puts its extension on the wrong side without one. It is a NODE, never
+         markup — §6 calls every innerHTML on user content a defect. */
+      mount(fileName, bdi(file.name));
+      fileState.textContent = t('share.file' + name.charAt(0).toUpperCase() + name.slice(1));
+      // A tick only once it is true. An icon that appeared on selection would say the file
+      // had arrived while it was still sitting on the member's phone.
+      fileMark.textContent = name === 'done' ? '✓' : '';
+    }
+
+    /* addEventListener rather than `.onchange =`, to match how el() binds every other
+       handler in this file — one mechanism, so a reader does not have to know which
+       nodes use which. */
+    fileInput.addEventListener('change', function () { setFileState('chosen'); });
+
     var busy = false;
 
     var form = el('form.dialog.dialog--sheet', {
@@ -2419,23 +2566,63 @@
         draft['body_' + lang] = storyValue;
         if (decadeSelect.value) draft.decade = decadeSelect.value;
 
-        /* M4. Either a gazetteer id or a pin, never both — the picker returns one shape or
-           the other, and 0049 resolves the coordinate from the ROW rather than trusting a
-           pair of numbers that arrived beside an id. */
-        var where = place.read();
-        Object.keys(where).forEach(function (key) { draft[key] = where[key]; });
-        /* Sent always, including 'hidden'. Saying nothing would let 0049's source rule
-           decide, and the whole point of the control is that the contributor now has a
-           say — including the say that publishes no coordinate at all. */
-        draft.location_precision = precisionSelect.value;
+        if (draft.kind === 'event') {
+          /* 0062. A datetime-local value carries NO zone — "2026-10-01T18:00" is what the
+             member read off a poster, in Ramallah. Sent as that string it would be cast
+             against the server's zone, which is UTC, and a 6pm concert would be stored as
+             8pm local and shown back to its own organiser as the wrong time. new Date()
+             parses a zone-less value as LOCAL, so toISOString() is the member's own
+             evening expressed as the instant it actually is.
 
-        /* §7. Only `granted` is sent — granted_at is stamped by the database, because a
-           timestamp evidencing that someone agreed at a moment is worthless if the person
-           being evidenced supplied it, and may_withdraw is a right §7 grants rather than
-           one the contributor elects. */
-        draft.license = licenseSelect.value;
-        draft.provenance = provenanceInput.value;
-        draft.consent = { granted: consentBox.checked };
+             Guarded rather than trusted: an empty or unparseable value gives an Invalid
+             Date whose toISOString() THROWS, which would take the whole submit down. It
+             is left out instead, and 0062 answers event_start_required — a refusal the
+             member can read. */
+          var iso = function (value) {
+            if (!value) return null;
+            var at = new Date(value);
+            return isFinite(at.getTime()) ? at.toISOString() : null;
+          };
+          var startsAt = iso(startInput.value);
+          var endsAt = iso(endInput.value);
+          if (startsAt) draft.event_starts_at = startsAt;
+          if (endsAt) draft.event_ends_at = endsAt;
+
+          var venue = venueInput.value.trim();
+          if (venue) draft['venue_' + lang] = venue;
+
+          /* Both commas: an Arabic-first archive whose organiser list only splits on U+002C
+             would file "بلدية رام الله، مركز خليل السكاكيني" as one organisation named
+             after both. Empty segments are dropped so a trailing comma is not a nameless
+             organiser, and 0062 refuses one anyway. */
+          var organizers = organizersInput.value.split(/[,،]/)
+            .map(function (name) { return name.trim(); })
+            .filter(function (name) { return name.length > 0; });
+          if (organizers.length) draft.organizers = organizers;
+
+          /* Nothing else. No place, no precision, no licence, no provenance, no consent —
+             0062 REFUSES a coordinate or a venue sent with the wrong kind rather than
+             dropping it, so sending a field this kind does not own is a refused upload
+             and not a silent discard. */
+        } else {
+          /* M4. Either a gazetteer id or a pin, never both — the picker returns one shape
+             or the other, and 0049 resolves the coordinate from the ROW rather than
+             trusting a pair of numbers that arrived beside an id. */
+          var where = place.read();
+          Object.keys(where).forEach(function (key) { draft[key] = where[key]; });
+          /* Sent always, including 'hidden'. Saying nothing would let 0049's source rule
+             decide, and the whole point of the control is that the contributor now has a
+             say — including the say that publishes no coordinate at all. */
+          draft.location_precision = precisionSelect.value;
+
+          /* §7. Only `granted` is sent — granted_at is stamped by the database, because a
+             timestamp evidencing that someone agreed at a moment is worthless if the
+             person being evidenced supplied it, and may_withdraw is a right §7 grants
+             rather than one the contributor elects. */
+          draft.license = licenseSelect.value;
+          draft.provenance = provenanceInput.value;
+          draft.consent = { granted: consentBox.checked };
+        }
 
         busy = true;
         if (submitButton) { submitButton.disabled = true; submitButton.textContent = t('auth.working'); }
@@ -2452,6 +2639,12 @@
             onStage: function (name) {
               say('up.stage.' + name);
               progress.hidden = name !== 'uploading';
+              /* The chip's own state, from the stages the upload already emits.
+                 `finishing` is the moment the bytes are in quarantine — the PUT has
+                 returned — and `done` is complete-upload accepting them. Both are past
+                 the point the member can affect, so both read as arrived. */
+              if (name === 'uploading') setFileState('sending');
+              else if (name === 'finishing' || name === 'done') setFileState('done');
             },
             onProgress: function (fraction) {
               var pct = Math.round(fraction * 100);
@@ -2471,6 +2664,10 @@
             : key === 'up.err.tooLong'
             ? { n: Math.round(UPLOAD._limits.maxDurationS / 60) }
             : undefined);
+          /* The chip must not stay on "uploading" under an error message. The file is
+             still chosen and the sheet is still open, so this is a retryable state and
+             says so. */
+          setFileState('failed');
           release();
         });
       }
@@ -2492,11 +2689,10 @@
          in M3 because a free-text place that resolves to nothing is a question asked for no
          reason. This is what M4 replaces it with: the gazetteer, then a pin. */
       place.node,
-      el('div.field', null, [
-        labelFor(t('share.fPrecision'), precisionSelect),
-        precisionSelect,
-        precisionNote
-      ]),
+      placeField,
+      /* 0062. Hidden for a photograph, shown for an event, and the two sets are mutually
+         exclusive by construction — applyKind() is the only thing that decides. */
+      eventFields,
       /* §9: "Required description field on upload (frame it as archival metadata)."
          `required` was missing until 2 Sep 2026 — the field existed, was framed exactly as
          §9 asks ("what do you remember of this moment"), and could be left empty, which
@@ -2512,31 +2708,24 @@
         el('span.dropzone__note', { text: t('share.dropNote') }),
         fileInput
       ]),
-      el('div.field-pair', null, [
-        el('div.field', null, [
-          labelFor(t('share.fLicense'), licenseSelect),
-          licenseSelect,
-          el('p.field__hint', { text: t('share.fLicenseNote') })
-        ]),
-        el('div.field', null, [
-          labelFor(t('share.fProvenance'), provenanceInput),
-          provenanceInput
-        ])
-      ]),
-      el('label.checkbox.checkbox--wrap', null, [
-        consentBox,
-        el('span', { text: t('share.consent') })
-      ]),
+      fileChip,
+      rightsFields,
       captchaSlot,
       progress,
       statusNote,
       errorNote,
-      el('div.review-note', { text: t('share.review') }),
+      reviewNote,
       el('div.dialog__actions', null, [
         el('button.btn.btn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
         el('button.btn.btn--primary', { type: 'submit', text: t('share.submit') })
       ])
     ]);
+
+    /* Once, before the sheet is shown, so the initial state is applyKind()'s and not a
+       set of literals on four separate nodes that have to agree with it. The sheet can be
+       opened on any kind — a pending intent carries one — so "photo is the default" is not
+       something to encode twice. */
+    applyKind();
 
     scrim = overlayShell('scrim.scrim--heavy', [form], close);
     widget = TURNSTILE.mount(captchaSlot);

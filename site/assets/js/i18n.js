@@ -318,6 +318,24 @@
     'up.err.precisionUnknown': {
       ar: 'قيمة الدقّة غير معروفة.', en: 'That precision is not a value we recognise.' },
 
+    /* 0062's event refusals. Only the first is reachable from the sheet; the rest are for
+       a caller composing the draft themselves, and are mapped for the reason the whole
+       table exists — an unmapped refusal reads as "something went wrong", and a member
+       retries the identical submission forever. */
+    'up.err.eventStart': { ar: 'الفعالية تحتاج تاريخ بداية.',
+                           en: 'An event needs a start date.' },
+    'up.err.eventDate':  { ar: 'التاريخ المُرسل غير صالح.', en: 'That date is not valid.' },
+    'up.err.eventOrder': { ar: 'لا يمكن أن تنتهي الفعالية قبل أن تبدأ.',
+                           en: 'An event cannot end before it starts.' },
+    'up.err.eventPlace': { ar: 'الفعاليات تُحدَّد بالمكان كتابةً، لا بنقطة على الخريطة.',
+                           en: 'Events are located by writing the venue, not by a point on the map.' },
+    'up.err.eventFields': { ar: 'حقول الفعالية لا تنطبق على صورة أو تسجيل.',
+                            en: 'Event fields do not apply to a photo or a recording.' },
+    'up.err.organizers': { ar: 'أسماء المنظِّمين غير صالحة.',
+                           en: 'That list of organizers is not valid.' },
+    'up.err.organizersMany': { ar: 'عدد المنظِّمين أكبر ممّا نقبله.',
+                               en: 'That is more organizers than we accept.' },
+
     // ── Upload progress ─────────────────────────────────────
     'up.stage.probing':    { ar: 'نقرأ الملف…', en: 'Reading the file…' },
     'up.stage.requesting': { ar: 'نطلب إذن الرفع…', en: 'Requesting permission…' },
@@ -369,6 +387,34 @@
                              en: "e.g. my grandfather's album · I took it myself · family archive" },
     'share.consent': { ar: 'أؤكّد أنّ لديّ الحقّ في مشاركة هذه المادة، وأنّ بإمكاني سحبها لاحقًا.',
                        en: 'I confirm I have the right to share this material, and that I may withdraw it later.' },
+
+    /* ── The event's own fields (0062, 7 Sep 2026) ────────────
+       Amro's decision: an event listing is not a heritage photograph and must not be asked
+       the questions one is. Its venue is free text and never a map pin — a public event's
+       location is public by construction, which is the whole reason §7's fuzzing does not
+       apply to it. */
+    'share.fEventStart': { ar: 'متى تبدأ؟', en: 'When does it start?' },
+    'share.fEventEnd':   { ar: 'متى تنتهي؟ (اختياري)', en: 'When does it end? (optional)' },
+    'share.fVenue':      { ar: 'المكان', en: 'Where' },
+    'share.fVenuePh':    { ar: 'مثال: قصر رام الله الثقافي', en: 'e.g. Ramallah Cultural Palace' },
+    'share.fVenueNote':  { ar: 'اسم المكان كما يُكتب على الإعلان — لا حاجة لتحديده على الخريطة.',
+                           en: 'The venue as it appears on the poster — no need to place it on the map.' },
+    'share.fOrganizers': { ar: 'المنظِّمون (اختياري)', en: 'Organizers (optional)' },
+    'share.fOrganizersPh': { ar: 'مثال: بلدية رام الله، مركز خليل السكاكيني',
+                             en: 'e.g. Ramallah Municipality, Khalil Sakakini Centre' },
+    'share.fOrganizersNote': { ar: 'افصل بين الأسماء بفاصلة.', en: 'Separate names with a comma.' },
+    'share.eventReview': { ar: 'تمرّ كل فعالية بمراجعة الفريق قبل النشر. نتعهّد بالردّ خلال ٤٨ ساعة.',
+                           en: 'Every event is reviewed by the team before publishing. We promise a reply within 48 hours.' },
+
+    /* ── The upload's own state (7 Sep 2026) ──────────────────
+       Until now the sheet said nothing at all about the file: no name after choosing one,
+       and on success only a toast as the dialog closed. "It did not fail" is not a
+       confirmation, and on a slow connection the gap between the two was the whole upload. */
+    'share.fileChosen':  { ar: 'جاهز للإرسال', en: 'Ready to send' },
+    'share.fileSending': { ar: 'يجري الرفع…', en: 'Uploading…' },
+    'share.fileDone':    { ar: 'وصل الملف بأمان', en: 'File received safely' },
+    'share.fileFailed':  { ar: 'لم يصل — يمكنك المحاولة ثانية', en: 'Did not arrive — you can try again' },
+    'share.fileRemove':  { ar: 'أزل الملف', en: 'Remove the file' },
 
     'share.review': { ar: 'تمرّ كل مساهمة بمراجعة الفريق قبل النشر. نتعهّد بالردّ خلال ٤٨ ساعة.',
                       en: 'Every contribution is reviewed by the team before publishing. We promise a reply within 48 hours.' },

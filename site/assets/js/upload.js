@@ -112,6 +112,21 @@
        the sheet closes that window, and this is what catches the moment it does not. */
     precision_too_precise: 'up.err.precisionTooPrecise',
     invalid_precision: 'up.err.precisionUnknown',
+    /* 0062's event fields. `event_start_required` is the only one of these a member using
+       the sheet can reach — the input is marked required, but a browser that skips native
+       validation still gets a sentence rather than "something went wrong". The rest are
+       for the caller composing the draft themselves, and the two "wrong kind" refusals are
+       the ones worth reading: 0062 REFUSES a coordinate on an event and a venue on a
+       photograph rather than dropping either, so a client that sends the wrong shape is
+       told which, instead of finding out months later that a field never arrived. */
+    event_start_required: 'up.err.eventStart',
+    invalid_event_start: 'up.err.eventDate',
+    invalid_event_end: 'up.err.eventDate',
+    event_ends_before_start: 'up.err.eventOrder',
+    event_takes_no_coordinate: 'up.err.eventPlace',
+    event_fields_on_non_event: 'up.err.eventFields',
+    invalid_organizers: 'up.err.organizers',
+    too_many_organizers: 'up.err.organizersMany',
     duplicate_object_key: 'up.err.generic',
     quota_check_failed: 'up.err.generic',
     signing_failed: 'up.err.generic',

@@ -180,15 +180,31 @@ select is(
   'false',
   '§5: a row whose hash does not match its approval is reported, not filtered away');
 
-select is(
-  (select count(*)::integer
-     from jsonb_array_elements_text(public.redacted_post_ids())), 1,
+/* Scoped to THIS file's own fixtures, and that is a correctness fix rather than a
+   loosening — found 7 Sep 2026.
+
+   Both assertions used to read the whole of redacted_post_ids(): one asserted its count
+   was exactly 1, the other pulled its single value with a scalar subquery. That holds only
+   on a database whose ONLY taken-down post is this file's d3. Against the deployed
+   database it stopped holding the moment real takedowns accumulated — there are six — and
+   the scalar subquery then raised 21000 "more than one row returned by a subquery used as
+   an expression".
+
+   The 21000 is the part worth recording: it did not fail an assertion, it aborted the
+   FILE. `finish()` never ran, and all seventeen of its assertions stopped being counted —
+   so the suite reported 715 of 732 planned and the seventeen it lost were the publish
+   path's. A red assertion is visible; a file that stops early takes its own coverage with
+   it, which is this repository's characteristic defect wearing a different hat.
+
+   d3 must be IN the list and d1 must not, which is what these two ever meant. Both are
+   still true on an empty database, so nothing is weakened. */
+select ok(
+  public.redacted_post_ids() ? '00000000-0000-0000-0000-0000000000d3',
   'the redaction list holds the taken-down post');
 
-select is(
-  (select value from jsonb_array_elements_text(public.redacted_post_ids())),
-  '00000000-0000-0000-0000-0000000000d3',
-  '...and it is the right one');
+select ok(
+  not (public.redacted_post_ids() ? '00000000-0000-0000-0000-0000000000d1'),
+  '...and not the approved one beside it, which is what "the right one" has to mean');
 
 select * from finish();
 rollback;

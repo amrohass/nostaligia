@@ -21,7 +21,7 @@
 //
 //     node scripts/frontend-auth-test.mjs
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { assertAnonKey } from './lib/anon-key.mjs';
@@ -209,17 +209,30 @@ console.log('# upload.js — the refusal map');
    * gone quietly stale. Reading the file means the next definition is covered before
    * anyone remembers this test exists.
    *
-   * The PATH is still hand-maintained, and that is the seam: 0052 redefined the function
-   * and this pointer went stale the moment it did, reporting the two new refusals as
-   * messages mapped to nothing. Point it at whichever migration holds the newest
-   * `create or replace function public.claim_upload_slot`.
+   * The PATH USED TO BE hand-maintained, and that was the seam: 0052 redefined the
+   * function and the pointer went stale the moment it did, reporting the two new refusals
+   * as messages mapped to nothing. The instruction left here was "point it at whichever
+   * migration holds the newest definition", which is a thing to remember rather than a
+   * mechanism — and 0062 is the sixth redefinition, so it would have gone stale again on
+   * exactly the schedule the comment predicted.
+   *
+   * So it FINDS the newest instead. Migration filenames are ISO timestamps, so the last
+   * one that defines the function is the one in force, and the next redefinition is
+   * covered without anyone reading this.
    *
    * The rest are still named here because they come from several functions across several
    * migrations, and a scan wide enough to find them would also collect the publish lease's
    * refusals — which no browser ever sees, and every one of which would be reported as an
    * unmapped message the upload path is missing. */
-  const migrationText = readFileSync(
-    join(root, 'supabase/migrations/20260830090000_precision_control.sql'), 'utf8');
+  const MIGRATIONS = join(root, 'supabase/migrations');
+  const definers = readdirSync(MIGRATIONS)
+    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => readFileSync(join(MIGRATIONS, f), 'utf8')
+      .includes('create or replace function public.claim_upload_slot'))
+    .sort();
+  ok(definers.length > 0,
+     `CONTROL: found the migrations defining claim_upload_slot (${definers.length}, newest ${definers[definers.length - 1]})`);
+  const migrationText = readFileSync(join(MIGRATIONS, definers[definers.length - 1]), 'utf8');
   // Sliced to claim_upload_slot's own body. 0049 also defined set_post_location, whose
   // refusals are a moderator's and reach this map through nothing — scanning a whole file
   // reports them as messages the upload path forgot. 0052 carries only claim_upload_slot,

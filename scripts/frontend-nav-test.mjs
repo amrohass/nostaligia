@@ -672,6 +672,232 @@ console.log('# /me — renaming yourself');
      '...and specifically not "taken", which is the conflation that hid the original defect');
 }
 
+/* ═══ 7 · the share sheet asks an event different questions ══════════════════
+   Amro's decision, 7 Sep 2026, and migration 0062 is the database half. The sheet has
+   offered an "event" button since M3 and pressing it changed three icons and nothing
+   else: the form underneath stayed the photograph's, so it collected a licence and a map
+   pin, sent no start date, and the row was refused by posts_event_needs_a_start — a 500
+   out of a SECURITY DEFINER function, for every event anyone ever tried to submit.
+
+   The assertions are on the DRAFT, not on the fields. A form that shows the right inputs
+   and sends the wrong object is exactly the defect being fixed. */
+
+console.log('# the share sheet — an event is not a photograph');
+
+{
+  const account = { id: 'u-1', email: 'x@t.local', role: 'member' };
+
+  async function sheet() {
+    const submitted = [];
+    const DB = {
+      select: () => Promise.resolve([{ handle: 'contributor', display_name: null }]),
+      insert: () => Promise.resolve(null),
+      patch: () => Promise.resolve([{ handle: 'contributor' }]),
+      del: () => Promise.resolve(null),
+      rpc: (name) => {
+        if (name === 'email_confirmation_status') return Promise.resolve({ confirmed: true });
+        if (name === 'search_places') return Promise.resolve([]);
+        return Promise.resolve([]);
+      },
+      mediaUrl: () => null,
+    };
+    const AUTH = {
+      user: () => account,
+      accessToken: () => Promise.resolve('token'),
+      restore: () => Promise.resolve(account),
+      onChange: () => {}, signOut: () => {},
+      signIn: () => Promise.resolve(account),
+      signUp: () => Promise.resolve({ confirmationRequired: false, user: account }),
+      requestPasswordReset: () => Promise.resolve(true),
+      beginRecovery: () => {}, adoptMailedLink: () => Promise.resolve(account),
+    };
+    const TURNSTILE = {
+      mount: () => ({ token: () => Promise.resolve('captcha'), reset: () => {}, remove: () => {} }),
+    };
+    /* The real UPLOAD would need a network and a File. This one records the draft and
+       walks the same stages, which is what both halves of this section read. */
+    const UPLOAD = {
+      LICENSES: ['CC-BY-SA-4.0', 'CC0-1.0', 'rights-reserved'],
+      _limits: { maxBytes: 200 * 1024 * 1024, maxDurationS: 180 },
+      _refusals: {},
+      submit: (file, draft, captcha, hooks) => {
+        submitted.push(draft);
+        ['probing', 'requesting', 'uploading', 'finishing', 'done'].forEach((s) => hooks.onStage(s));
+        return Promise.resolve({ postId: 'p-1' });
+      },
+    };
+
+    const win = await boot({ pathname: '/', overrides: { DB, AUTH, TURNSTILE, UPLOAD } });
+    for (let i = 0; i < 12; i++) await settle();
+
+    const shareButton = win.document.body.querySelectorAll('button')
+      .find((b) => textOf(b).includes(win.I18N.t('action.share')));
+    if (shareButton) { shareButton.fire('click'); for (let i = 0; i < 8; i++) await settle(); }
+    const form = win.document.querySelector('form.dialog--sheet');
+    return { win, form, submitted };
+  }
+
+  const s = await sheet();
+  ok(s.form !== null, 'CONTROL: a signed-in member can open the share sheet');
+
+  // The photograph's fields are what it opens on.
+  ok(s.form && s.form.querySelectorAll('.field-group').filter((n) => !n.hidden).length >= 1,
+     'CONTROL: it opens on the photograph form, with the rights fields shown');
+
+  // Press "event", the way a contributor does.
+  const eventButton = s.form.querySelectorAll('button.kind')
+    .find((b) => textOf(b).includes(s.win.I18N.t('share.event')));
+  ok(eventButton !== undefined, `CONTROL: the sheet offers an event kind ("${s.win.I18N.t('share.event')}")`);
+  eventButton.fire('click');
+  for (let i = 0; i < 4; i++) await settle();
+
+  const start = s.form.querySelector('input[type=datetime-local]');
+  ok(start !== null && start !== undefined,
+     'choosing "event" reveals a start-date field — the column posts_event_needs_a_start requires');
+  ok(start && start.required === true,
+     '...and it is required, because an event without one is refused by the database');
+
+  /* THE half that is easy to get wrong. A `required` input inside a hidden container is
+     not skipped by the browser: it blocks the submit and reports "an invalid form control
+     is not focusable", which is a form that cannot be sent and says nothing about why. */
+  const license = s.form.querySelectorAll('select.input')
+    .find((n) => n.querySelectorAll('option').some((o) => o.getAttribute('value') === 'CC0-1.0'));
+  ok(license && license.required === false,
+     'the licence select is no longer required — a hidden required field blocks the submit silently');
+
+  const groups = s.form.querySelectorAll('.field-group');
+  ok(groups.some((n) => n.hidden), 'the fields an event is not asked are hidden');
+
+  // Fill it in and send it. The draft is what is asserted.
+  s.form.querySelector('input[type=text]').value = 'مهرجان رام الله';
+  s.form.querySelector('textarea.input').value = 'وصف الفعالية';
+  start.value = '2026-10-01T18:00';
+  /* By PLACEHOLDER, not by position. The first draft indexed from the end of the text
+     inputs and picked up the place picker's own field, so the venue text landed in
+     organizers and the two assertions below failed pointing at each other. The
+     placeholder comes from I18N rather than a literal, so it cannot drift from the sheet. */
+  const byPlaceholder = (key) => s.form.querySelectorAll('input')
+    .find((n) => n.getAttribute('placeholder') === s.win.I18N.t(key));
+  byPlaceholder('share.fVenuePh').value = 'قصر رام الله الثقافي';
+  byPlaceholder('share.fOrganizersPh').value = 'بلدية رام الله، مركز خليل السكاكيني';
+
+  // A file, because the upload path is the only way a post is created (§2's write path).
+  s.form.querySelector('input[type=file]').files = [{ name: 'poster.jpg', size: 1024, type: 'image/jpeg' }];
+  s.form.fire('submit');
+  for (let i = 0; i < 12; i++) await settle();
+
+  const draft = s.submitted[0];
+  ok(draft !== undefined, `CONTROL: the sheet submitted a draft (${s.submitted.length})`);
+  ok(draft && draft.kind === 'event', `...as kind=event (${draft ? draft.kind : 'none'})`);
+  ok(draft && typeof draft.event_starts_at === 'string' && /Z$/.test(draft.event_starts_at),
+     `the start is sent as a zoned instant, not the zone-less string the input holds (${draft ? draft.event_starts_at : ''})`);
+  ok(draft && (draft.venue_ar === 'قصر رام الله الثقافي' || draft.venue_en === 'قصر رام الله الثقافي'),
+     'the venue is sent as free text');
+  ok(draft && Array.isArray(draft.organizers) && draft.organizers.length === 2,
+     `organizers split on the ARABIC comma too (${draft ? JSON.stringify(draft.organizers) : ''})`);
+
+  /* 0062 REFUSES these on an event rather than dropping them, so sending one would be a
+     refused upload — the member's whole submission lost to a field they never filled. */
+  ok(draft && draft.license === undefined && draft.provenance === undefined
+     && draft.consent === undefined,
+     'no licence, provenance or consent is sent for an event (§7 — no third-party rights)');
+  ok(draft && draft.lat === undefined && draft.lon === undefined
+     && draft.place_id === undefined && draft.location_precision === undefined,
+     'and no coordinate of any kind — 0062 refuses one on an event');
+}
+
+/* ═══ 8 · the upload says that it worked ═════════════════════════════════════
+   Part 3's UX gap. The sheet had no positive signal anywhere: choosing a file changed
+   nothing on screen (the input is .sr-only inside the dropzone label), and success closed
+   the dialog behind a toast. Everything in between was an absence of errors. */
+
+console.log('# the share sheet — the file chip');
+
+{
+  const account = { id: 'u-1', email: 'x@t.local', role: 'member' };
+  const stages = [];
+
+  const DB = {
+    select: () => Promise.resolve([{ handle: 'contributor', display_name: null }]),
+    insert: () => Promise.resolve(null), patch: () => Promise.resolve([]), del: () => Promise.resolve(null),
+    rpc: (name) => (name === 'email_confirmation_status'
+      ? Promise.resolve({ confirmed: true }) : Promise.resolve([])),
+    mediaUrl: () => null,
+  };
+  const AUTH = {
+    user: () => account, accessToken: () => Promise.resolve('token'),
+    restore: () => Promise.resolve(account), onChange: () => {}, signOut: () => {},
+    signIn: () => Promise.resolve(account),
+    signUp: () => Promise.resolve({ confirmationRequired: false, user: account }),
+    requestPasswordReset: () => Promise.resolve(true),
+    beginRecovery: () => {}, adoptMailedLink: () => Promise.resolve(account),
+  };
+  const TURNSTILE = { mount: () => ({ token: () => Promise.resolve('c'), reset: () => {}, remove: () => {} }) };
+
+  /* Held open at `uploading`, so the chip's mid-flight state can be read. A submit that
+     ran to completion in one tick would only ever show the last one. */
+  let advance;
+  const UPLOAD = {
+    LICENSES: ['CC-BY-SA-4.0', 'CC0-1.0', 'rights-reserved'],
+    _limits: { maxBytes: 200 * 1024 * 1024, maxDurationS: 180 }, _refusals: {},
+    submit: (file, draft, captcha, hooks) => new Promise((resolve) => {
+      ['probing', 'requesting', 'uploading'].forEach((s) => { stages.push(s); hooks.onStage(s); });
+      advance = () => {
+        ['finishing', 'done'].forEach((s) => hooks.onStage(s));
+        resolve({ postId: 'p-1' });
+      };
+    }),
+  };
+
+  const win = await boot({ pathname: '/', overrides: { DB, AUTH, TURNSTILE, UPLOAD } });
+  for (let i = 0; i < 12; i++) await settle();
+  win.document.body.querySelectorAll('button')
+    .find((b) => textOf(b).includes(win.I18N.t('action.share'))).fire('click');
+  for (let i = 0; i < 8; i++) await settle();
+
+  const form = win.document.querySelector('form.dialog--sheet');
+  const chip = form.querySelector('.filechip');
+  ok(chip !== null && chip !== undefined, 'CONTROL: the sheet has a file chip');
+  ok(chip && chip.hidden === true, 'it is hidden before a file is chosen');
+
+  const fileInput = form.querySelector('input[type=file]');
+  fileInput.files = [{ name: 'رام الله ١٩٦٧.jpg', size: 2048, type: 'image/jpeg' }];
+  fileInput.fire('change');
+  await settle();
+
+  ok(chip.hidden === false, 'choosing a file shows it — the sheet said NOTHING before this');
+  ok(textOf(chip).includes('رام الله ١٩٦٧.jpg'),
+     `...naming the file that was chosen ("${textOf(chip)}")`);
+  ok(chip.querySelector('bdi') !== null,
+     '...through <bdi>, because a filename is a user string in a mixed-direction line (§6)');
+  ok(textOf(chip.querySelector('.filechip__mark')) === '',
+     'and NO tick yet — the file is still on the member\'s own device');
+
+  form.querySelector('input[type=text]').value = 'عنوان';
+  form.querySelector('textarea.input').value = 'قصة';
+  form.querySelector('input[type=text][required]');
+  const prov = form.querySelectorAll('input[type=text]').filter((n) => n.required);
+  prov.forEach((n) => { if (!n.value) n.value = 'ألبوم العائلة'; });
+  form.querySelector('input[type=checkbox]').checked = true;
+  form.fire('submit');
+  for (let i = 0; i < 8; i++) await settle();
+
+  ok(/filechip--sending/.test(chip.className),
+     `mid-upload the chip says so (${chip.className})`);
+  ok(textOf(chip.querySelector('.filechip__mark')) === '',
+     '...still with no tick, because the bytes have not landed');
+
+  advance();
+  for (let i = 0; i < 8; i++) await settle();
+
+  ok(/filechip--done/.test(chip.className),
+     `once the bytes reach quarantine the chip changes state (${chip.className})`);
+  ok(textOf(chip.querySelector('.filechip__mark')) === '✓',
+     'THE signal Part 3 asked for: a tick, only once it is true');
+  ok(textOf(chip).includes(win.I18N.t('share.fileDone')),
+     `...and says what happened in words too ("${win.I18N.t('share.fileDone')}")`);
+}
+
 console.log(`\n1..${passed + failed}`);
 if (failed) {
   console.error(`\n${failed} assertion(s) failed.`);
