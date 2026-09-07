@@ -146,7 +146,140 @@ function readVars(path: string): Record<string, string> {
    never has a live credential in the process at all. A self-test that has to be handed the
    keys is a self-test people stop running. */
 const sourceVars = () => readVars("supabase/functions/.dev.vars");
-const destVars = () => ({ ...readVars("supabase/functions/.backup.vars"), ...Deno.env.toObject() });
+
+/**
+ * Where the passphrase is meant to live, and it is OUTSIDE this repository.
+ *
+ * `.backup.vars` is git-ignored and that is not the point. The passphrase must not sit in a
+ * working tree at all: a repository gets cloned to a second machine, copied into a scratch
+ * directory for a restore rehearsal, and — the case that actually happened — read aloud into
+ * a session transcript by a tool that was only trying to be helpful about why a run failed.
+ * None of those are commits, and `.gitignore` stops none of them.
+ *
+ *   Windows   %APPDATA%\rma-backup\backup.vars
+ *   POSIX     $XDG_CONFIG_HOME/rma-backup/backup.vars, else ~/.config/rma-backup/backup.vars
+ *
+ * Same KEY=VALUE shape as .dev.vars. Amro creates it by hand, once, on his own machine.
+ *
+ * Returns "" when the home/APPDATA lookup is not permitted, which is the `--selftest` case:
+ * it runs with no --allow-env and must not fail for asking.
+ */
+export function userConfigPath(
+  env: (k: string) => string | undefined = (k) => {
+    try { return Deno.env.get(k); } catch { return undefined; }
+  },
+  platform: string = Deno.build.os,
+): string {
+  if (platform === "windows") {
+    const base = env("APPDATA");
+    return base ? `${base}\\rma-backup\\backup.vars` : "";
+  }
+  const xdg = env("XDG_CONFIG_HOME");
+  if (xdg) return `${xdg}/rma-backup/backup.vars`;
+  const home = env("HOME");
+  return home ? `${home}/.config/rma-backup/backup.vars` : "";
+}
+
+/* Order is precedence, lowest first. The out-of-repo file beats the in-repo one so that a
+   stale `.backup.vars` somebody left behind cannot shadow the real credential, and the
+   environment beats both so a one-off run can still override without editing a file. */
+const destVars = () => {
+  const outside = userConfigPath();
+  return {
+    ...readVars("supabase/functions/.backup.vars"),
+    ...(outside ? readVars(outside) : {}),
+    ...Deno.env.toObject(),
+  };
+};
+
+/**
+ * Why a `--to-dir` destination may not be written to, on encryption grounds.
+ *
+ * ── Why this exists at all ───────────────────────────────────
+ *
+ * On 7 Sep 2026 a restore rehearsal wrote six encrypted dumps to `C:\rma-backups` on a
+ * machine with no disk encryption, with the passphrase in a scratch directory beside them.
+ * The dumps are AES-256-GCM, so this was not a disclosure — but "the bytes were encrypted"
+ * is the argument that makes the next one a disclosure, because it is equally true of a
+ * destination whose passphrase is sitting two directories away. §7 governs: the dumps carry
+ * every member's email address.
+ *
+ * ── Why the operator asserts it rather than the tool detecting it ──
+ *
+ * There is no reliable unprivileged way to ask Windows whether an arbitrary path sits on an
+ * encrypted volume: `Get-BitLockerVolume` and the `Win32_EncryptableVolume` CIM class both
+ * answer Access denied without elevation, and a scheduled task that needs administrator
+ * rights only to check a flag is a worse trade than an explicit affirmation. So Amro states
+ * it once, in the same out-of-repo file that holds the passphrase, and the tool refuses
+ * without it.
+ *
+ * `bootProtected` is the one thing that CAN be read unprivileged — the BitLocker boot status
+ * in the registry — and it is used only to catch a CONTRADICTION: an affirmation that the
+ * destination is encrypted, on a path that lives on the system drive, on a machine whose
+ * boot volume is demonstrably not protected. That combination is the 7 Sep mistake exactly,
+ * and it is the only case where a machine can prove the operator wrong. An external disk is
+ * outside what BootStatus describes, so a destination off the system drive is left to the
+ * affirmation alone rather than refused on evidence that does not apply to it.
+ *
+ * Pure, so the whole rule is testable without a disk or a registry.
+ */
+export function encryptionRefusals(opts: {
+  affirmed: boolean;
+  onSystemDrive: boolean;
+  bootProtected: boolean | null;
+}): string[] {
+  const out: string[] = [];
+  if (!opts.affirmed) {
+    out.push(
+      "BACKUP_DEST_ENCRYPTED is not set to `yes`. The dumps carry every member's email " +
+      "address (§7), and a passphrase-protected file on an unencrypted disk is one " +
+      "careless copy away from being the thing it was protecting against. Set it in the " +
+      "out-of-repo backup.vars once the destination really is on an encrypted volume.",
+    );
+  }
+  if (opts.affirmed && opts.onSystemDrive && opts.bootProtected === false) {
+    out.push(
+      "BACKUP_DEST_ENCRYPTED says `yes`, but this destination is on the SYSTEM drive and " +
+      "BitLocker reports the boot volume unprotected. One of the two is wrong, and this " +
+      "refuses rather than guessing which.",
+    );
+  }
+  return out;
+}
+
+/** Is `dir` on the same drive Windows booted from? Windows-only; false elsewhere. */
+export function onSystemDrive(dir: string, systemDrive: string | undefined, platform: string): boolean {
+  if (platform !== "windows" || !systemDrive) return false;
+  const d = dir.replace(/\//g, "\\").toUpperCase();
+  return d.startsWith(systemDrive.toUpperCase().replace(/\\$/, ""));
+}
+
+/**
+ * BitLocker's boot-volume status, read unprivileged from the registry.
+ *
+ * `BootStatus` is 1 when the boot volume is BitLocker-protected and 0 when it is not. It is
+ * readable without elevation, which is the entire reason this uses it rather than
+ * `manage-bde`. Returns null on any doubt — a probe that cannot read must not be taken as
+ * evidence of absence, which is the `unknown is not ok` rule the monitor already states.
+ */
+async function bootVolumeProtected(): Promise<boolean | null> {
+  if (Deno.build.os !== "windows") return null;
+  try {
+    const cmd = new Deno.Command("reg", {
+      args: ["query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\BitLockerStatus", "/v", "BootStatus"],
+      stdout: "piped",
+      stderr: "null",
+    });
+    const { code, stdout } = await cmd.output();
+    if (code !== 0) return null;
+    const text = new TextDecoder().decode(stdout);
+    const m = /BootStatus\s+REG_DWORD\s+0x([0-9a-fA-F]+)/.exec(text);
+    if (!m) return null;
+    return parseInt(m[1], 16) !== 0;
+  } catch {
+    return null;
+  }
+}
 
 /* ── Encryption ───────────────────────────────────────────────────────────── */
 
@@ -861,6 +994,48 @@ async function selftest() {
        "CONTROL: with no temp roots known, nothing is refused for being temporary");
   }
 
+  /* ── The encrypted-destination gate (8 Sep 2026) ─────────────
+     Written after a rehearsal put six dumps of member email addresses on an unencrypted
+     C:. The bytes were AES-256-GCM and that is precisely the argument that would have made
+     the next one a disclosure. */
+  {
+    const enc = (affirmed: boolean, onSystemDrive: boolean, bootProtected: boolean | null) =>
+      encryptionRefusals({ affirmed, onSystemDrive, bootProtected });
+
+    ok(enc(false, false, null).length === 1,
+       "no BACKUP_DEST_ENCRYPTED is a refusal — the affirmation is required, not assumed");
+    ok(enc(true, false, null).length === 0,
+       "CONTROL: an affirmed destination off the system drive is accepted — the gate is not a wall");
+    ok(enc(true, true, true).length === 0,
+       "CONTROL: affirmed, on the system drive, and BitLocker agrees — accepted");
+    ok(enc(true, true, false).length === 1,
+       "affirmed but the boot volume is demonstrably unprotected and the path is on it — refused");
+    ok(enc(true, true, null).length === 0,
+       "an UNREADABLE BitLocker status does not overrule the affirmation — a probe that could not look has not found anything");
+    ok(enc(false, true, false).length === 1,
+       "the two refusals do not double up: a missing affirmation is reported once");
+
+    // The system-drive test itself, because the contradiction check hangs off it.
+    ok(onSystemDrive("C:/rma-backups", "C:", "windows"), "C:/rma-backups is on the system drive");
+    ok(onSystemDrive("C:\\rma-backups", "C:", "windows"), "...in either slash direction");
+    ok(!onSystemDrive("E:/rma-backups", "C:", "windows"), "an external disk is not");
+    ok(!onSystemDrive("/mnt/backups", "C:", "linux"), "and the whole notion is Windows-only");
+    ok(!onSystemDrive("C:/rma", undefined, "windows"), "an unknown SystemDrive claims nothing");
+
+    // The passphrase's home is outside any working tree — the whole point of moving it.
+    const win = userConfigPath((k) => (k === "APPDATA" ? "C:\\Users\\x\\AppData\\Roaming" : undefined), "windows");
+    ok(win === "C:\\Users\\x\\AppData\\Roaming\\rma-backup\\backup.vars",
+       "on Windows the passphrase file lives under %APPDATA%, outside every repository");
+    const xdg = userConfigPath((k) => (k === "XDG_CONFIG_HOME" ? "/home/x/.config" : undefined), "linux");
+    ok(xdg === "/home/x/.config/rma-backup/backup.vars", "XDG_CONFIG_HOME is honoured");
+    const home = userConfigPath((k) => (k === "HOME" ? "/home/x" : undefined), "linux");
+    ok(home === "/home/x/.config/rma-backup/backup.vars", "...and ~/.config is the fallback");
+    ok(userConfigPath(() => undefined, "windows") === "",
+       "a denied environment yields no path rather than throwing — --selftest runs without --allow-env");
+    ok(!win.toLowerCase().includes("nostaligia") && !win.toLowerCase().includes("ramallah"),
+       "CONTROL: the path is not inside the project directory by construction");
+  }
+
   /* ── Taken-down masters are not archive damage (7 Sep 2026) ──
      §8 deletes the bytes and keeps the row. Six of the nine on the deployed system were
      being reported as "an object the DATABASE names and the BUCKET does not match", which
@@ -961,6 +1136,9 @@ if (!import.meta.main) {
   }
   if (!DRY && !passphrase) {
     console.error("backup: BACKUP_PASSPHRASE is not set. The dumps carry member email addresses and are not written in clear.");
+    console.error(`  It belongs OUTSIDE this repository, in ${userConfigPath() || "<user config dir>/rma-backup/backup.vars"}`);
+    console.error("  as BACKUP_PASSPHRASE=… — a git-ignored file in the working tree is still a file that gets");
+    console.error("  cloned, copied into a rehearsal directory, and read back into a transcript.");
     Deno.exit(1);
   }
   /* The different-account rule governs the R2 destination and only it — a `--to-dir` copy
@@ -976,6 +1154,28 @@ if (!import.meta.main) {
     if (no.length) {
       console.error("backup: refusing the --to-dir destination —");
       for (const r of no) console.error(`  ${r}`);
+      Deno.exit(1);
+    }
+  }
+
+  /* §7's disk, checked before anything is written rather than after. A dry run is exempt
+     because it writes nothing — the whole point of it is to rehearse the run on a machine
+     that is not yet the destination. */
+  if (!DRY && TO_DIR) {
+    const affirmed = (dst.BACKUP_DEST_ENCRYPTED ?? "").trim().toLowerCase() === "yes";
+    const sysDrive = (() => { try { return Deno.env.get("SystemDrive") ?? undefined; } catch { return undefined; } })();
+    const no = encryptionRefusals({
+      affirmed,
+      onSystemDrive: onSystemDrive(TO_DIR, sysDrive, Deno.build.os),
+      bootProtected: await bootVolumeProtected(),
+    });
+    if (no.length) {
+      console.error("backup: refusing to write member data to this destination —");
+      for (const r of no) console.error(`  ${r}`);
+      console.error(`\n  Both values live in ${userConfigPath() || "<user config dir>/rma-backup/backup.vars"}:`);
+      console.error("    BACKUP_PASSPHRASE=…");
+      console.error("    BACKUP_DEST_ENCRYPTED=yes");
+      console.error("  --dry-run exercises everything except the writes and needs neither.");
       Deno.exit(1);
     }
   }

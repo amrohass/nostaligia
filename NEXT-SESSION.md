@@ -87,18 +87,60 @@ Two defects, both in the verifier rather than the backup:
 his operational backup is still his to run. And **there is no D: drive on this machine**,
 which the runbook's `D:/rma-backups` assumes. §11 gate 3 stays discharged either way.
 
-### `/item/*` OG tags: the prerender is NOT broken, the route is missing
+### ~~`/item/*` OG tags~~ — DONE, and M3's last exit criterion with it
 
-Measured against the live domain:
+A shared link now carries its OG tags. Verified on the live domain, not on a preview:
+byte-identical to the R2 object, full og + twitter set, `og:image` fetchable (200,
+image/webp), and six preview crawlers — WhatsApp, facebookexternalhit, Twitterbot,
+TelegramBot, Slackbot, LinkedInBot — all get the complete page.
 
-```
-ramallahnostalgia.org/item/<id>/   200, ZERO og: tags   ← the SPA shell
-<r2>/item/<id>/index.html          200, FULL og: set    ← correct, with a real og:image
-```
+**It is a Pages Function, `functions/item/[[path]].js`, GENERATED from `config/site.json`.**
+CLAUDE.md §2 called this "a Cloudflare route, not a code change" because the production host
+did not exist; on Pages the route IS code. `_redirects` cannot do it — its 200 rewrites are
+same-project only.
 
-`og:url` already names `ramallahnostalgia.org`, so `SITE_ORIGIN` is right. **Do not rebuild
-the prerender step.** The gap is the Cloudflare route CLAUDE.md §2 has recorded since 21 Aug
-as "not yet provisionable" — and it is provisionable now. It is Amro's.
+Four things not to undo:
+
+1. **The function re-emits the security headers itself.** `site/_headers` is the static asset
+   server's file and does **not** apply to a Function's response. Without that block the one
+   HTML page most likely to be opened from an untrusted link is the one page with no CSP.
+2. **A 404 from the archive is answered 404, not fallen through** — §2's takedown answer, and
+   why the page is deleted rather than replaced with a tombstone. A 5xx or an unreachable
+   archive *does* fall through, because the SPA renders the item correctly for a person.
+3. **Every file under `functions/` is a route to Pages**, which is why the origin and headers
+   are inlined literals rather than a shared `_origins.js` import.
+4. **`functions/` at the repo root is not a hole in wrangler.toml's allowlist** — Pages
+   compiles it into a Worker, it is not in `pages_build_output_dir`, and its source is a 404.
+
+Hydration is confirmed in a real browser: all SPA globals present, 9318 chars rendered. The
+only console error is the **pre-existing, site-wide** Cloudflare beacon CSP block — identical
+on `/`, `/map` and `/events`, so it is not this route's doing.
+
+`scripts/frontend-item-route-test.mjs` (41 assertions, in CI) exists because the failure mode
+is silent: a Pages Function that does not MATCH keeps serving the SPA shell with a 200 and a
+page that looks right.
+
+### The backup destination is BLOCKED on Amro, and the block is deliberate
+
+**Do not work around this.** `backup.ts` now refuses to write member data unless
+`BACKUP_DEST_ENCRYPTED=yes`, and on this machine there is nowhere legitimate to put it:
+
+* **`D:` does not exist.** The only fixed volume is `C:` (465 GB). Every `D:/rma-backups` in
+  the runbook is aspirational.
+* **`C:` is not encrypted.** BitLocker `BootStatus=0`, no FVE policy, `BDESVC` stopped, no
+  third-party FDE installed. (`manage-bde` needs elevation, so this is three consistent
+  unprivileged signals rather than an authoritative read — they all agree.)
+* **No scheduled task is registered.** Nothing runs `backup.ts` weekly. The registration
+  command is in the runbook §4; it is deliberately not run by anything in the repo.
+* **CI is clean.** The only secret any workflow references is `SUPABASE_ACCESS_TOKEN`, and it
+  is `monitor.yml`'s (gate 5). No backup credential in CI, which is the point of a local
+  destination.
+
+**The passphrase moved out of the repository**, to `%APPDATA%\rma-backup\backup.vars`
+(POSIX: `~/.config/rma-backup/backup.vars`). `.backup.vars` still works and is still
+git-ignored, and git-ignoring was never the property that mattered: a tree gets cloned,
+copied into a rehearsal directory, and read back into a transcript. Never pass it on a
+command line.
 
 ### Two corrections to this file's own command list
 
@@ -269,8 +311,8 @@ against the deployed pipeline, not argued.
    node scripts/frontend-view-test.mjs     53    node scripts/monitor.mjs --selftest    19
    node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs  114.8/150 KiB
    node scripts/frontend-cors-test.mjs      6    node scripts/frontend-nav-test.mjs     80
-   node scripts/frontend-admin-test.mjs    16
-   deno test -A supabase/functions/publish/ 96   deno run … backup.ts --selftest        31
+   node scripts/frontend-admin-test.mjs    16    node scripts/frontend-item-route-test.mjs 41
+   deno test -A supabase/functions/publish/ 96   deno run … backup.ts --selftest        47
    deno test -A … request-upload/          25    deno run … restore-verify.ts --selftest 29
    deno test -A … resend-confirmation/     11
    ^^ the -A is REQUIRED: without it 7 publish tests fail on NotCapable (read access
