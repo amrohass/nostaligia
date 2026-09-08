@@ -136,6 +136,30 @@ page that looks right.
   is `monitor.yml`'s (gate 5). No backup credential in CI, which is the point of a local
   destination.
 
+**Amro's answer, 8 Sep evening: BitLocker on `C:` for now**, an encrypted external disk
+later. Two things follow.
+
+*The destination is now a CONFIG VALUE* (`b0a4094`). `BACKUP_DEST_DIR` in `backup.vars`,
+beside the passphrase — **no command in the runbook names a disk any more**, the scheduled
+task registers with no destination argument, and the later swap to the external disk is that
+one line and nothing else. `--to-dir` survives as a one-off override and now refuses when
+given no path rather than falling back to the configured destination. Runbook §7 lists what
+does *not* change with the disk; if a future session finds itself editing `backup.ts` for a
+destination, the config value has been bypassed somewhere and that is the bug.
+
+*BitLocker is NOT enabled, and enabling it is not a session's to run* — it needs elevation
+and produces a recovery key that must not reach a repo, a config file or a transcript.
+Runbook §8 is the procedure, including the one non-default choice that matters here:
+**"encrypt entire drive", not used-space-only**, because the 7 Sep dumps were deleted from
+`C:` and deleting a file does not clear its sectors. Re-measured 8 Sep evening: `BootStatus`
+0, FVE policy key absent, `BDESVC` Stopped/Manual. Setting `BACKUP_DEST_ENCRYPTED=yes` today
+does not help — with the destination on `C:` it trips the *contradiction* refusal instead,
+confirmed by running it. **Do not force it.**
+
+*Also still missing:* `backup.vars` exists in neither location. The 7–8 Sep runs used a
+session-generated passphrase; the operational one must be Amro's.
+
+
 **The passphrase moved out of the repository**, to `%APPDATA%\rma-backup\backup.vars`
 (POSIX: `~/.config/rma-backup/backup.vars`). `.backup.vars` still works and is still
 git-ignored, and git-ignoring was never the property that mattered: a tree gets cloned,
