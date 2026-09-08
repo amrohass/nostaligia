@@ -13,7 +13,7 @@ Governance decided by Amro, 7 Sep 2026. Nothing in this file may be changed with
 
 | | Decision (7 Sep 2026) | Changed from |
 |---|---|---|
-| **Where** | A **local encrypted disk** he holds. | Was "a second R2 bucket under a different Cloudflare account" (31 Aug). |
+| **Where** | A **local encrypted disk** he holds — the BitLocker-protected system disk for now, an encrypted external disk later (Amro, 8 Sep 2026). Set once as `BACKUP_DEST_DIR` in `backup.vars`; the later swap is that one line (§7). | Was "a second R2 bucket under a different Cloudflare account" (31 Aug). |
 | **Cadence** | **Weekly** full database + incremental `originals/`, plus **two snapshots pinned forever**: one pre-launch, one immediately after the seed import. | unchanged |
 | **Restore into** | A **local Docker** container. | unchanged in practice — §11 already ruled the local container sufficient. |
 
@@ -54,7 +54,7 @@ security decision that was flagged for Amro's ruling does not need to be taken.
 | | |
 |---|---|
 | **Docker Desktop RUNNING** | Non-negotiable, see §6. Four of the six dumps are `pg_dump` inside a container. |
-| **`backup.vars`, outside every repository** | Holds `BACKUP_PASSPHRASE` and `BACKUP_DEST_ENCRYPTED`. See below. |
+| **`backup.vars`, outside every repository** | Holds all three values: `BACKUP_DEST_DIR`, `BACKUP_PASSPHRASE`, `BACKUP_DEST_ENCRYPTED`. See below. |
 | **A destination outside the repo and outside temp** | `backup.ts` refuses both by name — encrypted member data must not land in the working tree or a scratch directory that gets swept. |
 | **A destination on an ENCRYPTED volume** | Refused without an explicit affirmation. See below. |
 
@@ -68,6 +68,7 @@ POSIX     $XDG_CONFIG_HOME/rma-backup/backup.vars   (else ~/.config/rma-backup/b
 `KEY=VALUE`, one per line, same shape as `.dev.vars`:
 
 ```
+BACKUP_DEST_DIR=…
 BACKUP_PASSPHRASE=…
 BACKUP_DEST_ENCRYPTED=yes
 ```
@@ -86,6 +87,30 @@ an environment variable without editing anything.
 **Never pass the passphrase on a command line.** It goes into shell history and into any
 transcript of the session. The file is the mechanism; the environment override exists for
 automation that already holds the value.
+
+### The destination is a CONFIG VALUE, and that is the whole point
+
+`BACKUP_DEST_DIR` in the file above is where backups go. Amro's decision, 8 Sep 2026: **the
+destination is configuration, not a path typed into a command.** No script, no scheduled
+task and no command in this file names a disk.
+
+It is worth being explicit about why, because the alternative looks harmless. The path used
+to be spelled out in four places — the weekly command, the scheduled-task registration, and
+both pinned snapshots — and a disk swap that has to find all four is a swap that
+half-happens. The two pinned snapshots are the ones nobody runs weekly, so they are exactly
+the ones that would go on naming a disk that is no longer attached, and they are the two
+copies that are **never pruned**. A stale path there is not a stale command; it is the
+permanent record written to nowhere.
+
+`--to-dir <path>` still exists and still overrides the config, for a one-off rehearsal
+against some other directory. What it will **not** do is fall back: `--to-dir` with nothing
+after it, or with another flag after it, is refused rather than quietly answered with the
+configured destination. A run that writes member data somewhere other than where the
+operator just asked is the wrong kind of helpful.
+
+`restore-verify.ts` is not a second copy of this. Its `--backup` takes a full path down to
+one dated snapshot, chosen per restore — an argument about *which copy is being proved*,
+not a second destination setting.
 
 ### The destination must be on an encrypted volume, and the tool asks
 
@@ -119,35 +144,45 @@ day of the backup, not the day of the restore.
 
 ## 4. The commands
 
-> **STATUS, 8 Sep 2026 — the weekly run cannot be scheduled yet, and this is Amro's to
-> resolve.** Measured on his machine, not assumed:
+> **STATUS, 8 Sep 2026 (second entry) — the destination is DECIDED; the volume is not yet
+> encrypted, and that step is Amro's to run.** The decision, relayed: **BitLocker on `C:`
+> for now**, moving to an encrypted external disk later — a one-line change, see §7.
 >
-> * **`D:` does not exist.** The only fixed volume is `C:` (465 GB NTFS). Every command
->   below naming `D:/rma-backups` is aspirational until a disk is attached.
-> * **`C:` is not encrypted.** BitLocker `BootStatus` is `0`, no BitLocker policy is
->   configured, the `BDESVC` service is stopped, and no third-party full-disk-encryption
->   product is installed. (`manage-bde` and `Get-BitLockerVolume` both need elevation and
->   answer *Access denied*, so this is inference from three consistent unprivileged signals
->   rather than an authoritative read — but they all point the same way.)
+> Measured on the machine this evening, not assumed:
+>
+> * **`C:` is still unencrypted.** BitLocker `BootStatus` is `0`, the
+>   `HKLM\SOFTWARE\Policies\Microsoft\FVE` policy key is absent, and `BDESVC` is
+>   `Stopped/Manual`. Three consistent unprivileged signals; `manage-bde` and
+>   `Get-BitLockerVolume` still answer *Access denied* without elevation, so this is not an
+>   authoritative read — but nothing disagrees with it.
+> * **`D:` still does not exist.** The only fixed volume is `C:` (465 GB NTFS).
+> * **`backup.vars` does not exist yet**, in either location. The 7–8 Sep runs used a
+>   session-generated passphrase: that proved the mechanism and is not an operational
+>   backup. The passphrase in the real file must be one only Amro holds.
 > * **No scheduled task is registered.** Nothing on this machine runs `backup.ts` weekly.
 > * **CI is clean and should stay that way.** The only secret any workflow references is
 >   `SUPABASE_ACCESS_TOKEN`, and it belongs to `monitor.yml` (§11 gate 5). No backup
 >   credential exists in CI, which is the whole reason the destination is local.
 >
-> So there is no acceptable destination today. `--dry-run` exercises everything except the
-> writes and needs neither value; a real run refuses. **The decision is which encrypted
-> volume this writes to** — an encrypted external disk, or BitLocker enabled on `C:` — and
-> it is not one to work around.
+> So a real run still refuses — and note *which* refusal, because it is the stronger one.
+> Setting `BACKUP_DEST_ENCRYPTED=yes` today unblocks nothing: with the destination on `C:`
+> it produces the **contradiction** refusal instead — *affirmed as encrypted, on the system
+> drive, boot volume demonstrably unprotected*. Confirmed by running it, 8 Sep. **That is
+> the check working, and it is not to be forced.** `BACKUP_DEST_ENCRYPTED=yes` does not go
+> into the file until BitLocker actually reports protection on (§8).
+>
+> `--dry-run` exercises everything except the writes and needs none of the three values.
 
-Weekly, once an encrypted destination exists:
+Weekly, once `BACKUP_DEST_DIR` names a path on an encrypted volume:
 
 ```
 deno run --allow-run --allow-net --allow-env --allow-read --allow-write \
-  scripts/backup.ts --to-dir D:/rma-backups
+  scripts/backup.ts
 ```
 
-No `BACKUP_PASSPHRASE=` prefix: it comes from `backup.vars` (§3), because a passphrase on a
-command line is a passphrase in shell history.
+**No destination on the command line, and no `BACKUP_PASSPHRASE=` prefix.** Both come from
+`backup.vars` (§3) — a passphrase on a command line is a passphrase in shell history, and a
+destination on a command line is a destination in four places.
 
 ### Registering the weekly task
 
@@ -157,16 +192,21 @@ from an ordinary (non-elevated) PowerShell:
 
 ```powershell
 $repo = "C:\Users\DELL\Desktop\amro\HK TECH\RAMALLAH MEMORY"
-$args = '--allow-run --allow-net --allow-env --allow-read --allow-write ' +
-        '"' + $repo + '\scripts\backup.ts" --to-dir D:\rma-backups'
-$action  = New-ScheduledTaskAction -Execute "deno.exe" -Argument $args -WorkingDirectory $repo
+$taskArgs = '--allow-run --allow-net --allow-env --allow-read --allow-write ' +
+            '"' + $repo + '\scripts\backup.ts"'
+$action  = New-ScheduledTaskAction -Execute "deno.exe" -Argument $taskArgs -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 3am
 Register-ScheduledTask -TaskName "RMA weekly backup" -Action $action -Trigger $trigger `
   -Description "Ramallah Memory Atlas — weekly DB dump + originals sync (docs/backup-runbook.md)"
 ```
 
+(`$taskArgs`, not `$args`: `$args` is a PowerShell automatic variable, and assigning to it
+is the kind of thing that works at a prompt and behaves differently the day this block is
+pasted inside a function.)
+
 Then confirm it is really there, because a task that failed to register looks identical to
-one that was never attempted:
+one that was never attempted — and because a registration command's exit status is not the
+same claim as a registered task:
 
 ```powershell
 Get-ScheduledTask -TaskName "RMA weekly backup" | Select-Object TaskName,State
@@ -175,9 +215,13 @@ Get-ScheduledTask -TaskName "RMA weekly backup" | Select-Object TaskName,State
 The two permanent snapshots — **these are never pruned**:
 
 ```
-… scripts/backup.ts --to-dir D:/rma-backups --pin pre-launch
-… scripts/backup.ts --to-dir D:/rma-backups --pin post-seed-import
+… scripts/backup.ts --pin pre-launch
+… scripts/backup.ts --pin post-seed-import
 ```
+
+These two needed it most. They are run once each, years apart, and they are **never
+pruned** — a stale path there is not a stale command, it is the permanent copy written to a
+disk that is no longer attached.
 
 Rehearse anything with `--dry-run` first; it writes nothing and still reports every number.
 
@@ -187,9 +231,13 @@ this file refuses with a usage message rather than doing anything:
 
 ```
 deno run -A scripts/restore-verify.ts \
-  --backup D:/rma-backups/db/<stamp> \
+  --backup <BACKUP_DEST_DIR>/db/<stamp> \
   --into-container supabase_db_<ref>
 ```
+
+This one names a disk, and it is not a second copy of the destination config: it points at
+**one dated snapshot**, a choice made per restore. There is nothing for a config value to
+say about which copy is being proved.
 
 It **wipes the target and asserts it empty** before grading, so the container must be a
 scratch one. The production ref is refused by name.
@@ -277,3 +325,118 @@ why "the CLI needs Docker" is too coarse a statement to debug from.
 **This does not reopen §11 gate 3.** The gate was discharged against a real restore on
 1 Sep. What is blocked is the ongoing cadence, which is a launch-adjacent habit rather than
 a launch gate.
+
+---
+
+## 7. When the encrypted external disk arrives — the one line that changes
+
+**One line, in one file, and nothing else:**
+
+```
+%APPDATA%\rma-backup\backup.vars      BACKUP_DEST_DIR=E:\rma-backups
+```
+
+That is the entire swap. Specifically, none of the following need touching, and if a future
+session finds itself editing one of them for a disk change, the config value has been
+bypassed somewhere and that is the bug:
+
+| | |
+|---|---|
+| `scripts/backup.ts` | No path in it. `resolveDestDir` reads `BACKUP_DEST_DIR`. |
+| `scripts/restore-verify.ts` | Never knew the destination; takes one snapshot path per restore. |
+| The scheduled task | Registered with **no destination argument**. It picks up the new value on its next run. |
+| The weekly and pinned commands in §4 | None of them names a disk. |
+| CI | Runs `--selftest` only. It has never had a destination or a credential. |
+
+Two things that **do** change with the disk, and neither is this file's to guess:
+
+1. **The old destination is not migrated.** The dumps already on `C:` stay where they are
+   until somebody moves or deletes them. They are AES-256-GCM and safe to move as opaque
+   bytes (§1), so copying the directory across is the whole migration — but nothing does it
+   automatically, and a `db/` tree left behind on `C:` is member data still sitting there.
+2. **`BACKUP_DEST_ENCRYPTED=yes` still has to be true of the new disk.** It is an
+   affirmation about a *volume*, and the volume changed. `backup.ts` cannot catch this one:
+   its only machine-checkable case is the system drive (§3), and an external disk is outside
+   what BitLocker's boot status describes. Re-affirming is a decision, not a formality.
+
+---
+
+## 8. Enabling BitLocker on `C:` — Amro's to run, and why it cannot be automated
+
+Amro's decision, 8 Sep 2026: **BitLocker on `C:` for now.** This section is the procedure,
+kept here so it is not re-derived.
+
+**It is not scriptable from a session, and the reason is the recovery key.** Enabling
+BitLocker needs elevation, and it produces a 48-digit recovery password that is the last
+thing standing between a dead TPM and a lost disk. That key must never enter this
+repository, `backup.vars`, a terminal scrollback that gets captured, or a session
+transcript. So the enabling is done by hand, by the person who will store the key.
+
+### The route to use: the wizard
+
+The wizard is preferred over `manage-bde -on` for one reason — it has an explicit *back up
+your recovery key* step offering a file or a printout, whereas `manage-bde -on C:
+-RecoveryPassword` prints the key to the console, which is exactly the place it should not
+be.
+
+1. Start → search **"Manage BitLocker"** (Control Panel → System and Security → BitLocker
+   Drive Encryption).
+2. Under **Operating system drive (C:)** → **Turn on BitLocker**.
+3. **Back up the recovery key.** Choose *Save to a file* (onto a USB stick or another
+   machine — Windows will refuse to save it onto `C:` itself) or *Print*. Then put it where
+   the other credentials live. Not in this repository, not in `backup.vars`, not in a chat.
+4. **Choose "Encrypt entire drive", not "used disk space only."** This is the one place the
+   default is wrong for this machine: `C:\rma-backups` held six unencrypted dumps of member
+   data on 7 Sep and was deleted. Deleting a file does not clear its sectors, and
+   used-space-only leaves exactly those sectors unencrypted.
+5. Encryption mode: **New encryption mode (XTS-AES)** — this is a fixed drive, not a
+   removable one.
+6. Run the BitLocker **system check** when offered, and restart.
+
+Encryption then continues in the background for a while. **Protection turns on at the
+restart, not at 100%** — but let it finish before the first real backup regardless, because
+a conversion in progress is a machine doing heavy disk work and the backup writes GBs.
+
+### If the wizard says there is no TPM
+
+Then it needs a policy change first — `gpedit.msc` → Computer Configuration →
+Administrative Templates → Windows Components → BitLocker Drive Encryption → Operating
+System Drives → **Require additional authentication at startup** → Enabled → tick *Allow
+BitLocker without a compatible TPM* — and every boot will then ask for a password or a USB
+key.
+
+**Say so before doing that, because it interacts badly with §4's scheduled task.** A machine
+that stops at a BitLocker prompt on boot is a machine where an unattended restart means the
+weekly backup silently does not run. TPM state could not be read from this session
+(`Get-Tpm` returns blanks and the `Win32_Tpm` CIM class answers *Access denied* without
+elevation), so it is unknown rather than absent — check it with `tpm.msc`, or elevated
+`Get-Tpm`.
+
+### Confirming it worked
+
+Unprivileged, and these are the three this project actually checks:
+
+```powershell
+(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\BitLockerStatus' -Name BootStatus).BootStatus  # want 1
+Get-Item 'HKLM:\SOFTWARE\Policies\Microsoft\FVE' -ErrorAction SilentlyContinue                            # may stay absent
+(Get-Service BDESVC).Status
+```
+
+`BootStatus = 1` is the one that matters: it is what `backup.ts` reads, unprivileged, to
+refuse the contradiction described in §3. The FVE policy key stays absent when BitLocker is
+turned on through the wizard rather than by policy — **its absence is not evidence against
+encryption**, which is why the three signals were only ever read together and never
+individually.
+
+Authoritative, from an **elevated** prompt:
+
+```
+manage-bde -status C:
+```
+
+Want `Conversion Status: Fully Encrypted` and `Protection Status: Protection On`. That
+output is safe to share: it names the *types* of key protector (TPM, Numerical Password),
+never their values.
+
+**Only then** does `BACKUP_DEST_ENCRYPTED=yes` go into `backup.vars`. If the signals
+disagree with each other, stop — do not set it to get past a refusal.

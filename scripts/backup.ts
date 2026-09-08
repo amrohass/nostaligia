@@ -107,7 +107,9 @@ const DRY = has("--dry-run");
 const PIN = value("--pin");
 
 /**
- * `--to-dir <path>` — the SELF-HELD copy, on a disk rather than in the second account.
+ * The SELF-HELD copy, on a disk rather than in the second account. Configured as
+ * `BACKUP_DEST_DIR` in the out-of-repo `backup.vars`; `--to-dir <path>` overrides it for a
+ * single run. See resolveDestDir just below for why it is a config value.
  *
  * THIS IS NOW THE STANDING DESTINATION (Amro, 7 Sep 2026), replacing the second-R2-account
  * decision of 31 Aug. It was built as a fallback while that account went unprovisioned; it
@@ -121,7 +123,52 @@ const PIN = value("--pin");
  * The bytes are encrypted exactly as the R2 path encrypts them, read back off the disk and
  * DECRYPTED before the run reports success — same passphrase, same proof, same refusals.
  */
-const TO_DIR = value("--to-dir");
+const TO_DIR_FLAG_PRESENT = has("--to-dir");
+const TO_DIR_FLAG = value("--to-dir");
+
+/**
+ * Where the destination directory comes from, in ONE place.
+ *
+ * Amro, 8 Sep 2026: **the destination is a config value, not a path in a command.** It lives
+ * beside the passphrase and the encryption affirmation in the out-of-repo `backup.vars`, as
+ * `BACKUP_DEST_DIR`. The day the encrypted external disk arrives, that one line is the whole
+ * change — no edit to this file, no re-registered scheduled task, no runbook command to
+ * chase.
+ *
+ * It is written down because the path was previously spelled out in four separate places —
+ * the weekly command, the scheduled-task registration, and both pinned snapshots — and a
+ * disk swap that has to find all four is a swap that half-happens. The pinned snapshots are
+ * the ones nobody runs weekly, so they are exactly the ones that would go on naming a disk
+ * that is no longer there, and they are the two copies that are never pruned.
+ *
+ * `--to-dir` survives as a ONE-OFF override, for a rehearsal against some other path. It
+ * beats the config file, because someone typing a path means it.
+ *
+ * The one thing refused outright is `--to-dir` with nothing after it. Falling back to the
+ * configured destination there is the worst answer available: the operator asked for
+ * somewhere else, and the tool would write member data where they did not ask, quietly.
+ *
+ * Pure, so the whole precedence is testable without a disk or a config file.
+ */
+export function resolveDestDir(
+  flagPresent: boolean,
+  flagValue: string | undefined,
+  configured: string | undefined,
+): { dir?: string; error?: string } {
+  if (flagPresent) {
+    const v = (flagValue ?? "").trim();
+    if (!v || v.startsWith("--")) {
+      return {
+        error: "--to-dir was given without a path. Refusing rather than falling back to the " +
+          "configured BACKUP_DEST_DIR — a run that writes member data somewhere other than " +
+          "where you just asked for is the wrong kind of helpful.",
+      };
+    }
+    return { dir: v };
+  }
+  const c = (configured ?? "").trim();
+  return c ? { dir: c } : {};
+}
 
 /* ── Env, read from a file rather than exported ───────────────────────────── */
 
@@ -492,7 +539,8 @@ function dirSink(dir: string): Sink {
 }
 
 /**
- * Reasons a `--to-dir` path must not be written to. Empty means it may be.
+ * Reasons a destination directory must not be written to. Empty means it may be. Reached
+ * from `BACKUP_DEST_DIR` or from `--to-dir`, which is why nothing here names either.
  *
  * The dumps carry member email addresses (§7). They are encrypted, but a directory inside
  * the working tree is one `git add -A` away from being committed, and the whole point of §6
@@ -504,9 +552,9 @@ export function refusesDir(dir: string, repoRoot: string, tempRoots: string[] = 
   const d = norm(dir);
   const r = norm(repoRoot);
   const out: string[] = [];
-  if (!d) out.push("--to-dir was given an empty path");
+  if (!d) out.push("the destination is an empty path");
   if (d && (d === r || d.startsWith(`${r}/`))) {
-    out.push(`--to-dir is inside the repository (${repoRoot}) — encrypted member data must not sit in the working tree`);
+    out.push(`the destination is inside the repository (${repoRoot}) — encrypted member data must not sit in the working tree`);
   }
   /* And a destination inside a TRANSIENT directory, added 1 Sep 2026 after the second
      incident of the same shape.
@@ -525,7 +573,7 @@ export function refusesDir(dir: string, repoRoot: string, tempRoots: string[] = 
     const tr = norm(t);
     if (!tr || !d) continue;
     if (d === tr || d.startsWith(`${tr}/`)) {
-      out.push(`--to-dir is inside a temporary directory (${t}) — originals are written in the CLEAR (see the header), and a scratch path is swept by something else, not held by you`);
+      out.push(`the destination is inside a temporary directory (${t}) — originals are written in the CLEAR (see the header), and a scratch path is swept by something else, not held by you`);
     }
   }
   return out;
@@ -1036,6 +1084,36 @@ async function selftest() {
        "CONTROL: the path is not inside the project directory by construction");
   }
 
+  /* ── Where the destination comes from (8 Sep 2026) ───────────
+     Amro's decision: the destination is a CONFIG VALUE. The point of the whole change is
+     that swapping to the encrypted external disk is one line in backup.vars, so what these
+     assert is the precedence — including the case that would make the swap dangerous rather
+     than merely wrong, a `--to-dir` typed without a path silently answered with whatever the
+     config still says. */
+  {
+    const r = (present: boolean, flag: string | undefined, cfg: string | undefined) =>
+      resolveDestDir(present, flag, cfg);
+
+    ok(r(false, undefined, "E:/rma-backups").dir === "E:/rma-backups",
+       "the destination comes from BACKUP_DEST_DIR with no flag on the command line at all");
+    ok(r(true, "F:/rehearsal", "E:/rma-backups").dir === "F:/rehearsal",
+       "--to-dir overrides the config for a one-off run — someone typing a path means it");
+    ok(r(false, undefined, undefined).dir === undefined,
+       "CONTROL: neither set resolves to no directory, so the R2 path is still reachable");
+    ok(r(false, undefined, "   ").dir === undefined,
+       "an empty `BACKUP_DEST_DIR=` line is not a destination whose name is three spaces");
+    ok(r(false, undefined, "  E:/rma-backups  ").dir === "E:/rma-backups",
+       "...and a value with trailing whitespace from the file is trimmed, not used as typed");
+    ok(!!r(true, undefined, "E:/rma-backups").error,
+       "--to-dir with nothing after it is REFUSED, not answered with the configured destination");
+    ok(r(true, undefined, "E:/rma-backups").dir === undefined,
+       "...and that refusal yields no directory at all, so nothing is written anywhere");
+    ok(!!r(true, "--pin", "E:/rma-backups").error,
+       "a following FLAG is not taken for a path: `--to-dir --pin pre-launch` refuses");
+    ok(r(false, "not-read-because-absent", "E:/rma-backups").dir === "E:/rma-backups",
+       "CONTROL: presence is what is read — a stray value with no flag does not win");
+  }
+
   /* ── Taken-down masters are not archive damage (7 Sep 2026) ──
      §8 deletes the bytes and keeps the row. Six of the nine on the deployed system were
      being reported as "an object the DATABASE names and the BUCKET does not match", which
@@ -1119,18 +1197,31 @@ if (!import.meta.main) {
     prefix: dst.BACKUP_R2_BUCKET_PREFIX ?? "",
   };
 
+  /* The destination directory: BACKUP_DEST_DIR from the same out-of-repo file as the
+     passphrase, overridable once with `--to-dir`. See resolveDestDir for why it is a config
+     value rather than a path in the command. */
+  const resolved = resolveDestDir(TO_DIR_FLAG_PRESENT, TO_DIR_FLAG, dst.BACKUP_DEST_DIR);
+  if (resolved.error) {
+    console.error(`backup: ${resolved.error}`);
+    Deno.exit(1);
+  }
+  const toDir = resolved.dir;
+
   if (missing.length) {
     console.error(`backup: ${missing.join(", ")} missing from supabase/functions/.dev.vars — the SOURCE cannot be read.`);
     Deno.exit(1);
   }
 
-  const destReady = TO_DIR || (destination.accountId && destination.accessKeyId && destination.secretAccessKey && destination.bucket);
+  const destReady = toDir || (destination.accountId && destination.accessKeyId && destination.secretAccessKey && destination.bucket);
   if (!DRY && !destReady) {
     console.error("backup: the destination is not configured. Put these in supabase/functions/.backup.vars (git-ignored) or the environment:");
     console.error("  BACKUP_R2_ACCOUNT_ID, BACKUP_R2_ACCESS_KEY_ID, BACKUP_R2_SECRET_ACCESS_KEY, BACKUP_R2_BUCKET, BACKUP_PASSPHRASE");
     console.error("  The account MUST be a different Cloudflare account from the archive's — that is the decision this implements,");
     console.error("  and it is checked rather than trusted.");
-    console.error("  Or --to-dir <path> for the self-held copy on a disk you hold (§11 gate 3), which needs no account.");
+    console.error("  Or, for the self-held copy on a disk you hold (§11 gate 3), which needs no account, set the");
+    console.error(`  destination once in ${userConfigPath() || "<user config dir>/rma-backup/backup.vars"}:`);
+    console.error("    BACKUP_DEST_DIR=<path on the encrypted volume>");
+    console.error("  `--to-dir <path>` still overrides it for a one-off run.");
     console.error("\nRun with --dry-run to exercise everything except the destination writes.");
     Deno.exit(1);
   }
@@ -1144,15 +1235,15 @@ if (!import.meta.main) {
   /* The different-account rule governs the R2 destination and only it — a `--to-dir` copy
      has no account to compare, and pretending otherwise would either block it or quietly
      weaken the check for everybody. */
-  if (!DRY && !TO_DIR && sameAccount(source, destination)) {
+  if (!DRY && !toDir && sameAccount(source, destination)) {
     console.error("backup: the destination R2 account id is the SAME as the archive's. Refusing.");
     console.error("  A backup inside the blast radius of the thing it backs up is not a backup.");
     Deno.exit(1);
   }
-  if (TO_DIR) {
-    const no = refusesDir(TO_DIR, Deno.cwd(), tempRoots());
+  if (toDir) {
+    const no = refusesDir(toDir, Deno.cwd(), tempRoots());
     if (no.length) {
-      console.error("backup: refusing the --to-dir destination —");
+      console.error(`backup: refusing this destination (${TO_DIR_FLAG_PRESENT ? "--to-dir" : "BACKUP_DEST_DIR"}) —`);
       for (const r of no) console.error(`  ${r}`);
       Deno.exit(1);
     }
@@ -1161,18 +1252,19 @@ if (!import.meta.main) {
   /* §7's disk, checked before anything is written rather than after. A dry run is exempt
      because it writes nothing — the whole point of it is to rehearse the run on a machine
      that is not yet the destination. */
-  if (!DRY && TO_DIR) {
+  if (!DRY && toDir) {
     const affirmed = (dst.BACKUP_DEST_ENCRYPTED ?? "").trim().toLowerCase() === "yes";
     const sysDrive = (() => { try { return Deno.env.get("SystemDrive") ?? undefined; } catch { return undefined; } })();
     const no = encryptionRefusals({
       affirmed,
-      onSystemDrive: onSystemDrive(TO_DIR, sysDrive, Deno.build.os),
+      onSystemDrive: onSystemDrive(toDir, sysDrive, Deno.build.os),
       bootProtected: await bootVolumeProtected(),
     });
     if (no.length) {
       console.error("backup: refusing to write member data to this destination —");
       for (const r of no) console.error(`  ${r}`);
-      console.error(`\n  Both values live in ${userConfigPath() || "<user config dir>/rma-backup/backup.vars"}:`);
+      console.error(`\n  All three live in ${userConfigPath() || "<user config dir>/rma-backup/backup.vars"}:`);
+      console.error("    BACKUP_DEST_DIR=<path on the encrypted volume>");
       console.error("    BACKUP_PASSPHRASE=…");
       console.error("    BACKUP_DEST_ENCRYPTED=yes");
       console.error("  --dry-run exercises everything except the writes and needs neither.");
@@ -1180,7 +1272,7 @@ if (!import.meta.main) {
     }
   }
 
-  const sink: Sink = TO_DIR ? dirSink(TO_DIR) : r2Sink(destination);
+  const sink: Sink = toDir ? dirSink(toDir) : r2Sink(destination);
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace(/-\d{3}Z$/, "Z");
   const root = PIN ? `pinned/${PIN}` : `db/${stamp}`;
