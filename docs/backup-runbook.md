@@ -173,6 +173,19 @@ day of the backup, not the day of the restore.
 >
 > `--dry-run` exercises everything except the writes and needs none of the three values.
 
+> **STATUS, 8 Sep 2026 (third entry) — BitLocker is CONFIGURED and the volume is not
+> encrypted yet.** Amro turned it on at 11:50–11:55. `BootStatus` still reads `0`, and that
+> is **correct rather than a failed check**: the BitLocker Management event log says
+> *"BitLocker encryption will occur for volume `C:` when the computer is restarted"*
+> (event 769). Nothing has been encrypted. **The restart is what starts it.**
+>
+> The other two signals moved — `BDESVC` is `Running`, the FVE policy key is `PRESENT` — so
+> for the first time the three disagree. Read together they are consistent and not
+> contradictory: two say *configured*, one says *not protected*, and the event log says the
+> third is the one describing the disk. **This is why they were never read individually.**
+>
+> Still no real backup, and still no scheduled task. Re-check after the restart (§8).
+
 Weekly, once `BACKUP_DEST_DIR` names a path on an encrypted volume:
 
 ```
@@ -397,6 +410,29 @@ Encryption then continues in the background for a while. **Protection turns on a
 restart, not at 100%** — but let it finish before the first real backup regardless, because
 a conversion in progress is a machine doing heavy disk work and the backup writes GBs.
 
+### There is no TPM on this machine — confirmed 8 Sep 2026
+
+Not hypothetical any more. `HKLM\SOFTWARE\Policies\Microsoft\FVE` carries
+`EnableBDEWithNoTPM = 1` and `UseAdvancedStartup = 1`, so the policy route below is the one
+that was taken, and **`C:` will ask for a startup password or USB key at every boot.**
+
+**This collides with §4's scheduled task, and the collision is not theoretical.** A machine
+that stops at a pre-boot prompt is a machine where an unattended restart — a Windows update
+at 3am, a power cut, a crash — leaves it sitting there, and the weekly backup silently does
+not run. Nothing reports that: the task's *next run time* passes, no process starts, and no
+alert exists for a backup that did not happen. §11 gate 5's monitor watches publish age, not
+this.
+
+Two honest options, and it is Amro's call:
+
+* **Accept it, and check.** The disk is the thing being protected; a pre-boot credential is
+  the price of no TPM. Then the weekly cadence needs a *did it actually run* check — the
+  manifest in `BACKUP_DEST_DIR` carries a timestamp per run, so "newest `db/` stamp is older
+  than 8 days" is the whole test.
+* **Get a TPM-backed machine for this** later, and treat the current one as interim.
+
+What must NOT happen is discovering it the month a restore is needed.
+
 ### If the wizard says there is no TPM
 
 Then it needs a policy change first — `gpedit.msc` → Computer Configuration →
@@ -438,5 +474,33 @@ Want `Conversion Status: Fully Encrypted` and `Protection Status: Protection On`
 output is safe to share: it names the *types* of key protector (TPM, Numerical Password),
 never their values.
 
+**`BootStatus` stays `0` between turning BitLocker on and the restart that begins
+conversion.** That is not the check failing; it is the boot volume genuinely not being
+protected yet. The way to tell *configured but not started* from *never configured* is the
+event log, which is readable **without elevation**:
+
+```powershell
+Get-WinEvent -LogName 'Microsoft-Windows-BitLocker/BitLocker Management' -MaxEvents 10 |
+  Where-Object Id -ne 4122 | Select-Object TimeCreated,Id,Message | Format-List
+```
+
+Event **769** = encryption will occur at the next restart. Event **775** = a key protector
+was created. Event **828** = the recovery key was escrowed (and *where* to). Event **4122**
+is routine DMA noise and appears daily; ignore it.
+
 **Only then** does `BACKUP_DEST_ENCRYPTED=yes` go into `backup.vars`. If the signals
 disagree with each other, stop — do not set it to get past a refusal.
+
+### Where the recovery key went, recorded because it is a threat-model fact
+
+On 8 Sep 2026 it was backed up **to Amro's Microsoft account** (event 828). That is a
+legitimate choice and in some ways the safer one — an escrowed key cannot be lost in a house
+move, which is the failure mode that actually destroys disks. It is written down because it
+changes who can reach the archive's data at rest: **the key that unlocks a disk holding every
+member's email address is recoverable by whoever can sign into that Microsoft account.** So
+that account's MFA is now part of this system's security posture, in the same way the
+Cloudflare account is.
+
+If a second, offline copy is wanted as well, `manage-bde -protectors -get C:` (elevated)
+prints the recovery password — and printing it to a console is exactly what §8 avoids, so do
+that at a physical machine and not through anything that records a transcript.
