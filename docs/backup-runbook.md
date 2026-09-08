@@ -173,18 +173,22 @@ day of the backup, not the day of the restore.
 >
 > `--dry-run` exercises everything except the writes and needs none of the three values.
 
-> **STATUS, 8 Sep 2026 (third entry) — BitLocker is CONFIGURED and the volume is not
-> encrypted yet.** Amro turned it on at 11:50–11:55. `BootStatus` still reads `0`, and that
-> is **correct rather than a failed check**: the BitLocker Management event log says
-> *"BitLocker encryption will occur for volume `C:` when the computer is restarted"*
-> (event 769). Nothing has been encrypted. **The restart is what starts it.**
+> **STATUS, 9 Sep 2026 — LIVE. This supersedes every status note above it.**
 >
-> The other two signals moved — `BDESVC` is `Running`, the FVE policy key is `PRESENT` — so
-> for the first time the three disagree. Read together they are consistent and not
-> contradictory: two say *configured*, one says *not protected*, and the event log says the
-> third is the one describing the disk. **This is why they were never read individually.**
+> `BootStatus` reads `1` after the restart, with `BDESVC` running and the FVE policy present:
+> **all three signals agree for the first time**, so `BACKUP_DEST_ENCRYPTED=yes` is set on
+> evidence rather than on assertion. The 8 Sep entry's `0` was the truthful answer about a
+> volume that had not been encrypted yet — the restart is what started it.
 >
-> Still no real backup, and still no scheduled task. Re-check after the restart (§8).
+> * **Destination:** `C:\Users\DELL\rma-backups`. See "Why the profile and not the drive root".
+> * **First real backup:** six of six dumps, four originals (11,094,944 bytes), no orphans,
+>   no completeness gaps. Every dump was then independently decrypted and every sha256 matched
+>   the manifest — so the generated passphrase is known to work rather than assumed to.
+> * **Weekly task:** registered, and **proven by running it**, which is the whole reason the
+>   next three sections exist.
+>
+> Two things remain Amro's: the recovery key is escrowed to a Microsoft account (§8), and the
+> pre-boot credential can silently skip a run.
 
 Weekly, once `BACKUP_DEST_DIR` names a path on an encrypted volume:
 
@@ -224,6 +228,107 @@ same claim as a registered task:
 ```powershell
 Get-ScheduledTask -TaskName "RMA weekly backup" | Select-Object TaskName,State
 ```
+
+### …and that confirmation is still not enough. RUN it. (9 Sep 2026)
+
+`State: Ready` was true of a task that could never have worked. Registered exactly as the
+block above says, the first run failed instantly with `LastTaskResult = 2147942402` —
+`0x80070002`, **file not found**: Task Scheduler does not resolve `deno.exe` from the user
+`PATH` the way an interactive shell does, even for a task running as that user. It would have
+failed at 3am every Sunday and said so nowhere.
+
+So the registered task differs from that block in two deliberate ways:
+
+* **`-Execute` is deno's ABSOLUTE path**, from `(Get-Command deno).Source`. This breaks if
+  deno is reinstalled into a differently-named WinGet package directory — so if the task ever
+  starts failing `0x80070002` again, that is the first thing to check.
+* **the action is a wrapper script**, `%LOCALAPPDATA%\rma-backup\run-backup.cmd`, which `cd`s
+  to the repo, runs the command, and appends stdout+stderr to
+  `%LOCALAPPDATA%\rma-backup\run.log`. An inline `cmd /c … > log` was tried first and logged
+  nothing at all, because Task Scheduler's argument quoting ate the redirection. The wrapper
+  exists so there is exactly one log and no quoting to get wrong. **It names no destination**
+  — that stays in `backup.vars`, so the one-line disk swap below is untouched.
+
+The check that actually settles it, and the only one that would have caught any of this:
+
+```powershell
+Start-ScheduledTask -TaskName "RMA weekly backup"
+# wait for State to leave Running, then:
+(Get-ScheduledTaskInfo -TaskName "RMA weekly backup").LastTaskResult   # 0, and nothing else
+Get-Content "$env:LOCALAPPDATA\rma-backup\run.log" -Tail 40
+```
+
+`LastTaskResult` of `267009` means still running and `267011` means never run. Neither is
+success, and both are easy to misread as one.
+
+### The task runs only while Amro is logged on
+
+`Register-ScheduledTask` without `-User`/`-LogonType` produced `LogonType=Interactive`: the
+task runs **only when DELL is logged on**. With the pre-boot credential (§8), that is the
+second of two independent ways a Sunday passes with no backup and no complaint. `-LogonType
+S4U` would lift it; left as registered because it changes how a job holding member data
+authenticates, and that is Amro's call.
+
+There is a third way to skip silently, and it is the prerequisite table's first row: **Docker
+Desktop must be running at 3am.** Four of the six dumps are `pg_dump` in a container, and on
+9 Sep the daemon was down and had to be restarted by hand before the first backup could run.
+A Sunday where Docker is not up produces the four-of-six failure exactly.
+
+**Nothing alerts on any of the three.** Each run writes a manifest under its own timestamp, so
+the whole check is: newest directory under `BACKUP_DEST_DIR\db\` older than 8 days means a
+backup did not happen.
+
+### Why the profile and not the drive root
+
+`C:\Users\DELL\rma-backups`, not `C:\rma-backups` — the path the 7 Sep rehearsal used and
+which no longer exists. Three reasons, all checked rather than assumed:
+
+* a directory in the profile inherits per-user ACLs. Verified: `SYSTEM`, `Administrators`,
+  `DELL` — no `Users`, no `Everyone`. These dumps carry every member's email address;
+* it is **not** a OneDrive Known-Folder-Move target. `Desktop`, `Documents` and `Pictures` all
+  still point at plain profile paths on this machine, but a destination under any of them
+  would be one settings change away from uploading member data to consumer OneDrive;
+* the scheduled task runs as DELL and reads the passphrase from `%APPDATA%`, so a destination
+  in the same profile is the one that stays reachable when the task's environment is not a
+  login shell.
+
+**Two directories under `db\` are debris from the failed task runs of 9 Sep** —
+`2026-09-08T21-44-45Z` and `2026-09-08T21-51-35Z`, four files each and no manifest. They are
+not restorable and nothing reads them; delete them when convenient.
+
+### The bug the task run found: `supabase db query` has three output shapes
+
+Written down because it invalidated every previous verification of this script, and nothing
+about it was visible from inside a session.
+
+`supabase db query` picks its output format by sniffing its environment — `--agent auto` is
+the CLI's default:
+
+| environment | output |
+|---|---|
+| an AI agent is detected | an OBJECT: `{boundary, rows, warning}`, the warning being a prompt-injection notice aimed at the agent |
+| no agent, no `--output-format` | a **box-drawn table**, for a human |
+| `--output-format json` | a bare **array** of row objects |
+
+`backup.ts` had three call sites and all three read `.rows` off the object. **Every
+verification of this script had been run from inside Claude Code**, so the agent shape was
+the only one it had ever been shown. Run by Task Scheduler — or by Amro at his own prompt —
+the CLI prints the table, and:
+
+* `triggers.sql` and `function_acl.sql` die with *"query returned nothing parseable"*
+  **after four dumps have already been written and encrypted**: a backup four-sixths
+  complete, exiting 1;
+* worse, `count()` — which feeds the completeness check — swallowed the failure with
+  `json ? … : 0` and returned **0**. Every count being zero means the check compares the dump
+  against nothing and passes. `"completeness_gaps": []` was not a finding; it was silence.
+
+Fixed by REQUESTING the format (`--output-format json` at all three call sites) instead of
+inheriting it, accepting **both** JSON shapes, and making `count()` throw rather than return a
+silent zero. Seven self-test assertions cover the three shapes and the ways each fails.
+
+The lesson is this project's oldest one in a new place: **a tool that behaves differently when
+an agent is watching cannot be verified by an agent watching it.** The only thing that found
+this was running the scheduled task and reading its exit code.
 
 The two permanent snapshots — **these are never pruned**:
 
@@ -358,6 +463,7 @@ bypassed somewhere and that is the bug:
 | `scripts/backup.ts` | No path in it. `resolveDestDir` reads `BACKUP_DEST_DIR`. |
 | `scripts/restore-verify.ts` | Never knew the destination; takes one snapshot path per restore. |
 | The scheduled task | Registered with **no destination argument**. It picks up the new value on its next run. |
+| `%LOCALAPPDATA%ma-backupun-backup.cmd` | The wrapper added 9 Sep. It names the repo and the log and **no destination** — deliberately, so it did not become a second place a disk is written down. |
 | The weekly and pinned commands in §4 | None of them names a disk. |
 | CI | Runs `--selftest` only. It has never had a destination or a credential. |
 

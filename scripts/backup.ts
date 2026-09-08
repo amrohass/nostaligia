@@ -468,14 +468,17 @@ async function originalsFromDatabase(): Promise<{ objects: Map<string, number>; 
   await Deno.writeTextFile(file, sql);
   try {
     const { code, stdout, stderr } = await new Deno.Command("npx", {
-      args: ["supabase", "db", "query", "--linked", "-f", file],
+      args: ["supabase", "db", "query", "--linked", "--output-format", "json", "-f", file],
       stdout: "piped", stderr: "piped",
     }).output();
     const text = new TextDecoder().decode(stdout);
     if (code !== 0) throw new Error(`media_assets query exited ${code}\n${new TextDecoder().decode(stderr)}`);
-    const json = /\{[\s\S]*\}/.exec(text);
-    if (!json) throw new Error(`media_assets query returned nothing parseable:\n${text.slice(0, 400)}`);
-    return splitTakenDown(JSON.parse(json[0]).rows);
+    /* The cast is the shape the SQL above selects; rowsFromQueryOutput is deliberately
+       generic because three callers select three different columns. */
+    return splitTakenDown(
+      rowsFromQueryOutput(text, "media_assets query") as unknown as
+        { storage_path: string; bytes: number; takedown?: boolean | null }[],
+    );
   } finally {
     await Deno.remove(file).catch(() => {});
   }
@@ -811,19 +814,70 @@ const DUMPS: Dump[] = [
 ];
 
 /** Runs one statement through the CLI and returns the single text column it selects. */
+/**
+ * The rows out of `supabase db query`, whatever shape the CLI decided to print them in.
+ *
+ * `supabase db query` has THREE output shapes and the CLI chooses between them by sniffing
+ * its environment:
+ *
+ *   · an AI agent is detected (`--agent auto`, the default) → an OBJECT,
+ *     `{boundary, rows, warning}`, the warning being a prompt-injection notice for the agent;
+ *   · no agent and no `--output-format` → a BOX-DRAWN TABLE, for a human to read;
+ *   · `--output-format json` → a bare ARRAY of row objects.
+ *
+ * Found 9 Sep 2026 by RUNNING the weekly scheduled task rather than trusting that it would
+ * run. Every verification of this script until then had happened inside Claude Code, so the
+ * agent shape was the only one it had ever been shown — and all three call sites read
+ * `.rows` off it. From Task Scheduler, or from Amro's own prompt, the CLI prints the table
+ * instead: dumps 5 and 6 die with "query returned nothing parseable" AFTER four dumps have
+ * been written and encrypted, and `count()` — which swallowed the failure and returned 0 —
+ * made the completeness check compare the dump against nothing and pass.
+ *
+ * So the format is REQUESTED now (`--output-format json`, at all three call sites) rather
+ * than inherited from whoever happens to be watching. Both JSON shapes are still accepted:
+ * an agent session wraps the array whether or not the flag is passed, and a parser that
+ * understood only the flag's shape would fail in exactly the environment this project is
+ * developed in.
+ *
+ * Pure, so all three shapes are testable with no CLI and no database.
+ */
+export function rowsFromQueryOutput(text: string, what = "query"): Record<string, unknown>[] {
+  const start = text.search(/[\[{]/);
+  if (start === -1) {
+    /* Name the cause. "nothing parseable" sent the last reader looking at the SQL. */
+    if (/[\u250c\u2502\u2514\u251c]/.test(text)) {
+      throw new Error(
+        `${what}: the CLI printed a TABLE, not JSON — it does that when it does not detect ` +
+        `an agent. Pass --output-format json. First 200 chars: ${text.slice(0, 200)}`,
+      );
+    }
+    throw new Error(`${what} returned nothing parseable: ${text.slice(0, 300)}`);
+  }
+  const end = Math.max(text.lastIndexOf("]"), text.lastIndexOf("}"));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch (e) {
+    throw new Error(`${what}: output did not parse as JSON (${(e as Error).message}): ${text.slice(start, start + 200)}`);
+  }
+  const rows = Array.isArray(parsed) ? parsed : (parsed as { rows?: unknown[] } | null)?.rows;
+  if (!Array.isArray(rows)) {
+    throw new Error(`${what}: parsed JSON carried no rows array: ${text.slice(start, start + 200)}`);
+  }
+  return rows as Record<string, unknown>[];
+}
+
 async function queryText(sql: string): Promise<string> {
   const file = await scratchFile(".sql");
   await Deno.writeTextFile(file, sql);
   try {
     const { code, stdout, stderr } = await new Deno.Command("npx", {
-      args: ["supabase", "db", "query", "--linked", "-f", file],
+      args: ["supabase", "db", "query", "--linked", "--output-format", "json", "-f", file],
       stdout: "piped", stderr: "piped",
     }).output();
     const text = new TextDecoder().decode(stdout);
     if (code !== 0) throw new Error(`query exited ${code}: ${new TextDecoder().decode(stderr)}`);
-    const json = /\{[\s\S]*\}/.exec(text);
-    if (!json) throw new Error(`query returned nothing parseable: ${text.slice(0, 300)}`);
-    return String(JSON.parse(json[0]).rows?.[0]?.sql ?? "");
+    return String(rowsFromQueryOutput(text)[0]?.sql ?? "");
   } finally {
     await Deno.remove(file).catch(() => {});
   }
@@ -916,13 +970,19 @@ async function count(sql: string): Promise<number> {
   const file = await scratchFile(".sql");
   await Deno.writeTextFile(file, `${sql};`);
   try {
-    const { stdout } = await new Deno.Command("npx", {
-      args: ["supabase", "db", "query", "--linked", "-f", file],
+    const { code, stdout, stderr } = await new Deno.Command("npx", {
+      args: ["supabase", "db", "query", "--linked", "--output-format", "json", "-f", file],
       stdout: "piped", stderr: "piped",
     }).output();
     const text = new TextDecoder().decode(stdout);
-    const json = /\{[\s\S]*\}/.exec(text);
-    return json ? Number(JSON.parse(json[0]).rows?.[0]?.n ?? 0) : 0;
+    if (code !== 0) throw new Error(`count query exited ${code}: ${new TextDecoder().decode(stderr)}`);
+    /* NOT `?? 0` on an unreadable result: a count that could not be READ is not a count
+       of zero, and the completeness check it feeds would then compare the dump against
+       nothing and pass. Silent zero is how a check stops being one. */
+    const rows = rowsFromQueryOutput(text, "count query");
+    const n = Number(rows[0]?.n);
+    if (!Number.isFinite(n)) throw new Error(`count query returned no usable n: ${text.slice(0, 200)}`);
+    return n;
   } finally {
     await Deno.remove(file).catch(() => {});
   }
@@ -1113,6 +1173,48 @@ async function selftest() {
     ok(r(false, "not-read-because-absent", "E:/rma-backups").dir === "E:/rma-backups",
        "CONTROL: presence is what is read — a stray value with no flag does not win");
   }
+
+  /* ── The CLI's output shape is not a constant (9 Sep 2026) ──
+   *
+   * These exist because the scheduled task failed in a way no interactive run could: the
+   * agent-detected shape was the only one this script had ever been shown, and it had been
+   * verified dozens of times without that ever being visible. Each assertion below is one of
+   * the three shapes the CLI actually emits, plus the two ways it can emit nothing useful.
+   */
+  {
+    const agent = 'Initialising login role...\n{\n "boundary": "abc",\n "rows": [ { "sql": "CREATE TRIGGER x" } ],\n "warning": "untrusted"\n}\nA new version is available';
+    ok(rowsFromQueryOutput(agent)[0].sql === "CREATE TRIGGER x",
+       "the AGENT shape {boundary,rows,warning} is read — the only shape seen before 9 Sep");
+
+    const flag = 'Initialising login role...\n[\n { "sql": "CREATE TRIGGER x" }\n]\nA new version is available';
+    ok(rowsFromQueryOutput(flag)[0].sql === "CREATE TRIGGER x",
+       "the --output-format json ARRAY shape is read — what the scheduled task actually gets");
+
+    let tableErr = "";
+    try { rowsFromQueryOutput("Initialising login role...\n\u250c\u2500\u2510\n\u2502 sql \u2502\n\u2514\u2500\u2518"); }
+    catch (e) { tableErr = (e as Error).message; }
+    ok(/TABLE/.test(tableErr) && /--output-format json/.test(tableErr),
+       "a TABLE names its own cause and its fix, rather than 'nothing parseable'");
+
+    let plainErr = "";
+    try { rowsFromQueryOutput("Initialising login role...\nconnection refused"); }
+    catch (e) { plainErr = (e as Error).message; }
+    ok(/nothing parseable/.test(plainErr), "output with neither JSON nor a table still fails loudly");
+
+    ok(rowsFromQueryOutput("[]").length === 0, "an empty result set is zero rows, not an error");
+
+    let noRows = "";
+    try { rowsFromQueryOutput('{"boundary":"a","warning":"b"}'); }
+    catch (e) { noRows = (e as Error).message; }
+    ok(/no rows array/.test(noRows),
+       "CONTROL: an object WITHOUT rows is refused rather than read as an empty result");
+
+    let badJson = "";
+    try { rowsFromQueryOutput('{ "rows": [ {ic'); }
+    catch (e) { badJson = (e as Error).message; }
+    ok(/did not parse as JSON/.test(badJson), "truncated JSON says so, and quotes what it saw");
+  }
+
 
   /* ── Taken-down masters are not archive damage (7 Sep 2026) ──
      §8 deletes the bytes and keeps the row. Six of the nine on the deployed system were
