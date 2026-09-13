@@ -47,6 +47,11 @@ const RELEASE_ARG = process.argv.includes('--release')
 
 let executed = 0;
 const failures = [];
+/* Checks that did NOT run, with the reason. Kept apart from `failures` because they are a
+   different claim: a failure says the archive is wrong, a skip says nothing was learned.
+   The summary prints both, so a run that verified less than it looks like cannot read as a
+   clean bill of health. */
+const skipped = [];
 function ck(cond, msg, detail) {
   executed++;
   console.log(`  ${cond ? '✓' : '✗'} ${msg}${cond || !detail ? '' : `\n        ${detail}`}`);
@@ -163,6 +168,22 @@ for (const d of index.decades ?? []) await add(`decade/${d}.json`);
 for (const c of index.cells ?? []) await add(`geo/${c}.json`);
 await add('content.json');
 await add('places.json');
+
+/* The M6 addendum's two shard families, pulled into the SAME corpus as everything else.
+   That is the point of doing it here rather than in a section of their own: sections C
+   through F scan `corpus`, so a coordinate, an address, an exact timestamp or a bidi
+   override in a category page or the search index is caught by the checks that already
+   exist, rather than by a second set somebody has to remember to keep in step.
+
+   Driven off index.json's own `categories` map rather than a hardcoded list of three, for
+   the reason index.json exists: the release says what it has. */
+const M6_PUBLISHED = Boolean(index.search) && Boolean(index.categories);
+const catNames = Object.keys(index.categories ?? {});
+for (const cat of catNames) {
+  const pages = index.categories[cat]?.pages ?? 0;
+  for (let i = 1; i <= pages; i++) await add(`category/${cat}/page-${i}.json`);
+}
+if (M6_PUBLISHED) await add('search-index.json');
 
 const feedIds = new Set();
 const handles = new Set();
@@ -506,11 +527,157 @@ const PRIVATE = `'{"bio":"private","personalInfo":"private","contributions":"pri
      `${after[0]?.n} row(s) still carry a fixture value; if this is not 0 the probe MUTATED production`);
 }
 
+/* ── G · the M6 addendum's shards ───────────────────────────── */
+
+section('G', '§7 — the category shards and the search index carry no more than the feed does');
+
+/* Sections C through F have ALREADY scanned these files: they were added to `corpus` in B,
+   so the coordinate hunt, the address hunt, the timestamp hunt and the bidi hunt all ran
+   over them. What is left is the property that is specific to them — that the search index
+   describes the same archive the feed does, and that its deliberately narrow field list is
+   still narrow.
+ *
+ * ── Why the search index is the one to watch ─────────────────
+ *
+ * It is the only file in the release that names EVERY published item in one place, with no
+ * pagination in front of it. That makes it the cheapest possible aggregate: one request and
+ * a reader has the whole archive's titles. §7 is about exactly that shape — "the aggregate
+ * is more dangerous than any single item" — so the fields it does not carry are doing more
+ * work here than in any other shard. An `author` key in it would be a complete, single-file
+ * index of who contributed what, downloadable with no credential.
+ */
+
+if (!M6_PUBLISHED) {
+  /* NOT reported as a pass, and not as a failure either. A release built before the
+     addendum has no category shards and no search index; scanning them would be scanning
+     nothing, and this file's whole argument is that a check which cannot fail is worse than
+     no check. So it says which release it looked at and what it could not see.
+     `executed` is deliberately not incremented — these checks did not run. */
+  console.log(`  · SKIPPED — this release does not declare the addendum's shards.`);
+  console.log(`    index.json has no "search" and no "categories" key, so ${RELEASE}`);
+  console.log(`    predates the M6 addendum. Deploy the publish function and publish once,`);
+  console.log(`    then re-run: these are the checks that cover search-index.json and`);
+  console.log(`    category/{cat}/page-N.json, and NOTHING here has verified them.`);
+  skipped.push('G · the addendum\'s shards (not published on this release)');
+} else {
+  const catFiles = [...files.keys()].filter((p) => p.startsWith('category/'));
+  ck(catFiles.length > 0,
+     `${catFiles.length} category page(s) downloaded with no credential`,
+     'index.json declared categories and none could be fetched — the tab bar would 404');
+
+  const searchText = files.get('search-index.json');
+  ck(searchText != null, 'search-index.json is served to a signed-out visitor');
+
+  if (searchText != null) {
+    const searchDoc = JSON.parse(searchText);
+    const rows = searchDoc.items ?? [];
+
+    /* Non-vacuity, first and separately. Every assertion below is "nothing bad is in these
+       rows", which an empty array satisfies perfectly. */
+    ck(rows.length > 0,
+       `the search index carries ${rows.length} row(s) — so the scans below have something to scan`);
+
+    /* THE allowlist, checked as a set of KEYS rather than as an absence of named bad ones.
+       A denylist here would pass the first time a migration adds a column and somebody
+       widens the projection to match. */
+    const ALLOWED = ['category', 'decade', 'id', 'title_ar', 'title_en'];
+    const extra = new Set();
+    for (const r of rows) {
+      for (const k of Object.keys(r)) if (!ALLOWED.includes(k)) extra.add(k);
+    }
+    ck(extra.size === 0,
+       `every row carries only ${ALLOWED.join(', ')}`,
+       `these also appear: ${[...extra].join(', ')} — the file is unpaginated ONLY because it is narrow`);
+
+    /* The four that would each be a specific §7 disclosure if they ever appeared, named so
+       that a future reader sees what the allowlist is protecting rather than only that
+       there is one. `author` would make this a single-file map of who contributed what;
+       `day` plus `id` is a submission timeline; the other two are the coordinate boundary. */
+    for (const forbidden of ['author', 'author_handle', 'created_by', 'day', 'created_on',
+                             'location', 'location_public', 'lat', 'lon', 'thumb']) {
+      ck(!searchText.includes(`"${forbidden}"`),
+         `no "${forbidden}" key anywhere in the search index`);
+    }
+
+    /* THE set comparison, and the reason this section is against the artefact rather than
+       against a unit test. shards.test.ts proves the builder puts the same ids in both;
+       this proves the FILES on the CDN agree — which is a different fact once a publish has
+       half-succeeded, a takedown has landed between two puts, or a rollback has flipped the
+       pointer back over a newer tree.
+
+       A pending, rejected, withdrawn or taken-down post reaching the index is exactly the
+       leak this catches: it would be a published title for something no moderator approved,
+       readable by anyone, cached for a year. */
+    const searchIds = new Set(rows.map((r) => r.id));
+    const notInFeed = [...searchIds].filter((id) => !feedIds.has(id));
+    ck(notInFeed.length === 0,
+       `every id in the search index is a published item in the feed`,
+       `${notInFeed.length} are not — a title reachable with no credential for something ` +
+       `the feed does not publish: ${notInFeed.slice(0, 5).join(', ')}`);
+
+    const notInSearch = [...feedIds].filter((id) => !searchIds.has(id));
+    ck(notInSearch.length === 0,
+       `and every published item is in the search index — the two describe one archive`,
+       `${notInSearch.length} published item(s) are unsearchable: ${notInSearch.slice(0, 5).join(', ')}`);
+
+    /* The titles are the same strings the feed publishes. A search index built from a
+       different projection — the draft column, say, or a pre-bidi-strip value — would look
+       correct and would be publishing text no moderator approved. */
+    const feedTitles = new Map();
+    for (const [path, text] of files) {
+      if (!path.startsWith('feed/')) continue;
+      for (const item of (JSON.parse(text).items ?? [])) feedTitles.set(item.id, item.title_ar ?? null);
+    }
+    const drifted = rows.filter((r) => feedTitles.has(r.id) && feedTitles.get(r.id) !== r.title_ar);
+    ck(drifted.length === 0,
+       `and every title matches the one the feed shard carries for the same id`,
+       `${drifted.length} differ: ${drifted.slice(0, 3).map((r) => r.id).join(', ')}`);
+  }
+
+  /* The category pages are feed pages with a filter on them, so they must carry exactly the
+     feed card's shape — and every id in one must be an id the feed publishes. A category
+     shard is reachable without ever fetching the feed, so it is its own disclosure surface
+     rather than a view onto one that was already checked. */
+  const catIds = new Set();
+  let catRows = 0;
+  for (const path of catFiles) {
+    const doc = JSON.parse(files.get(path));
+    for (const item of (doc.items ?? [])) { catRows++; catIds.add(item.id); }
+  }
+  ck(catRows > 0 || (index.total ?? 0) === 0,
+     `${catRows} card(s) across the category shards`,
+     'index.json declares categories with items and every page came back empty');
+
+  const strayCat = [...catIds].filter((id) => !feedIds.has(id));
+  ck(strayCat.length === 0,
+     `every card in a category shard is also in the feed`,
+     `${strayCat.length} are not: ${strayCat.slice(0, 5).join(', ')}`);
+
+  /* The same six §7 fields the feed card must not carry. Checked here rather than assumed
+     from "it uses feedEntry()", because that is a claim about the code and this file exists
+     to check the bytes. */
+  for (const path of catFiles) {
+    const text = files.get(path);
+    const bad = ['created_by', 'created_at', 'ingest_object_key', 'consent', 'content_hash',
+                 'approved_by', 'location"'].filter((k) => text.includes(`"${k}`));
+    ck(bad.length === 0, `${path} carries none of §7's forbidden fields`,
+       `found: ${bad.join(', ')}`);
+  }
+}
+
 /* ── done ──────────────────────────────────────────────────── */
 
-console.log(`\n${executed} checks, ${failures.length} failed`);
+console.log(`\n${executed} checks, ${failures.length} failed, ${skipped.length} section(s) skipped`);
 if (failures.length) {
   console.log(failures.map((f) => `  ✗ ${f}`).join('\n'));
   process.exit(1);
 }
-console.log('OK.\n');
+if (skipped.length) {
+  /* Exit 0, because nothing is wrong with the archive — but never the bare word "OK".
+     A section that did not run is a section nobody has verified, and the one thing this
+     file must not do is let that read as a pass. */
+  console.log(skipped.map((sk) => `  · not verified: ${sk}`).join('\n'));
+  console.log('\nPASSED WHAT IT RAN. See the skipped section(s) above before citing this run.\n');
+} else {
+  console.log('OK.\n');
+}

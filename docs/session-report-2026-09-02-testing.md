@@ -171,35 +171,79 @@ minutes apart cannot support a decision.
 
 `FEED_PAGE_SIZE = 24` and `GEO_PRECISION = 5` were both set against 22 items and both say so.
 
+> **Every figure in this section was re-measured on 9 Sep 2026 and the table below is the
+> re-measurement. The 2 Sep run was invalid.** Its fixture gave each synthetic asset a
+> `path` field — the key `shards.ts` *emits* — where a `media_assets` row carries
+> `storage_path` and `bucket`. `publicMedia()` keeps only rows with `bucket === "public"`,
+> and a row with no bucket at all is not one, so **every shard it measured had an empty
+> media list**: no thumb path, no dimensions, nothing. The `as` cast in the fixture is what
+> let that compile, and it did not compile under `deno check` — which CI runs, and which
+> this file broke from the day it was committed. Six days of red that nobody read.
+>
+> The direction of the error is the useful part: the old numbers were **too small**, so
+> every "holds" verdict in the original table was reached on shards lighter than the real
+> ones. Both judgments still hold at the corrected figures, but the margins are narrower
+> and the §9 headroom is a third of what was claimed.
+
 | | 300 items | 1,500 items (§2's own threshold) |
 |---|---|---|
 | feed pages | 13 | 63 |
-| `feed/page-1.json` | 9.3 KiB raw, **2.3 KiB compressed** | unchanged |
-| §9 headroom | 58.2 KiB after 91.8 KiB static | same |
+| `feed/page-1.json` | 10.2 KiB raw, **3.7 KiB compressed** | unchanged |
+| §9 headroom | **26.1 KiB after 123.9 KiB static** | same |
 | geo cells | 4, busiest 70 items | 4, busiest 334 |
-| largest geo shard | **30.3 KiB** | **145.0 KiB** |
-| objects per release | ~627 | ~3,077 |
-| `buildShards()` warm | 44 ms (0.15 ms/item) | 72 ms (0.05 ms/item) |
+| largest geo shard | **32.9 KiB** | **157.7 KiB** |
+| category shards (M6 addendum) | 13 | 54 |
+| `search-index.json`, calibrated | **17.4 KiB** | **87.9 KiB** |
+| objects per release | **~684** | **~3,175** |
+| `buildShards()` warm | 32 ms (0.11 ms/item) | 128 ms (0.09 ms/item) |
 
-**Both hold.** The number to watch is the busiest geo cell: it is the whole map in one
-request and grows linearly. At 1,500 items it is 145 KiB. `shards.ts` already names precision
-6 as the one-line alternative — 32 cells, busiest 66 items — at the cost of one extra request
-per pan.
+**Both hold.** The number to watch is still the busiest geo cell: it is the whole map in one
+request and grows linearly. At 1,500 items it is **157.7 KiB**. `shards.ts` already names
+precision 6 as the one-line alternative — 32 cells, busiest 66 items — at the cost of one
+extra request per pan.
+
+**Three corrections to what the 2 Sep table said, beyond the arithmetic:**
+
+- **§9 headroom was never 58.2 KiB and is not now.** That line quoted `frontend-budget.mjs`
+  at 91.8 KiB of static assets, measured 1 Sep. M6's self-hosted font stylesheet and the
+  addendum's tabs and search box have landed since; it is **123.9 KiB** today, leaving
+  **26.1 KiB** for the feed page rather than 58.2. A full page costs 3.7 KiB, so the verdict
+  is unchanged — but the margin is 7× the page rather than 25×, and the figure now lives in
+  `STATIC_KIB` in the script with a note saying to re-read it alongside the budget script.
+- **objects per release was undercounted independently of the fixture bug.** The old line
+  counted `buildShards()` output plus one prerendered page each. A release also writes
+  `content.json`, `places.json`, `redactions.json` and **one profile shard per contributor**
+  — 43 more at this fixture's 40 handles. The script now counts `releaseFiles()`, which is
+  what §2's threshold is actually about.
+- **`search-index.json` is the one new number that deserves a second look.** The addendum
+  calls it "not paginated at current/projected item counts". At 300 items that is
+  comfortable: 17.4 KiB, fetched once, on the first keystroke and never at first paint. At
+  the 1,500 §2 itself names it is **87.9 KiB** — still one lazy fetch, still outside §9's
+  budget, but no longer trivial on a phone over 3G. It is not a problem to fix now; it is
+  the number to re-read when the archive passes about a thousand items, and it will arrive
+  at the same time as §2's incremental-diff threshold rather than separately.
 
 Nothing touched a database. Every figure is a pure function of the rows, so the real
 production shard builder is imported and run over synthetic rows in memory — a stronger
 guarantee than a throwaway database, not a shortcut around one. Every row is titled
 `SYNTHETIC`.
 
-**Two measurement errors caught, either of which would have been reported as a finding:**
+**Three measurement errors caught, any of which would have been reported as a finding:**
 
 - the first run timed **one cold call** and reported **11,891 ms** for 300 items, which reads
   as a quadratic publisher. A scaling sweep came back 50→1881, 100→658, 200→62, 400→1643 —
-  non-monotonic, so it was never measuring the algorithm. Warm median is 44 ms.
+  non-monotonic, so it was never measuring the algorithm. Warm median is 32 ms at 300 items
+  and 128 ms at 1,500 — 0.11 and 0.09 ms/item, which is linear and says so.
 - **the synthetic compression ratio flatters.** Ten distinct titles and one repeated word
-  compress far harder than archival prose (9.3 KiB → 1.0 KiB). The live archive's own page is
-  fetched, its real ratio measured (24 %), and the synthetic page re-costed at that. **2.3 KiB
-  is the honest number** and it is the one the verdict uses.
+  compress far harder than archival prose (10.2 KiB → 1.1 KiB). The live archive's own page
+  is fetched, its real ratio measured (36 %), and the synthetic page re-costed at that.
+  **3.7 KiB is the honest number** and it is the one the verdict uses.
+- **the fixture was not carrying media at all** — the whole reason this section was
+  re-measured. See the note under the heading. This is the one of the three that was NOT
+  caught on the day: the run reported plausible numbers, every verdict came out "holds", and
+  the only outward sign was a CI step going red in a job nobody was reading. A load test
+  whose fixture is silently wrong in the *small* direction is worse than no load test,
+  because it produces exactly the reassurance it was run to get.
 
 ---
 

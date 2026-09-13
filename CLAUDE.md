@@ -231,6 +231,13 @@ flip back. Takedown does NOT wait for this (§8).
   items becomes ~660, and a publish additionally issues one DELETE per post that was once
   approved and no longer is. The thresholds above are unchanged and are still the trigger;
   what changed is how quickly they arrive.
+  **Updated 9 Sep 2026 — ~660 is now ~684, and this is the first of these figures to be
+  MEASURED rather than estimated** (`deno run -A scripts/load-test-300.ts`, 300 rows at the
+  deployed archive's kind distribution): 341 shards, 40 profile shards, `content.json` /
+  `places.json` / `redactions.json`, and 300 prerendered pages. Fourteen of the twenty-four
+  are the M6 addendum's — one `search-index.json` and 13 `category/{cat}/page-N.json`; the
+  other ten were the 21 Aug estimate omitting the per-contributor profile shards. The
+  thresholds are unchanged.
 
 - **Amended 20 Aug 2026 — the trigger is the moderation action, not a clock. The cron is
   deferred, not built.** A change to publishable content dispatches the publisher directly,

@@ -51,7 +51,16 @@ import {
   GEO_PRECISION,
   geohash,
   type SourcePost,
+  type SourceProfile,
 } from "../supabase/functions/publish/shards.ts";
+/* releaseFiles(), not just buildShards(), for the §2 object count at the end.
+ *
+ * buildShards() is the feed, the tabs, the search index, the items, the decades, the geo
+ * cells and index.json. A RELEASE is all of that plus content.json, places.json,
+ * redactions.json and one profile shard per contributor — and §2's amendment is about what
+ * a release WRITES, so counting only the first undercounts the thing the threshold is
+ * about. It undercounted by 43 at this fixture's 40 contributors. */
+import { releaseFiles } from "../supabase/functions/publish/release.ts";
 
 const argv = Deno.args;
 const ITEMS = argv.includes("--items") ? Number(argv[argv.indexOf("--items") + 1]) : 300;
@@ -133,11 +142,25 @@ function syntheticPost(i: number): SourcePost {
       author_avatar_path: null,
     })),
     created_on: `20${20 + (i % 6)}-0${(i % 9) + 1}-1${i % 9}`,
+    /* `storage_path` and `bucket`, which is what a media_assets row actually carries.
+     *
+     * These two said `path` and named no bucket until 9 Sep 2026 — `path` is the key
+     * shards.ts EMITS, not the one it reads — and the `as` cast is what let it compile
+     * anywhere except under `deno check`, which CI runs and which this failed from the day
+     * it was committed (3 Sep). Worth naming rather than quietly correcting, because the
+     * mistake had a second cost: publicMedia() keeps only rows with bucket === "public",
+     * and a row with no bucket at all is not one — so every figure this script has ever
+     * printed was measured against shards whose media list was EMPTY. The timings and sizes
+     * in the comments below are therefore a floor, and re-running it is what replaces them.
+     *
+     * The cast stays: `role` and `rendition` widen to `string` in a literal and the union
+     * the field wants is narrower. It is now a cast between two shapes that agree about
+     * their field names, which is a different thing from one that hid a typo. */
     media: [
-      { role: "rendition", rendition: "1440p", path: `synthetic-${i}/display.webp`,
-        mime: "image/webp", width: 1920, height: 1280, duration_s: null },
-      { role: "thumb", rendition: null, path: `synthetic-${i}/thumb.webp`,
-        mime: "image/webp", width: 400, height: 300, duration_s: null },
+      { role: "rendition", rendition: "1440p", storage_path: `synthetic-${i}/display.webp`,
+        bucket: "public", mime: "image/webp", width: 1920, height: 1280, duration_s: null },
+      { role: "thumb", rendition: null, storage_path: `synthetic-${i}/thumb.webp`,
+        bucket: "public", mime: "image/webp", width: 400, height: 300, duration_s: null },
     ] as SourcePost["media"],
   };
 }
@@ -179,6 +202,13 @@ const feed = byKind("feed/");
 const geo = byKind("geo/");
 const decade = byKind("decade/");
 const item = byKind("item/");
+/* The M6 addendum's two additions. Measured rather than assumed, because the addendum's own
+   §7 records how many objects they add and that figure is what CLAUDE.md §2's threshold is
+   counted against. `category` is the three tabs' pages; `search` is the one file. */
+const category = byKind("category/");
+const searchIndex = shards.find((s) => s.path === "search-index.json");
+const searchRaw = searchIndex ? bytes(searchIndex.json) : 0;
+const searchComp = searchIndex ? await brotli(searchIndex.json) : 0;
 
 const total = shards.reduce((a, s) => a + bytes(s.json), 0);
 const biggest = <T extends { path: string; json: string }>(xs: T[]) =>
@@ -257,6 +287,8 @@ const report = {
   },
   decade: { shards: decade.length, largest: biggest(decade) },
   item: { shards: item.length, largest: biggest(item) },
+  category: { shards: category.length, largest: biggest(category) },
+  search_index: { raw: searchRaw, compressed_synthetic: searchComp },
 };
 
 if (JSON_OUT) {
@@ -281,12 +313,21 @@ if (page1Realistic !== null) {
 }
 console.log(`  largest feed page             ${biggest(feed)?.path} at ${kib(biggest(feed)?.b ?? 0)} KiB`);
 
-/* §9: "< 150 KB brotli for HTML + CSS + JS + first feed page." frontend-budget.mjs
-   reported 91.8 KiB of static assets against the 150 KiB ceiling on 1 Sep, so the headroom
-   the feed page has to fit inside is what is left of that. Deflate-raw is used above
-   because Deno's CompressionStream has no brotli; it is a close and slightly PESSIMISTIC
-   stand-in for brotli on JSON, which is the safe direction. */
-const STATIC_KIB = 91.8;
+/* §9: "< 150 KB brotli for HTML + CSS + JS + first feed page." The headroom the feed page
+   has to fit inside is whatever the static half leaves. Deflate-raw is used above because
+   Deno's CompressionStream has no brotli; it is a close and slightly PESSIMISTIC stand-in
+   for brotli on JSON, which is the safe direction.
+
+   123.9 KiB, measured 9 Sep 2026: `node scripts/frontend-budget.mjs --verbose` reports
+   124.8 KiB total, of which 0.9 KiB is its own synthesised feed page — subtracted here,
+   because this script measures that page itself and counting it twice would eat the
+   headroom the verdict below is about.
+
+   It was 91.8 (1 Sep) until today, and the gap is not drift: M6's self-hosted font
+   stylesheet and the addendum's tabs and search box landed in between. Stale in the
+   dangerous direction — 91.8 claims 58.2 KiB of headroom where there is 26.1 — so this
+   number and the budget script are to be re-read together or not at all. */
+const STATIC_KIB = 123.9;
 const BUDGET_KIB = 150;
 const headroom = BUDGET_KIB - STATIC_KIB;
 /* Judged on the calibrated figure when there is one. The synthetic ratio flatters. */
@@ -315,13 +356,45 @@ if (geoKiB >= 250) {
 console.log(`\nOTHER SHARDS`);
 console.log(`  decade/                       ${decade.length} shards, largest ${biggest(decade)?.path} at ${kib(biggest(decade)?.b ?? 0)} KiB`);
 console.log(`  item/                         ${item.length} shards, largest ${kib(biggest(item)?.b ?? 0)} KiB`);
+console.log(`  category/                     ${category.length} shards, largest ${biggest(category)?.path} at ${kib(biggest(category)?.b ?? 0)} KiB`);
+
+/* The M6 addendum's one unpaginated file, and the number that decides whether it may stay
+   unpaginated. It is fetched on the first keystroke rather than at first paint, so it is
+   outside §9's budget — but a reader on a phone still waits for it, so the size is a real
+   cost and is reported rather than assumed small. The synthetic ratio flatters here exactly
+   as it does for the feed page, so the calibrated figure is the one to read. */
+const searchRealistic = realRatio === null ? null : Math.round(searchRaw * realRatio);
+console.log(`  search-index.json             ${kib(searchRaw)} KiB raw, ${kib(searchComp)} KiB compressed (synthetic)`);
+if (searchRealistic !== null) {
+  console.log(`                                ${kib(searchRealistic)} KiB at the real ratio <- what a first search costs`);
+}
 
 /* §2's amendment names the thresholds at which the incremental diff and release pruning
    become one piece of work. Every release rewrites every shard, so the object count is
    what that amendment is about. */
 console.log(`\n§2's REBUILD THRESHOLDS`);
-const objects = shards.length + ITEMS; // + one prerendered HTML page per publishable post
-console.log(`  objects written per release   ~${objects}  (${shards.length} shards + ${ITEMS} prerendered pages)`);
+/* What a release actually PUTS, which is releaseFiles() plus one prerendered HTML page per
+   publishable post (§2's 21 Aug amendment: those are written at the bucket root, outside
+   /v/, and rewritten in place on every publish).
+
+   The profile list is the fixture's own contributors, because publishable_profiles() is
+   bounded by the archive rather than by the user table — an account that has published
+   nothing gets no shard. */
+const profiles: SourceProfile[] = HANDLES.map((handle) => ({
+  handle,
+  display_name: null,
+  avatar_path: null,
+  label: "member",
+  bio: null,
+  member_since: 2025,
+  show_contributions: true,
+  show_comments: true,
+}));
+const releaseShards = releaseFiles(rows, [], "/v/2026-09-09T00:00:00Z/", {}, profiles, []);
+const objects = releaseShards.length + ITEMS;
+console.log(`  objects written per release   ~${objects}  (${releaseShards.length} files + ${ITEMS} prerendered pages)`);
+console.log(`    of the ${releaseShards.length}: ${shards.length} from buildShards, ` +
+  `${profiles.length} profile shards, and content/places/redactions`);
 console.log(`  §2 reinstates the incremental diff at 1,500 items / 100 releases a day / 5 GB in /v/.`);
 console.log(`  At ${ITEMS} items a release moves ${kib(total)} KiB of shards; 100 releases a day is ` +
   `${(total * 100 / 1024 / 1024).toFixed(1)} MiB/day.\n`);

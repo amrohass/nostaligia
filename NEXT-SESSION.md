@@ -315,7 +315,19 @@ against the deployed pipeline, not argued.
    node scripts/harness-bootstrap.mjs --status        live / stale, per role
    node scripts/e2e-authenticated.mjs            62   1 known-red: takedown 207, see below
    PLAYWRIGHT_DIR=… node scripts/e2e-browser.mjs 103  green
-   node scripts/privacy-shards-test.mjs          44   green
+   node scripts/privacy-shards-test.mjs          62   1 RED (known, not a leak), 0 skipped
+                                                     The red is the suite's own non-vacuity guard:
+                                                     the archive has 3 posts at location_precision=
+                                                     'hidden' and ALL THREE are taken down, so no
+                                                     PUBLISHED post is hidden and §7's strongest
+                                                     coordinate assertion has nothing to check. It
+                                                     goes green when a published post carries
+                                                     'hidden'. Section G (the M6 addendum's shards)
+                                                     RAN on 11 Sep against /v/2026-09-11T20:33:50Z/:
+                                                     22/22 green — search-index allowlist, no
+                                                     forbidden keys, ids equal to the feed's in
+                                                     both directions, titles match, category cards
+                                                     a subset of the feed.
    node scripts/mutation-pass.mjs                24   0063 added three (event-exemption-widens,
                                                      event-listing-quota-shared,
                                                      event-takedown-blocked); all three KILLED
@@ -331,12 +343,12 @@ against the deployed pipeline, not argued.
 6. The rest of the suite, all green at the end of this session:
    ```
    node scripts/frontend-csp-test.mjs      14    node scripts/frontend-fonts-test.mjs   14
-   node scripts/frontend-auth-test.mjs     73    node scripts/frontend-rtl-test.mjs     12
-   node scripts/frontend-view-test.mjs     53    node scripts/monitor.mjs --selftest    19
-   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs  114.8/150 KiB
-   node scripts/frontend-cors-test.mjs      6    node scripts/frontend-nav-test.mjs     80
+   node scripts/frontend-auth-test.mjs     73    node scripts/frontend-rtl-test.mjs     15
+   node scripts/frontend-view-test.mjs     73    node scripts/monitor.mjs --selftest    19
+   node scripts/frontend-map-test.mjs      63    node scripts/frontend-budget.mjs  124.5/150 KiB
+   node scripts/frontend-cors-test.mjs      6    node scripts/frontend-nav-test.mjs    125
    node scripts/frontend-admin-test.mjs    16    node scripts/frontend-item-route-test.mjs 41
-   deno test -A supabase/functions/publish/ 96   deno run … backup.ts --selftest        47
+   deno test -A supabase/functions/publish/ 111  deno run … backup.ts --selftest        63
    deno test -A … request-upload/          25    deno run … restore-verify.ts --selftest 29
    deno test -A … resend-confirmation/     11
    ^^ the -A is REQUIRED: without it 7 publish tests fail on NotCapable (read access
@@ -491,7 +503,33 @@ the CI half and needs no Python: it reads the WOFF2 table directory directly.
 ### The RTL browser probe
 
 `PLAYWRIGHT_DIR=<node_modules> node scripts/rtl-browser-probe.mjs`. Not in CI (needs
-Playwright and Chromium). Run it when the slider or its stylesheet changes.
+Playwright and Chromium). **29 assertions, green on 9 Sep 2026.** Run it when the slider,
+the tab bar, the search box or their stylesheet changes.
+
+It covers two things now. The decade slider is the original: a range input's direction is
+the browser's behaviour, so the probe presses ArrowRight in both languages and asserts the
+value moves in opposite directions. M6's addendum added the second: the tab bar, the search
+box, the per-tab count badges and a search result row, measured as PAINTED POSITIONS. The
+four tabs are one DOM order in both languages — `frontend-nav-test.mjs` pins that — so the
+probe asserts that same order paints 67 < 155 < 254 < 351 in English and 1214 > 1141 > 1067
+> 988 in Arabic. That is logical properties doing their job, and it is not assertable from
+source.
+
+The archive is **stubbed** for the M6 half, via `page.route()` on the r2.dev origin. It has
+to be: those assertions need search results, and the deployed release carries no
+`search-index.json` until the addendum ships. Against production the section would report
+"no result row rendered", which is a fact about the deployment rather than about the layout.
+The stub is deliberately lopsided (5 / 2 / 1 / 1 across the tabs) so a count badge printing
+a constant is caught rather than agreed with.
+
+**It found a real defect on its first run.** `.tab__count` was set in `var(--font-en)`
+unconditionally, and the count is `I18N.num()` output — Arabic-Indic digits in Arabic.
+Inter's `unicode-range` in `fonts.css` stops at U+00FF, so every count in the archive's own
+language fell through Inter to `system-ui`, beside a label set in IBM Plex Sans Arabic.
+Nothing could have caught it from source: `frontend-fonts-test.mjs` checks that a declared
+range covers every character in the interface's static STRINGS, and a digit generated at
+runtime is in no string. Fixed the same day, and the probe now asserts the computed
+`font-family` on that badge in both languages.
 
 ### Lighthouse
 
