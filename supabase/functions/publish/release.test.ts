@@ -612,3 +612,67 @@ Deno.test("R2 — the manifest's generated_on is the UTC day, not the local one"
   assert(/^\d{4}-\d{2}-\d{2}$/.test(manifest.generated_on),
     `generated_on is not a bare date: ${manifest.generated_on}`);
 });
+
+/* ── M6 addendum: the tabs and the search index, in a release ─
+ *
+ * shards.test.ts owns what is IN these files. What this owns is that they are written at
+ * all, under the versioned prefix, with the release's own cache header — the three
+ * properties that make them safe to serve for a year and that a shard builder cannot
+ * assert about itself.
+ */
+
+Deno.test("a release carries a page for every tab and one search index", async () => {
+  const d = deps();
+  d.db.posts = [
+    { ...post({ id: "00000000-0000-0000-0000-0000000000b1" }), media: [
+      { role: "master", rendition: null, storage_path: "orig/a", bucket: "originals",
+        mime: "image/jpeg", width: 4000, height: 3000, duration_s: null },
+    ] },
+    { ...post({ id: "00000000-0000-0000-0000-0000000000b2", kind: "voice" }) },
+  ];
+
+  const out = await publish(d);
+  assertEquals(out.published, true, out.reason);
+  const prefix = out.release!.slice(1);
+
+  for (const cat of ["image", "video", "voice"]) {
+    const key = `${prefix}category/${cat}/page-1.json`;
+    const written = d.sink.written.get(key);
+    assert(written !== undefined, `${key} is missing from the release`);
+    // Immutable with the release, like every other shard. A tab page served with a short
+    // TTL would be re-fetched on every switch for no benefit — the release it belongs to
+    // cannot change.
+    assertEquals(written!.cacheControl, "public, max-age=31536000, immutable",
+      `${key} is not immutable`);
+  }
+
+  const search = d.sink.written.get(`${prefix}search-index.json`);
+  assert(search !== undefined, "search-index.json is missing from the release");
+  assertEquals(search!.cacheControl, "public, max-age=31536000, immutable",
+    "the search index is not immutable — it is versioned with the release and must be");
+  assertEquals(JSON.parse(search!.body).total, 2, "the search index does not describe this release");
+
+  // Inside /v/{ts}/, not at the root. The prerendered item pages are the ONE thing a
+  // release writes outside the versioned tree (§2's 21 Aug amendment); a search index at
+  // the root would be a mutable file that a year-cached release could disagree with.
+  assert(!d.sink.written.has("search-index.json"),
+    "the search index was written at the bucket root, where it would outlive its release");
+  assert(!d.sink.written.has("category/image/page-1.json"),
+    "a tab page was written at the bucket root");
+});
+
+Deno.test("an empty archive still publishes a page for every tab", async () => {
+  // The same argument as the empty feed page above: a 404 on the first tab click of a young
+  // archive is cached by the CDN, and the front end would have to read index.json before it
+  // dared ask for a page.
+  const d = deps();
+  d.db.posts = [];
+  const out = await publish(d);
+  assertEquals(out.published, true, out.reason);
+  for (const cat of ["image", "video", "voice"]) {
+    assert(d.sink.written.has(`v/2026-08-19T12:34:56Z/category/${cat}/page-1.json`),
+      `no empty page for the ${cat} tab`);
+  }
+  assert(d.sink.written.has("v/2026-08-19T12:34:56Z/search-index.json"),
+    "an empty archive published no search index — the box would 404 on first keystroke");
+});

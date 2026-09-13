@@ -1,7 +1,8 @@
 /* The shard builder. Rows in, files out, nothing else.
  *
  * §2's read path: manifest.json → feed/page-N.json, geo/{cell}.json, decade/{d}.json,
- * item/{id}.json, all immutable under /v/{ISO-ts}/ and all served from the CDN with
+ * item/{id}.json — and, since the M6 addendum, category/{cat}/page-N.json and
+ * search-index.json. All immutable under /v/{ISO-ts}/ and all served from the CDN with
  * `max-age=31536000`. This module decides what is IN those files. Writing them to R2,
  * validating them and flipping the pointer is the publisher's job (piece 3).
  *
@@ -272,12 +273,88 @@ function publicMedia(assets: SourceAsset[]) {
     .sort((a, b) => (a.role + (a.rendition ?? "")).localeCompare(b.role + (b.rendition ?? "")));
 }
 
+/* ── Category (M6 addendum) ────────────────────────────────── */
+
+/**
+ * The three category shards, and the vocabulary their paths are built from.
+ *
+ * NOT a database enum and deliberately not one. `posts.kind` is the schema's vocabulary
+ * (media | voice | event) and it answers a different question: what KIND of contribution
+ * this is, which is a moderation and ingest concern. What a reader picks a tab for is what
+ * they are about to look at, and for `kind = 'media'` that depends on the file. Deriving it
+ * at publish time rather than storing it means there is no column to drift out of agreement
+ * with the media rows it claims to describe — the same argument the geohash above makes.
+ */
+export const CATEGORIES = ["image", "video", "voice"] as const;
+export type Category = (typeof CATEGORIES)[number];
+
+/**
+ * The mime that decides a `media` post's category.
+ *
+ * The master, when there is one: it is the file the contributor actually uploaded and the
+ * one §6 keeps untouched in `originals/`.
+ *
+ * A rendition when there is not, and that fallback is load-bearing rather than defensive.
+ * §6: "Seed videos are transcoded OFFLINE with local ffmpeg; upload the derivatives
+ * directly" — so the ~300 launch items may arrive with renditions and no master row at all,
+ * and a classifier that insisted on a master would file the entire seed archive under
+ * nothing.
+ *
+ * thumb and poster are deliberately NOT consulted, and this is the whole reason the two
+ * roles are named rather than the list simply being searched in order: both are image/webp
+ * for a video (§6 generates them for every one), so a fallback that accepted them would
+ * quietly file every offline-imported film under Images. Wrong in the direction nobody
+ * checks, because the card would still render.
+ */
+function classifyingMime(row: SourcePost): string | null {
+  const media = row.media ?? [];
+  const master = media.find((a) => a.role === "master");
+  if (master) return master.mime;
+  const rendition = media.find((a) => a.role === "rendition");
+  return rendition ? rendition.mime : null;
+}
+
+/**
+ * Which tab this post belongs under, or null for none.
+ *
+ * Null is a real answer and has two causes, both of which leave the post in the feed and
+ * out of every category shard:
+ *
+ *   · `kind = 'event'` — the addendum excludes events by name. §1 gives them their own
+ *     surface, and 0063 lets one carry no media at all, so there is nothing to categorise.
+ *   · a `media` post whose classifying mime is neither image nor video, or which has no
+ *     asset that carries one. It is still browsable under All, which is the default tab.
+ *
+ * A post that lands nowhere is therefore reachable and merely unfiltered — the failure
+ * direction that costs a reader a filter rather than an item.
+ */
+export function categoryOf(row: SourcePost): Category | null {
+  if (row.kind === "event") return null;
+  if (row.kind === "voice") return "voice";
+  const mime = classifyingMime(row);
+  if (!mime) return null;
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  return null;
+}
+
 /** The card. Small, because §9's budget counts the first feed page. */
 export function feedEntry(row: SourcePost) {
   const thumb = publicMedia(row.media).find((m) => m.role === "thumb");
   return {
     id: row.id,
     kind: row.kind,
+    /* M6's tab vocabulary, baked (see categoryOf).
+     *
+     * Worth the ~20 bytes a card, and it pays for two things rather than one. The obvious
+     * one is that a card rendered from a category shard has to know which badge to wear.
+     * The other is a defect it closes: the front end's displayKind() has been asking a feed
+     * entry for `entry.video` since M3 — a key feedEntry has never emitted — so every video
+     * in the archive has rendered with a photograph's badge and no play affordance, on
+     * every surface that draws a card. The mime that would settle it lives on the master
+     * asset, which a feed entry deliberately does not carry (§6 keeps `originals` out of
+     * every shard), so there was nothing on the card that could have answered. */
+    category: categoryOf(row),
     title_ar: row.title_ar,
     title_en: row.title_en,
     decade: row.decade,
@@ -341,6 +418,10 @@ export function publicPost(row: SourcePost) {
   return {
     id: row.id,
     kind: row.kind,
+    // Here as well as on the card, because the viewer reconstructs a feed entry from this
+    // shard when a shared link lands on an item that is not in the loaded feed. Without it
+    // that one item would be the only card in the archive with no category.
+    category: categoryOf(row),
     title_ar: row.title_ar,
     title_en: row.title_en,
     body_ar: row.body_ar,
@@ -429,6 +510,59 @@ export function placesFile(places: SourcePlace[]): ShardFile {
 
   return {
     path: "places.json",
+    json: stableStringify({ total: items.length, items }),
+  };
+}
+
+/* ── search-index.json ─────────────────────────────────────── */
+
+/**
+ * Every publishable title, in one file, so the front end can search without a query.
+ *
+ * §2's "zero database reads for public visitors" is what forces the shape: there is no
+ * endpoint to type into, so the only way a visitor searches is against something the CDN
+ * already served them. This is that thing.
+ *
+ * ── Five fields, and the four that are absent are the design ──
+ *
+ * id, title_ar, title_en, category, decade. No body, no thumb, no author, no counts. The
+ * file is not paginated — at 300 items it is a few tens of kilobytes and at the low
+ * thousands §1 projects it is still under a megabyte — and it is unpaginated ONLY because
+ * it is this narrow. Adding `thumb` would roughly double it; adding `body` would multiply
+ * it by ten and make pagination unavoidable, at which point searching needs an index of the
+ * index. The narrowness is load-bearing rather than minimalism.
+ *
+ * It costs the front end something real and worth naming: a search result has no thumbnail
+ * to draw, so results render as rows rather than as cards. That is the trade, taken
+ * deliberately in this direction because §9's budget is measured at first paint and this
+ * file is fetched on the first keystroke.
+ *
+ * ── Not re-stripped ──────────────────────────────────────────
+ *
+ * The titles are copied through exactly as they arrive. 0045 strips the bidi overrides
+ * (§6) on ingest, so these strings were sanitised before the row existed; stripping again
+ * here would be a second implementation of one rule, and the day the two disagree the one
+ * that runs later wins silently. The rendering half of §6 — <bdi> — is the front end's, and
+ * applies to these strings exactly as it does to a card's.
+ *
+ * ── What is in it ───────────────────────────────────────────
+ *
+ * Whatever the publisher was handed, which is `publishable_posts()` (approved, not taken
+ * down, ingest ready) minus §5's hash refusals. Nothing is re-filtered here, for the reason
+ * buildShards gives: the predicate belongs in SQL beside the RLS policies that share it.
+ * Events are present and carry `category: null` — they are in the All tab like every other
+ * post and in no category shard, which is exactly what the addendum's table says.
+ */
+export function searchIndexFile(rows: SourcePost[]): ShardFile {
+  const items = rows.map((row) => ({
+    id: row.id,
+    title_ar: row.title_ar,
+    title_en: row.title_en,
+    category: categoryOf(row),
+    decade: row.decade,
+  }));
+  return {
+    path: "search-index.json",
     json: stableStringify({ total: items.length, items }),
   };
 }
@@ -537,6 +671,48 @@ export function buildShards(rows: SourcePost[]): ShardFile[] {
     });
   }
 
+  // ── category/{cat}/page-N.json ──
+  //
+  // The feed's shape and the feed's page size, over a subset of the same ordered rows. Not
+  // a second card format and not a second sort: a tab is the feed with a filter on it, and
+  // the moment the two disagree about ordering a reader switching tabs sees the archive
+  // reshuffle for no reason they can name.
+  //
+  // Page 1 is written for a category with nothing in it, exactly as the feed writes an
+  // empty page-1 for an empty archive. The alternative is a 404 on the first tab click of a
+  // young archive — which the CDN then caches — and a front end that has to fetch
+  // index.json before it dares ask for a page. Three small objects buy the tab bar the
+  // right to work without a prior request.
+  const byCategory = new Map<Category, SourcePost[]>();
+  for (const cat of CATEGORIES) byCategory.set(cat, []);
+  for (const row of ordered) {
+    const cat = categoryOf(row);
+    if (cat) byCategory.get(cat)!.push(row);
+  }
+
+  const categoryPages: Record<string, { pages: number; total: number }> = {};
+  for (const cat of CATEGORIES) {
+    const list = byCategory.get(cat)!;
+    const catPages = Math.max(1, Math.ceil(list.length / FEED_PAGE_SIZE));
+    categoryPages[cat] = { pages: catPages, total: list.length };
+    for (let p = 0; p < catPages; p++) {
+      const slice = list.slice(p * FEED_PAGE_SIZE, (p + 1) * FEED_PAGE_SIZE);
+      files.push({
+        path: `category/${cat}/page-${p + 1}.json`,
+        json: stableStringify({
+          category: cat,
+          page: p + 1,
+          pages: catPages,
+          total: list.length,
+          items: slice.map(feedEntry),
+        }),
+      });
+    }
+  }
+
+  // ── search-index.json ──
+  files.push(searchIndexFile(ordered));
+
   // ── item/{id}.json ──
   for (const row of ordered) {
     files.push({ path: `item/${row.id}.json`, json: stableStringify(publicPost(row)) });
@@ -605,6 +781,20 @@ export function buildShards(rows: SourcePost[]): ShardFile[] {
   //
   // Derived from what was just built rather than recomputed, so it cannot disagree with the
   // files it describes.
+  //
+  // `categories` and `search` join it in the M6 addendum, for the reason the paragraph
+  // above gives about the decade list: the tab bar would otherwise carry a hardcoded page
+  // count per category, and the search box would have to discover whether this release has
+  // an index by asking for it and reading the 404. Both are derived from what was just
+  // built, so neither can describe a file the release does not contain.
+  //
+  // The addendum asks for these in manifest.json "alongside the existing feed count".
+  // There is no feed count in manifest.json — it carries the pointer and the generation day
+  // and nothing else, and the feed's page count has lived here since M3. Putting them in
+  // the pointer would create a second per-release description that can disagree with this
+  // one, which is the failure index.json was added to remove. CLAUDE.md §2's amendment
+  // names this file as what a release "actually has", and the addendum's own rule is that
+  // CLAUDE.md wins. Recorded rather than resolved silently.
   files.push({
     path: "index.json",
     json: stableStringify({
@@ -612,6 +802,10 @@ export function buildShards(rows: SourcePost[]): ShardFile[] {
       total: ordered.length,
       decades: [...byDecade.keys()].sort((a, b) => a - b),
       cells: [...byCell.keys()].sort(),
+      categories: categoryPages,
+      // Its presence is the signal. A release built before the addendum has no `search`
+      // key, and the front end must not offer a box it cannot fill.
+      search: { total: ordered.length },
     }),
   });
 

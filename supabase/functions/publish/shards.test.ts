@@ -23,6 +23,8 @@
 
 import {
   buildShards,
+  CATEGORIES,
+  categoryOf,
   contentFile,
   FEED_PAGE_SIZE,
   feedEntry,
@@ -30,6 +32,7 @@ import {
   placesFile,
   profileFile,
   publicPost,
+  searchIndexFile,
   type SourceAsset,
   type SourcePlace,
   type SourcePost,
@@ -515,4 +518,245 @@ Deno.test("the gazetteer shard carries no field the map was not given", () => {
   assert(!json.includes("geohash"), "the shard key leaked into the shard");
   assert(!json.includes("unconfirmed"), "an internal flag reached the published file");
   assert(!json.includes("created_at"), "a timestamp reached the published file");
+});
+
+/* ── M6 addendum: categories and the search index ───────────
+ *
+ * The bucketing is derived rather than stored, so nothing in the database can be consulted
+ * to check it. What makes these assertions worth having is that every one of them fails in
+ * a direction that still RENDERS: a video filed under Images shows a card, a tab that is
+ * missing a post shows a grid, and a search index that quietly carries a withdrawn row
+ * shows a result. None of them looks broken.
+ */
+
+/** A media row whose master says what it is. `over` still wins, so a test can drop it. */
+function mediaRow(mime: string, over: Partial<SourcePost> = {}): SourcePost {
+  return row({
+    media: [
+      asset({ role: "master", bucket: "originals", mime, storage_path: "orig/x" }),
+      asset({ role: "thumb", mime: "image/webp" }),
+    ],
+    ...over,
+  });
+}
+
+Deno.test("the category vocabulary is derived from the master's mime, not from kind", () => {
+  assertEquals(categoryOf(mediaRow("image/jpeg")), "image", "a photograph is not an image");
+  assertEquals(categoryOf(mediaRow("video/mp4")), "video", "a film is not a video");
+  assertEquals(categoryOf(mediaRow("image/jpeg", { kind: "voice" })), "voice",
+    "kind='voice' decides on its own — a voice note's thumb must not outvote it");
+  assertEquals(categoryOf(mediaRow("image/jpeg", { kind: "event" })), null,
+    "an event reached a category shard");
+});
+
+Deno.test("a video with no master is still a video", () => {
+  /* §6 has the ~300 seed items transcoded OFFLINE and their derivatives uploaded directly,
+     so a master row is not guaranteed. THE defect this guards: thumb and poster are both
+     image/webp for a video, so a classifier that fell through to the next available asset
+     would file the entire seed archive of film under Images — and every card would render
+     correctly while it did. */
+  const seeded = row({
+    media: [
+      asset({ role: "thumb", mime: "image/webp" }),
+      asset({ role: "poster", mime: "image/webp" }),
+      asset({ role: "rendition", rendition: "1080p", mime: "video/mp4" }),
+    ],
+  });
+  assertEquals(categoryOf(seeded), "video", "an offline-transcoded video was filed as an image");
+
+  /* CONTROL, and it is the discriminating half: the fallback is not "read whatever mime is
+     nearest". With the rendition removed, the same row carries nothing but image/webp and
+     the answer is NO CATEGORY rather than "image" — which is what proves thumb and poster
+     are genuinely not consulted. A row like this cannot reach a release anyway
+     (publishable_posts requires ingest_state = 'ready', and a ready post has a master), so
+     the safe direction here is unfiltered rather than confidently wrong. */
+  const thumbsOnly = row({ media: [asset({ role: "thumb", mime: "image/webp" })] });
+  assertEquals(categoryOf(thumbsOnly), null, "a thumb was read as the item's own mime");
+});
+
+Deno.test("a media post with no classifiable asset lands in no tab and stays in the feed", () => {
+  const bare = row({ id: "00000000-0000-0000-0000-0000000000d9", media: [] });
+  assertEquals(categoryOf(bare), null, "expected no category");
+
+  const files = buildShards([bare]);
+  const feed = JSON.parse(files.find((f) => f.path === "feed/page-1.json")!.json);
+  assertEquals(feed.items.length, 1, "an uncategorised post fell out of the feed as well");
+  for (const cat of CATEGORIES) {
+    const page = JSON.parse(files.find((f) => f.path === `category/${cat}/page-1.json`)!.json);
+    assertEquals(page.total, 0, `it reached the ${cat} shard`);
+  }
+});
+
+Deno.test("every feed item appears in exactly one category shard, or in none and is an event", () => {
+  /* The bucketing assertion the addendum's verification step asks for, as a partition
+     rather than as a spot check: every id in at most one tab, the three expected rows in
+     the right ones, and the only row allowed to be in none is the event. */
+  const rows = [
+    mediaRow("image/jpeg", { id: "00000000-0000-0000-0000-0000000000e1" }),
+    mediaRow("video/mp4", { id: "00000000-0000-0000-0000-0000000000e2" }),
+    mediaRow("image/png", { id: "00000000-0000-0000-0000-0000000000e3", kind: "voice" }),
+    mediaRow("image/jpeg", { id: "00000000-0000-0000-0000-0000000000e4", kind: "event" }),
+  ];
+  const files = buildShards(rows);
+  const feed = JSON.parse(files.find((f) => f.path === "feed/page-1.json")!.json);
+  assertEquals(feed.items.length, 4, "the feed lost a row");
+
+  const seen = new Map<string, string[]>();
+  for (const file of files.filter((f) => f.path.startsWith("category/"))) {
+    const body = JSON.parse(file.json);
+    for (const entry of body.items as Array<{ id: string; category: string }>) {
+      assertEquals(entry.category, body.category,
+        `${entry.id} carries ${entry.category} inside the ${body.category} shard`);
+      seen.set(entry.id, (seen.get(entry.id) ?? []).concat(body.category));
+    }
+  }
+
+  const doubled = [...seen].filter(([, cats]) => cats.length > 1);
+  assertEquals(doubled.length, 0, `filed under two tabs: ${doubled.map(([id]) => id).join(", ")}`);
+  assertEquals(seen.get("00000000-0000-0000-0000-0000000000e1")?.join(""), "image", "wrong tab");
+  assertEquals(seen.get("00000000-0000-0000-0000-0000000000e2")?.join(""), "video", "wrong tab");
+  assertEquals(seen.get("00000000-0000-0000-0000-0000000000e3")?.join(""), "voice", "wrong tab");
+
+  const uncategorised = (feed.items as Array<{ id: string }>)
+    .map((i) => i.id).filter((id) => !seen.has(id));
+  assertEquals(uncategorised.join(","), "00000000-0000-0000-0000-0000000000e4",
+    "something other than the event is missing from every tab");
+});
+
+Deno.test("a category shard paginates exactly like the feed does", () => {
+  const many = Array.from({ length: FEED_PAGE_SIZE + 3 }, (_, i) =>
+    mediaRow("image/jpeg", {
+      id: `00000000-0000-0000-0000-00000000${(1000 + i).toString()}`,
+      created_on: `2026-08-${String(1 + (i % 28)).padStart(2, "0")}`,
+    }));
+  const files = buildShards(many);
+
+  const feedPages = files.filter((f) => f.path.startsWith("feed/")).map((f) => f.path);
+  const catPages = files.filter((f) => f.path.startsWith("category/image/")).map((f) => f.path);
+  assertEquals(catPages.length, feedPages.length,
+    "the same rows paginate differently under a tab than in the feed");
+  assertEquals(catPages.join(","), "category/image/page-1.json,category/image/page-2.json",
+    "wrong page paths");
+
+  // The ORDER is the feed's, not a re-sort. A reader switching tabs must not see the
+  // archive reshuffle.
+  const feedIds = JSON.parse(files.find((f) => f.path === "feed/page-1.json")!.json)
+    .items.map((i: { id: string }) => i.id).join(",");
+  const catIds = JSON.parse(files.find((f) => f.path === "category/image/page-1.json")!.json)
+    .items.map((i: { id: string }) => i.id).join(",");
+  assertEquals(catIds, feedIds, "a tab orders its rows differently from the feed");
+});
+
+Deno.test("an empty category still publishes page 1", () => {
+  // A 404 on the first tab click of a young archive, cached by the CDN, versus one small
+  // object. Same argument as the empty feed page in release.test.ts.
+  const files = buildShards([mediaRow("image/jpeg")]);
+  const empty = files.find((f) => f.path === "category/video/page-1.json");
+  assert(empty !== undefined, "the video tab has no page to fetch");
+  assertEquals(JSON.parse(empty!.json).total, 0, "wrong total");
+});
+
+Deno.test("index.json names the page count of every tab, and it matches what was built", () => {
+  const files = buildShards([
+    mediaRow("image/jpeg", { id: "00000000-0000-0000-0000-0000000000f1" }),
+    mediaRow("image/jpeg", { id: "00000000-0000-0000-0000-0000000000f2" }),
+    mediaRow("video/mp4", { id: "00000000-0000-0000-0000-0000000000f3" }),
+  ]);
+  const idx = JSON.parse(files.find((f) => f.path === "index.json")!.json);
+
+  assertEquals(idx.categories.image.total, 2, "wrong image total");
+  assertEquals(idx.categories.video.total, 1, "wrong video total");
+  assertEquals(idx.categories.voice.total, 0, "wrong voice total");
+
+  // Derived from what was BUILT, like the cell list beside it: a tab bar that fetched a
+  // page with no shard behind it would 404 for a year.
+  for (const cat of CATEGORIES) {
+    const built = files.filter((f) => f.path.startsWith(`category/${cat}/`)).length;
+    assertEquals(idx.categories[cat].pages, built, `index.json miscounts the ${cat} pages`);
+  }
+  assertEquals(idx.search.total, 3, "index.json does not describe the search index");
+});
+
+Deno.test("search-index.json carries five fields and nothing that would make it big", () => {
+  const files = buildShards([mediaRow("image/jpeg")]);
+  const file = files.find((f) => f.path === "search-index.json")!;
+  const out = JSON.parse(file.json);
+
+  assertEquals(out.total, 1, "wrong total");
+  assertEquals(
+    Object.keys(out.items[0]).sort().join(","),
+    "category,decade,id,title_ar,title_en",
+    "the search index grew a field — it is unpaginated only because it is this narrow",
+  );
+  assertEquals(out.items[0].title_ar, "عنوان", "the Arabic title is missing");
+  assertEquals(out.items[0].category, "image", "the category is missing");
+
+  // The heavy fields, named rather than left implied by the key list above, so a future
+  // reader sees WHY they are absent rather than only that they are.
+  for (const heavy of ["thumb", "body_ar", "body_en", "author", "media", "comments"]) {
+    assert(!file.json.includes(`"${heavy}"`), `${heavy} reached the search index`);
+  }
+});
+
+Deno.test("the search index carries every publishable row, events included", () => {
+  /* Events are excluded from the CATEGORY shards and present in the search index with a
+     null category, because the All tab is the feed and the feed carries events. A reader
+     searching from All must find one. */
+  const files = buildShards([
+    mediaRow("image/jpeg", { id: "00000000-0000-0000-0000-0000000000a1" }),
+    mediaRow("image/jpeg", { id: "00000000-0000-0000-0000-0000000000a2", kind: "event" }),
+  ]);
+  const out = JSON.parse(files.find((f) => f.path === "search-index.json")!.json);
+  assertEquals(out.items.length, 2, "the search index dropped a row");
+  const ev = out.items.find((i: { id: string }) => i.id === "00000000-0000-0000-0000-0000000000a2");
+  assertEquals(ev.category, null, "an event was given a category");
+});
+
+Deno.test("the search index holds exactly the ids the feed holds", () => {
+  /* The addendum's second verification step, as an assertion rather than a manual
+     spot-check. `buildShards` is handed rows the publisher has already filtered — approved,
+     not taken down, ingest ready, hash intact — so the way a pending or withdrawn row could
+     reach the index is by this function reading from somewhere other than the feed's own
+     list. That is the thing being pinned. */
+  const rows = [
+    mediaRow("image/jpeg", { id: "00000000-0000-0000-0000-0000000000c7" }),
+    mediaRow("video/mp4", { id: "00000000-0000-0000-0000-0000000000c8", kind: "voice" }),
+    mediaRow("image/jpeg", { id: "00000000-0000-0000-0000-0000000000c9", kind: "event" }),
+  ];
+  const files = buildShards(rows);
+  const feedIds = JSON.parse(files.find((f) => f.path === "feed/page-1.json")!.json)
+    .items.map((i: { id: string }) => i.id).sort().join(",");
+  const searchIds = JSON.parse(files.find((f) => f.path === "search-index.json")!.json)
+    .items.map((i: { id: string }) => i.id).sort().join(",");
+  assertEquals(searchIds, feedIds, "the search index and the feed describe different archives");
+});
+
+Deno.test("§7 — the search index leaks nothing either", () => {
+  const found = leaks(searchIndexFile([row()]).json);
+  assert(found.length === 0, `the search index leaked: ${found.join(", ")}`);
+});
+
+Deno.test("a title is copied through, not re-stripped", () => {
+  /* §6's bidi rule is enforced on INGEST (0045), and the addendum says to reuse the
+     already-stripped strings rather than strip again. Two implementations of one rule fail
+     by disagreeing quietly — the later one wins and nobody can say which produced a given
+     string. So the assertion is the observable half: this function does not transform what
+     it is handed.
+
+     The fixture is written with escapes rather than literals. An invisible override
+     character sitting in a source file is the exact thing §6 exists to keep out of strings,
+     and a test for it should not smuggle one into the repository to make its point. */
+  const odd = "\u202Ea title with an override\u2069 still in it";
+  const out = JSON.parse(searchIndexFile([row({ title_ar: odd })]).json);
+  assertEquals(out.items[0].title_ar, odd, "the publisher rewrote a title it was handed");
+  assert(odd.charCodeAt(0) === 0x202E, "CONTROL: the fixture really does carry an override");
+});
+
+Deno.test("a feed card and an item shard agree about the category", () => {
+  // Two call sites, one derivation. They are read by the same view — the viewer
+  // reconstructs a card from an item shard for a deep link — so a disagreement would show
+  // as a badge that changes when a reader arrives from a shared link.
+  const r = mediaRow("video/mp4");
+  assertEquals(feedEntry(r).category, publicPost(r).category, "the two shapes disagree");
+  assertEquals(feedEntry(r).category, "video", "wrong category");
 });
