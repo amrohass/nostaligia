@@ -67,6 +67,10 @@ const RELEASE = '/v/2026-09-06T00:00:00Z/';
 function entry(id, extra = {}) {
   return {
     id, kind: 'media', title_ar: 'ذكرى ' + id, title_en: 'memory ' + id,
+    // M6's baked category. Every card in a real release carries one, and displayKind()
+    // reads it — so an entry without it here would render a video as a photograph and
+    // nothing in this file would notice.
+    category: 'image',
     decade: 1960, date_precision: 'decade', thumb: null, thumb_w: null, thumb_h: null,
     author: { handle: 'someone', display_name: 'Someone', label: 'member' },
     likes: 0, comments: 0, day: '2026-09-01', ...extra,
@@ -79,16 +83,55 @@ const FEED = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9'].map((id) => 
 const GEO = ['g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'g7'].map((id) =>
   entry(id, { lat: 31.9, lon: 35.2, precision: 'street' }));
 
+/* M6's three tabs, as a real release has them: the same entries the feed carries, filtered
+   by category. `e1` is an event and is in NO category shard, which is the addendum's rule
+   and the reason the image tab is one shorter than the feed. */
+const IMAGES = FEED.filter((r) => r.category === 'image' && r.kind === 'media');
+const VIDEOS = [entry('v1', { category: 'video' }), entry('v2', { category: 'video' })];
+const VOICES = [entry('s1', { kind: 'voice', category: 'voice' })];
+
 const SHARDS = {
   '/manifest.json': { release: RELEASE, generated_on: '2026-09-06' },
   '/redactions.json': { ids: [] },
   [RELEASE + 'content.json']: { blocks: { 'hero.line': { ar: 'ذاكرة', en: 'Memory' } } },
-  [RELEASE + 'index.json']: { pages: 1, total: FEED.length, decades: [1960], cells: ['sv8w0'] },
+  [RELEASE + 'index.json']: {
+    pages: 1, total: FEED.length, decades: [1960], cells: ['sv8w0'],
+    categories: {
+      image: { pages: 1, total: IMAGES.length },
+      video: { pages: 1, total: VIDEOS.length },
+      voice: { pages: 1, total: VOICES.length },
+    },
+    search: { total: FEED.length + VIDEOS.length + VOICES.length },
+  },
   [RELEASE + 'feed/page-1.json']: { page: 1, pages: 1, total: FEED.length, items: FEED },
+  [RELEASE + 'category/image/page-1.json']:
+    { category: 'image', page: 1, pages: 1, total: IMAGES.length, items: IMAGES },
+  [RELEASE + 'category/video/page-1.json']:
+    { category: 'video', page: 1, pages: 1, total: VIDEOS.length, items: VIDEOS },
+  [RELEASE + 'category/voice/page-1.json']:
+    { category: 'voice', page: 1, pages: 1, total: VOICES.length, items: VOICES },
+  [RELEASE + 'search-index.json']: {
+    total: 3,
+    items: [
+      { id: 'a1', title_ar: 'ميدان المنارة', title_en: 'Al-Manara Square', category: 'image', decade: 1960 },
+      { id: 'v1', title_ar: 'فيلم المنارة', title_en: 'Manara Film', category: 'video', decade: 1980 },
+      { id: 's1', title_ar: 'تسجيل من رام الله', title_en: 'A Ramallah recording', category: 'voice', decade: 1970 },
+    ],
+  },
+  [RELEASE + 'item/v1.json']: {
+    ...entry('v1', { category: 'video' }), body_ar: '', body_en: '',
+    media: [], comment_count: 0, comments: [],
+  },
   [RELEASE + 'geo/sv8w0.json']: { cell: 'sv8w0', total: GEO.length, items: GEO },
   [RELEASE + 'places.json']: { places: [] },
   [RELEASE + 'item/a1.json']: {
-    ...entry('a1'), body_ar: '', body_en: '', media: [], comment_count: 0, comments: [],
+    /* Two paragraphs, separated by a blank line, because the split into <p> is the half of
+       the description that can be wrong without looking wrong: one paragraph renders
+       identically either way. */
+    ...entry('a1'),
+    body_ar: 'كان الزفاف يمرّ من هنا كل خميس.\n\nوكنّا نقف على الدرج ننتظر.',
+    body_en: 'The procession came through here every Thursday.\n\nWe waited on the steps.',
+    media: [], comment_count: 0, comments: [],
   },
   [RELEASE + 'item/g1.json']: {
     ...entry('g1'), body_ar: '', body_en: '', media: [], comment_count: 0, comments: [],
@@ -108,8 +151,14 @@ const SHELL = [...read('site/index.html').matchAll(/<script src="(\/assets\/js\/
 async function boot({ pathname = '/', innerWidth = 1200, overrides = {} } = {}) {
   const win = makeWindow({ pathname, innerWidth });
 
+  /* Every request this boot makes, in order. §9's budget is about what a first paint
+     TRANSFERS, and the only way to assert that a file is absent from it is to watch the
+     requests — a scan of the source cannot tell a lazy fetch from an eager one. */
+  win._requested = [];
+
   win.fetch = (url) => {
     const key = String(url);
+    win._requested.push(key);
     if (key in SHARDS) {
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(SHARDS[key]) });
     }
@@ -896,6 +945,302 @@ console.log('# the share sheet — the file chip');
      'THE signal Part 3 asked for: a tick, only once it is true');
   ok(textOf(chip).includes(win.I18N.t('share.fileDone')),
      `...and says what happened in words too ("${win.I18N.t('share.fileDone')}")`);
+}
+
+/* ═══ 6 · M6's tabs, search and description, RENDERED ════════════════════════
+ *
+ * The same argument this file's header makes about the back button: all four defects below
+ * are values that do not exist until a render, and every one of them passes a source scan.
+ * A tab bar that renders four anchors and always draws the feed behind them looks right.
+ * A search box whose input is rebuilt on every keystroke loses focus and looks like a slow
+ * phone. A description that is never mounted looks like an item with no description.
+ */
+
+console.log('# M6 — the tabs, the search box, and the description on an item');
+
+{
+  const win = await boot({ pathname: '/' });
+
+  const tabs = view(win).querySelectorAll('a.tab');
+  ok(tabs.length === 4, `CONTROL: the archive rendered ${tabs.length} tabs`);
+
+  /* DOM ORDER, which is what carries the RTL behaviour. §9 forbids physical properties, so
+     the row is a plain flex row and the browser lays it out from the reading edge — start
+     to end in both languages. That means the ORDER in the markup is the order on screen in
+     Arabic and in English, and a "fix" that reversed the array for one of them would be the
+     regression. Asserted here, and the CSS half (nothing sets direction, nothing says left
+     or right) is scripts/frontend-rtl-test.mjs's. */
+  const order = Array.from(tabs).map((a) => a.getAttribute('href')).join(' ');
+  ok(order === '/ /c/image /c/video /c/voice',
+     `the tabs are in one order for both languages (${order})`);
+
+  ok(tabs[0].getAttribute('aria-current') === 'page',
+     'All is the active tab on / — the addendum\'s default');
+  ok(tabs[1].getAttribute('aria-current') === null,
+     '...and it is the only one, so a screen reader is told what the paint says');
+
+  // The default tab is the CURRENT feed behaviour, unchanged: every published item,
+  // event included, in the feed's own order.
+  ok(view(win).querySelectorAll('a.memory').length === FEED.length,
+     'the All tab draws the whole feed, exactly as before the addendum');
+
+  /* THE budget assertion at shell level. §9 counts "HTML + CSS + JS + first feed page";
+     the addendum requires search-index.json to be fetched on first interaction. A boot
+     that pulled it would be inside the budget and outside the rule, and the only way to
+     see the difference is the request log. */
+  const early = win._requested.filter((u) => u.includes('search-index.json'));
+  ok(early.length === 0,
+     `booting the whole shell requests no search index (${win._requested.length} requests, none of them it)`);
+  const catsEarly = win._requested.filter((u) => u.includes('/category/'));
+  ok(catsEarly.length === 0,
+     'and no category shard either — the All tab reads feed/page-N.json, as it always did');
+}
+
+{
+  // Switching tabs, through public.js's own link delegation rather than by calling in.
+  const win = await boot({ pathname: '/' });
+  const videoTab = view(win).querySelectorAll('a.tab')[2];
+  click(win, videoTab);
+  for (let i = 0; i < 6; i++) await settle();
+
+  ok(win.location.pathname === '/c/video',
+     `a tab is a real URL and clicking it navigates (${win.location.pathname})`);
+  ok(win._requested.some((u) => u.includes('category/video/page-1.json')),
+     '...and the grid\'s data source becomes the category shard');
+
+  const cards = view(win).querySelectorAll('a.memory');
+  ok(cards.length === VIDEOS.length,
+     `the Videos tab draws only its own ${cards.length} items, not the feed's ${FEED.length}`);
+  ok(view(win).querySelectorAll('a.tab')[2].getAttribute('aria-current') === 'page',
+     'the active tab moved with the route');
+
+  /* The badge, which is the defect the baked category closes. displayKind() asked entries
+     for `entry.video` — a key no shard has ever emitted — so every video in the archive
+     wore a photograph's badge. Read off the rendered card rather than from the source,
+     because the source looked correct for three milestones. */
+  const badge = cards[0].querySelector('span.badge');
+  ok(badge !== null && textOf(badge) === win.I18N.t('kind.video'),
+     `a video card wears the video badge ("${badge && textOf(badge)}")`);
+
+  // CONTROL for the assertion above: an image card must NOT wear it, or the badge would be
+  // a constant rather than a reading of the data.
+  const winAll = await boot({ pathname: '/' });
+  const firstCard = winAll.document.querySelector('#view').querySelector('a.memory');
+  const first = firstCard && firstCard.querySelector('span.badge');
+  ok(first !== null && textOf(first) === winAll.I18N.t('kind.photo'),
+     `CONTROL: an image card still wears the photo badge ("${textOf(first)}")`);
+}
+
+{
+  // Landing on a tab directly — a link somebody sent, or a refresh. Nothing may depend on
+  // having passed through the archive first.
+  const win = await boot({ pathname: '/c/voice' });
+  ok(view(win).querySelectorAll('a.tab')[3].getAttribute('aria-current') === 'page',
+     'a deep link to /c/voice opens on that tab');
+  ok(view(win).querySelectorAll('a.memory').length === VOICES.length,
+     `...with its own items loaded (${VOICES.length})`);
+  ok(!win._requested.some((u) => u.includes('feed/page-1.json')),
+     'and WITHOUT also fetching the All feed — one place decides which page loads first');
+
+  // An unknown category is a typo or a stale link, and the archive is the honest answer to
+  // both. Rendering an empty "Audio" tab would invent a section of the archive.
+  const bad = await boot({ pathname: '/c/audio' });
+  ok(bad.document.querySelector('#view').querySelectorAll('a.tab')[0]
+       .getAttribute('aria-current') === 'page',
+     '/c/audio falls back to All rather than rendering a tab that does not exist');
+}
+
+{
+  /* The live search, driven the way a reader drives it: type, wait for the debounce, look
+     at what is on screen. */
+  const win = await boot({ pathname: '/' });
+  const input = view(win).querySelector('input.search__input');
+  ok(input !== null, 'CONTROL: the archive rendered a search box');
+  ok(input.getAttribute('type') === 'search', '...as a type=search input');
+
+  /* §9's label rule, which axe found broken on three other controls on 5 Sep: a caption
+     beside a control is not a label. UI.labelFor is what attaches it. */
+  const label = view(win).querySelector('label.field__label');
+  ok(label !== null && label.getAttribute('for') === input.id && input.id,
+     `the box is named by a real <label for> (${label && label.getAttribute('for')})`);
+
+  /* THE debounce, asserted so that removing it turns this red.
+   *
+   * The first version of this checked only that no request had been made SYNCHRONOUSLY
+   * after a keystroke — which is true with the debounce and equally true without it, since
+   * the fetch goes out on a microtask either way. It survived the mutation that replaced
+   * `setTimeout(runSearch, 180)` with a bare `runSearch()`, which is the definition of an
+   * assertion that cannot fail. What discriminates is that nothing happens on SCREEN until
+   * the timer fires, however long the microtask queue is given to drain. */
+  input.value = 'م';
+  input.fire('input', {});
+  input.value = 'من';
+  input.fire('input', {});
+  input.value = 'منارة';
+  input.fire('input', {});
+
+  ok(win._timers.filter((t) => t.fn).length === 1,
+     `three keystrokes leave ONE live timer, not three — the debounce coalesces them ` +
+     `(${win._timers.filter((t) => t.fn).length})`);
+
+  for (let i = 0; i < 8; i++) await settle();
+  ok(view(win).querySelectorAll('a.result').length === 0 &&
+     view(win).querySelector('div.grid') !== null,
+     'and with the microtask queue fully drained the grid is still the grid — a keystroke ' +
+     'does not search, the timer does');
+  ok(!win._requested.some((u) => u.includes('search-index.json')),
+     '...nor has anything been fetched for it yet');
+
+  win._flushTimers();
+  for (let i = 0; i < 6; i++) await settle();
+
+  ok(win._requested.filter((u) => u.includes('search-index.json')).length === 1,
+     'the debounce fires once and fetches the index once');
+
+  const results = view(win).querySelectorAll('a.result');
+  ok(results.length === 2,
+     `an Arabic query matches both titles that contain it (${results.length} rows)`);
+  ok(view(win).querySelector('div.grid') === null,
+     'the results REPLACE the grid rather than sitting under it');
+
+  /* The input node survived. This is the assertion the whole in-place repaint exists for:
+     a full re-render would build a new <input>, and on a phone that is the keyboard closing
+     and the composition being lost mid-word. Identity, not equality. */
+  ok(view(win).querySelector('input.search__input') === input,
+     'the input the reader is typing into is the same node after the results repaint');
+
+  // The per-tab counts, which are what make within-tab search legible: a reader on Videos
+  // who searches for a photograph's title has to be able to see where it went.
+  const counts = Array.from(view(win).querySelectorAll('span.tab__count')).map(textOf);
+  ok(counts.join('|') === win.I18N.num(2) + '|' + win.I18N.num(1) + '|' + win.I18N.num(1) + '|' + win.I18N.num(0),
+     `each tab reports its own share of the matches (${counts.join('|')})`);
+
+  // Clearing the box brings the grid back rather than leaving the last results on screen.
+  input.value = '';
+  input.fire('input', {});
+  win._flushTimers();
+  for (let i = 0; i < 4; i++) await settle();
+  ok(view(win).querySelectorAll('a.result').length === 0 &&
+     view(win).querySelector('div.grid') !== null,
+     'clearing the query restores the grid');
+}
+
+{
+  /* Search is scoped to the ACTIVE tab — the addendum's §6 decision. Asserted from the
+     Videos tab with a query that matches an image as well: the image must not appear here,
+     and the tab counts must still say it exists. */
+  const win = await boot({ pathname: '/c/video' });
+  for (let i = 0; i < 4; i++) await settle();
+
+  const input = view(win).querySelector('input.search__input');
+  input.value = 'منارة';
+  input.fire('input', {});
+  win._flushTimers();
+  for (let i = 0; i < 6; i++) await settle();
+
+  const rows = view(win).querySelectorAll('a.result');
+  ok(rows.length === 1, `the Videos tab shows only its own match (${rows.length})`);
+  ok(textOf(rows[0]).includes('فيلم'), `...and it is the video ("${textOf(rows[0])}")`);
+
+  // The discriminating half. Without this the assertion above would pass just as happily
+  // against a search that matched nothing at all.
+  const counts = Array.from(view(win).querySelectorAll('span.tab__count')).map(textOf);
+  ok(counts[1] === win.I18N.num(1),
+     `the Images tab still says it holds a match (${counts.join('|')}) — which is how a reader finds it`);
+}
+
+{
+  /* One tab failing is not all of them failing.
+   *
+   * `state.error` is set only by the ALL feed's first page, and until 9 Sep 2026 render()
+   * answered it by replacing the whole view with an error page — BEFORE renderArchive() and
+   * before the current tab was given a chance to fetch anything. With four data sources
+   * that turns one missing shard into three tabs the reader can never reach, and the screen
+   * that says so offers no way out of itself.
+   *
+   * The feed shard is removed for this boot only; every other file in the release is where
+   * it was, which is what makes the assertion about the FEED rather than about the CDN.
+   */
+  const key = RELEASE + 'feed/page-1.json';
+  const saved = SHARDS[key];
+  delete SHARDS[key];
+
+  const win = await boot({ pathname: '/' });
+  SHARDS[key] = saved;
+
+  const tabs = view(win).querySelectorAll('a.tab');
+  ok(tabs.length === 4,
+     `a failed feed still renders the tab bar (${tabs.length} tabs) — the reader has somewhere to go`);
+  ok(view(win).querySelectorAll('a.memory').length === 0,
+     'CONTROL: and no cards, because the shard really did not load');
+  ok(textOf(view(win)).includes(win.I18N.t('archive.err.missing')),
+     'the failure is reported where the grid would be, rather than replacing the page');
+
+  // THE assertion: the other three tabs still work.
+  click(win, tabs[1]);
+  for (let i = 0; i < 8; i++) await settle();
+  ok(win.location.pathname === '/c/image', `the Images tab is still reachable (${win.location.pathname})`);
+  ok(view(win).querySelectorAll('a.memory').length === IMAGES.length,
+     `...and loads its own shard (${IMAGES.length} cards) despite the feed being gone`);
+}
+
+{
+  /* The description. §9's prerendered page has carried body_ar/body_en since M3 and the
+     hydrated viewer never did, so a reader arriving from a shared link watched the text
+     disappear as the SPA rendered over it. */
+  const win = await boot({ pathname: '/item/a1' });
+  for (let i = 0; i < 8; i++) await settle();
+
+  const slide = overlay(win) && overlay(win).querySelector('.viewer__slide');
+  ok(slide !== null, 'CONTROL: the viewer opened on the deep-linked item');
+
+  /* PREMISE for everything below, and it is not free: upgradeSlide() finds its slide with
+     `.viewer__slide[data-id="…"]`, so a dataset that did not reflect to the attribute would
+     make it return at its first line — and every assertion here would then be about a slide
+     nothing had hydrated, passing for the wrong reason. scripts/lib/dom-stub.mjs reflects
+     it, as a browser does; this is the check that it still does. */
+  ok(slide.getAttribute('data-id') === 'a1',
+     `PREMISE: the slide is findable by the id it was built with (${slide.getAttribute('data-id')})`);
+
+  const paras = slide.querySelectorAll('p.viewer__para');
+  ok(paras.length === 2,
+     `the description renders, split on blank lines exactly as prerender.ts splits it (${paras.length} paragraphs)`);
+  ok(textOf(paras[0]).includes('الزفاف'),
+     `...with the Arabic side in an Arabic interface ("${textOf(paras[0])}")`);
+
+  /* §6: it is a user string, so it is inside <bdi> and it is a text node. This is the
+     longest user-authored string in the system and the one most likely to contain something
+     that looks like markup. */
+  ok(paras[0].querySelector('bdi') !== null,
+     'each paragraph wraps its text in <bdi> (§6, the render half of the bidi rule)');
+
+  // An item with no description must render nothing rather than an empty box — every event
+  // listing is one, and 0063 makes that a large share of them.
+  const win2 = await boot({ pathname: '/item/g1' });
+  for (let i = 0; i < 8; i++) await settle();
+  const empty = win2.document.querySelector('#viewer');
+  ok(empty && empty.querySelectorAll('p.viewer__para').length === 0,
+     'an item with no body renders no paragraphs at all');
+}
+
+{
+  // The English side of the same item, because "renders the description" and "renders the
+  // description the reader can read" are different claims and only one of them is useful.
+  const win = await boot({ pathname: '/item/a1' });
+  win.I18N.set('en');
+  win._emit('langchange');
+  for (let i = 0; i < 10; i++) await settle();
+
+  const slide = overlay(win) && overlay(win).querySelector('.viewer__slide');
+  const para = slide && slide.querySelector('p.viewer__para');
+  ok(para !== null && textOf(para).includes('procession'),
+     `the English interface shows the English body ("${para && textOf(para)}")`);
+
+  // And the tab labels follow the language, which is the other half of §9's "every string
+  // through I18N with ar and en keys" for the controls this addendum adds.
+  const tabs = win.document.querySelector('#view').querySelectorAll('a.tab');
+  ok(tabs.length === 4 && textOf(tabs[1]).includes('Images'),
+     `the tab labels are translated ("${Array.from(tabs).map(textOf).join(' / ')}")`);
 }
 
 console.log(`\n1..${passed + failed}`);

@@ -16,6 +16,14 @@
 // dashboard "dynamically imported on moderator/admin login", so its bytes are never sent to
 // a reader. Counting it here would make the budget describe a page nobody loads.
 //
+// search-index.json is NOT counted either, and for the same kind of reason: the M6 addendum
+// requires it to be fetched on the first interaction with the search box rather than at
+// load. That is a claim about a CALL SITE, not about a file, so this script cannot check
+// it — a budget measures what is in the list it was given. The assertion that the shell
+// does not request it lives in scripts/frontend-view-test.mjs, which boots archive.js
+// against a stubbed CDN and reads the request log. If that ever regresses, this figure goes
+// on being correct and stops being the truth about a first paint.
+//
 // FONTS are not counted either, and that one deserves saying out loud because it flatters
 // the number. §9 lists four things in the budget and fonts are not among them — they get
 // their own sentence in the same section ("Arabic font subset with unicode-range split,
@@ -116,6 +124,12 @@ const feed = {
   items: Array.from({ length: pageSize }, (_, i) => ({
     id: `0000000${i.toString(16).padStart(4, '0')}-0000-4000-8000-00000000000${i % 10}`,
     kind: i % 7 === 0 ? 'voice' : 'media',
+    // M6's category, baked by feedEntry(). A short repeated string, which is the cheapest
+    // thing brotli ever sees — but it is in the file that ships, so it is in the file that
+    // is measured. The three values are spread rather than constant for the same reason the
+    // titles are: a column of 24 identical strings compresses to nothing and would flatter
+    // the figure.
+    category: i % 7 === 0 ? 'voice' : (i % 3 === 0 ? 'video' : 'image'),
     title_ar: TITLES_AR[i % TITLES_AR.length],
     title_en: TITLES_EN[i % TITLES_EN.length],
     decade: 1950 + (i % 7) * 10,

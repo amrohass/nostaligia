@@ -49,17 +49,41 @@
   var state = {
     error: null,          // an i18n key, when the archive could not be read
 
-    feed: [],             // accumulated feed entries, newest first
+    /* ── The grid's four data sources (M6 addendum) ──────────
+       One grid, four sources — not four grids. `all` is feed/page-N.json and the other
+       three are category/{cat}/page-N.json: the same page size, the same order, the same
+       card, the same cardGrid(). Each keeps its own paging cursor because each is scrolled
+       independently and a reader who has read six pages of Images and then switches to
+       Videos must not be handed page seven of anything.
+
+       `failed` is not redundant with `error`. render() asks for page 1 of whatever tab is
+       on screen, and render() runs again on every language change and every popstate — so
+       without a latch, a tab whose first page cannot be fetched would retry forever, once
+       per render, against a CDN that is already not answering. */
+    tab: 'all',
+    tabs: {
+      all:   { items: [], page: 0, pages: 1, total: 0, loading: false, failed: false, error: null },
+      image: { items: [], page: 0, pages: 1, total: 0, loading: false, failed: false, error: null },
+      video: { items: [], page: 0, pages: 1, total: 0, loading: false, failed: false, error: null },
+      voice: { items: [], page: 0, pages: 1, total: 0, loading: false, failed: false, error: null }
+    },
+
+    /* ── Live search (M6 addendum) ───────────────────────────
+       `query` is what is in the box. `results` is the last resolved match list, or null
+       when nothing has been searched yet — null and [] are different states and the screen
+       says different things about them ("type to search" versus "no memory matches"). */
+    query: '',
+    results: null,
+    searching: false,
+    searchFailed: false,
+
+    feed: null,           // the ALL tab's items, under the name this file has always used
     /* A deep link may land on an item that is nine feed pages down. Rather than loading
        nine pages to find it, it is fetched alone and shown FIRST in the viewer — and kept
        here rather than pushed into state.feed, because the feed is also what the archive
        grid renders and an item jumping to the front of the masonry because somebody
        arrived from WhatsApp is a bug with a very confusing cause. */
     lead: null,
-    page: 0,              // highest feed page loaded
-    pages: 1,
-    total: 0,
-    loadingPage: false,
 
     items: {},            // id -> item shard, once fetched
     liked: {},            // id -> true, from the member's own rows
@@ -108,6 +132,44 @@
     recovery: null
   };
 
+  /* THE array, not a copy of it. `state.feed` is the All tab's items under the name the
+     rest of this file has used since M3 — /events filters it, the viewer indexes into it,
+     onSignedIn maps it — and nothing ever reassigns it, so one identity is enough to keep
+     both names true. Written here rather than in the literal above because an object
+     cannot refer to itself while it is being built. */
+  state.feed = state.tabs.all.items;
+
+  /* ── Tabs ────────────────────────────────────────────────── */
+
+  /* The tab order, and the vocabulary /c/{cat} is validated against. `all` leads because
+     it is the default and because §9 wants the archive to open on the whole archive.
+
+     The three that follow are the publisher's CATEGORIES, spelled the same way — the shard
+     path is built from this string, so a name that drifted here would 404 a tab rather
+     than mis-render it. */
+  var TABS = ['all', 'image', 'video', 'voice'];
+
+  /* Category → the `kind.*` string a badge shows. The two vocabularies are deliberately
+     not the same word: a category is what the file IS (the publisher's word, from the
+     master's mime) and a kind is what a reader is about to look at. They coincide for two
+     of the three and not for `image`, which reads as "Photo" on a card. */
+  var CATEGORY_KIND = { image: 'photo', video: 'video', voice: 'voice' };
+
+  /** The tab on screen, and the paging cursor that belongs to it. */
+  function tabState(name) { return state.tabs[name || state.tab] || state.tabs.all; }
+
+  /** What the grid is currently drawing from. */
+  function currentItems() { return tabState().items; }
+
+  /** Every id loaded in any tab — what an engagement refresh has to cover. */
+  function loadedIds() {
+    var seen = {};
+    TABS.forEach(function (name) {
+      state.tabs[name].items.forEach(function (row) { seen[row.id] = true; });
+    });
+    return Object.keys(seen);
+  }
+
   function adoptAccount(account) {
     state.account = account ? { id: account.id, email: account.email, role: account.role, handle: null } : null;
     state.signedIn = account !== null;
@@ -136,11 +198,34 @@
     var seg = segments();
     if (!seg.length) return 'archive';
     if (seg[0] === 'item') return 'archive';   // the viewer opens OVER the archive
+    if (seg[0] === 'c') return 'archive';      // a tab is the archive with a filter on it
     if (seg[0] === 'u' || seg[0] === 'me') return 'profile';
     if (seg[0] === 'page') return 'page';
     if (seg[0] === 'reset') return 'reset';
     return ['map', 'events'].indexOf(seg[0]) > -1 ? seg[0] : 'archive';
   }
+
+  /**
+   * Which tab the URL names. `/` is All; `/c/{cat}` is one of the three.
+   *
+   * The addendum asks for the active tab to be in the URL "via the existing History API
+   * router — no second router", so it is a PATH segment and not a query string. Two reasons
+   * beyond obedience: navigate() compares against path(), which drops a query entirely, so
+   * `?tab=video` would be a navigation this router could not see; and §2's whole argument
+   * for History API routing is that every view has a real URL a crawler can resolve, which
+   * a tab reached only by clicking would not have.
+   *
+   * An unknown category falls back to All rather than rendering an empty tab. `/c/audio`
+   * is a typo or a stale link, and the archive is the honest answer to both.
+   */
+  function routedTab() {
+    var seg = segments();
+    if (seg[0] !== 'c' || !seg[1]) return 'all';
+    return TABS.indexOf(seg[1]) > 0 ? seg[1] : 'all';
+  }
+
+  /** The URL for a tab. One place, so the links and the router cannot disagree. */
+  function tabPath(name) { return name === 'all' ? '/' : '/c/' + name; }
 
   function routedItemId() {
     var seg = segments();
@@ -463,25 +548,58 @@
    * and the viewer's index stays valid across a load. Guarded by `loadingPage` because the
    * scroll handler and a deep link can both ask at once.
    */
-  function loadNextPage() {
-    if (state.loadingPage || state.page >= state.pages) return Promise.resolve();
-    state.loadingPage = true;
-    var want = state.page + 1;
-    return ARCHIVE.feedPage(want).then(function (body) {
-      state.page = body.page;
-      state.pages = body.pages;
-      state.total = body.total;
+  function loadNextPage(name) {
+    name = name || state.tab;
+    var b = tabState(name);
+    if (b.loading || b.page >= b.pages) return Promise.resolve();
+    b.loading = true;
+    var want = b.page + 1;
+    /* The one line where the four sources differ. Everything after it — the accumulation,
+       the de-duplication, the engagement refresh — is identical, which is the addendum's
+       "no fork of the grid component" applied to the loader as well as to the renderer. */
+    var request = name === 'all' ? ARCHIVE.feedPage(want) : ARCHIVE.categoryPage(name, want);
+    return request.then(function (body) {
+      b.page = body.page;
+      b.pages = body.pages;
+      b.total = body.total;
       var known = {};
-      state.feed.forEach(function (row) { known[row.id] = true; });
-      body.items.forEach(function (row) { if (!known[row.id]) state.feed.push(row); });
-      state.loadingPage = false;
+      b.items.forEach(function (row) { known[row.id] = true; });
+      body.items.forEach(function (row) { if (!known[row.id]) b.items.push(row); });
+      b.loading = false;
+      b.failed = false;
       return refreshEngagement(body.items.map(function (r) { return r.id; }));
     }, function (err) {
-      state.loadingPage = false;
+      b.loading = false;
       // Only the FIRST page failing is a broken archive. A later page failing leaves what
       // is already on screen intact, which is what a reader mid-scroll needs.
-      if (want === 1) state.error = err && err.key ? err.key : 'archive.err.generic';
+      if (want === 1) {
+        b.failed = true;
+        // state.error blanks the whole screen, so only the ALL feed may set it: that one
+        // failing means the archive is unreadable. A category page failing means one tab is
+        // unreadable, and the reader can still use the other three — so it is reported
+        // inside the grid, where the tab that failed is.
+        if (name === 'all') state.error = err && err.key ? err.key : 'archive.err.generic';
+        else b.error = err && err.key ? err.key : 'archive.err.generic';
+      }
       throw err;
+    });
+  }
+
+  /**
+   * Page 1 of a tab, once.
+   *
+   * render() calls this for whatever tab is on screen, and render() runs on every language
+   * change and every popstate — so the three guards are what stop a tab whose first page
+   * 404s from re-requesting it on every one of those. `failed` latches; nothing clears it
+   * short of a reload, which is the right answer for a CDN that is not answering.
+   */
+  function ensureFirstPage(name) {
+    var b = tabState(name);
+    if (b.page > 0 || b.loading || b.failed) return;
+    loadNextPage(name).then(function () {
+      if (route() === 'archive' || route() === 'events') render();
+    }, function () {
+      if (route() === 'archive' || route() === 'events') render();
     });
   }
 
@@ -501,12 +619,22 @@
   }
 
   /* The shard carries the schema's `kind` (media|voice|event). What a reader cares about is
-     what they are about to look at, which for `media` depends on the thumb's mime — the same
-     distinction the moderation queue makes for the same reason. */
+     what they are about to look at, which for `media` depends on the file — the same
+     distinction the moderation queue makes for the same reason.
+
+     Until the M6 addendum this asked the entry for `entry.video`, a key no shard has ever
+     emitted, so every video in the archive wore a photograph's badge and had no play mark
+     on its plate. Nothing on a feed card could have answered the question: the mime that
+     settles it lives on the master asset, and §6 keeps `originals` rows out of every shard.
+     `category` is that answer, derived once at publish time (shards.ts, categoryOf).
+
+     The fallback is deliberately today's behaviour rather than a guess: a card from a
+     release built before the addendum has no `category`, and it reads as a photograph
+     exactly as it did before — wrong for videos, and no more wrong than it already was. */
   function displayKind(entry) {
     if (entry.kind === 'event') return 'event';
     if (entry.kind === 'voice') return 'voice';
-    if (entry.video) return 'video';
+    if (entry.category === 'video') return 'video';
     return 'photo';
   }
 
@@ -628,21 +756,298 @@
     }));
   }
 
+  /* ── Tabs and search (M6 addendum) ───────────────────────────
+   *
+   * The nodes the search updates IN PLACE, and the reason they are held rather than
+   * re-rendered: a full render() on every keystroke would rebuild the <input> under the
+   * finger typing into it, losing focus, losing the composition an Arabic keyboard is
+   * mid-way through, and losing the selection. Exactly the argument applyDecade() makes
+   * about rebuilding the slider under a dragging finger, and exactly the reason §10's
+   * mid-range Android is the exit criterion rather than a desktop.
+   *
+   * Cleared by renderArchive() on every mount so a stale node from a previous view can
+   * never be written into after it has left the document.
+   */
+  var archiveNodes = { grid: null, note: null, counts: {} };
+
+  /**
+   * How many of the current matches fall in each tab.
+   *
+   * The one thing that makes within-tab search legible rather than mysterious. Search is
+   * scoped to the active tab (the addendum's §6 decision), so a reader on Videos who
+   * searches for a title that is a photograph gets nothing — and without this they have no
+   * way to know the archive HAS it. With it, "Images ٣" is sitting next to the empty
+   * result, one click away.
+   *
+   * One pass over an array already in memory, so it costs nothing to be honest.
+   */
+  function matchCounts() {
+    var counts = { all: 0, image: 0, video: 0, voice: 0 };
+    (state.results || []).forEach(function (row) {
+      counts.all++;
+      if (row.category && counts[row.category] !== undefined) counts[row.category]++;
+    });
+    return counts;
+  }
+
+  function tabBar() {
+    var searching = Boolean(state.query) && state.results !== null;
+    var counts = searching ? matchCounts() : null;
+    archiveNodes.counts = {};
+
+    return el('nav.tabs', { 'aria-label': t('tabs.label') }, TABS.map(function (name) {
+      var active = name === state.tab;
+      var count = el('span.tab__count', {
+        text: counts ? num(counts[name]) : '',
+        'aria-hidden': 'true'
+      });
+      archiveNodes.counts[name] = count;
+
+      /* An anchor, not a button. The tab is a URL (§2's History API routing), so it can be
+         middle-clicked into a new tab, copied, bookmarked and crawled — and the document's
+         one delegated click handler navigates it like every other internal link.
+
+         `aria-current="page"` rather than the tablist/tab/tabpanel pattern: these do not
+         switch panels within a document, they change the document. Announcing them as tabs
+         would promise a reader arrow-key navigation between panels that do not exist. */
+      return el('a.tab', {
+        href: tabPath(name),
+        'aria-current': active ? 'page' : null,
+        dataset: { tab: name }
+      }, [
+        el('span.tab__label', { text: t('tabs.' + name) }),
+        count
+      ]);
+    }));
+  }
+
+  /* The debounce. One timer for the whole page, cleared on every keystroke, so a reader
+     typing a nine-character Arabic place name filters once rather than nine times. 180ms
+     sits inside the addendum's 150–200 window; below about 120 a fast typist triggers a
+     pass per character and above about 250 the box starts to feel unresponsive. */
+  var SEARCH_DEBOUNCE_MS = 180;
+  var searchTimer = null;
+
+  function scheduleSearch() {
+    global.clearTimeout(searchTimer);
+    searchTimer = global.setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
+  }
+
+  /**
+   * Resolve the current query and repaint the grid — without re-rendering the view.
+   *
+   * `pending` guards against an out-of-order resolution: the index is fetched on the first
+   * keystroke and resolves instantly on every one after it, but the first is a network
+   * request and a reader can type three more characters while it is in flight. Comparing
+   * the query the request was issued for against the one in the box now is what stops the
+   * older, longer-running answer landing on top of the newer one.
+   */
+  function runSearch() {
+    var pending = state.query;
+    if (!pending) {
+      state.results = null;
+      state.searching = false;
+      state.searchFailed = false;
+      paintGrid();
+      return;
+    }
+    state.searching = true;
+    state.searchFailed = false;
+    paintGrid();
+
+    ARCHIVE.search(pending).then(function (rows) {
+      if (state.query !== pending) return;
+      state.results = rows;
+      state.searching = false;
+      paintGrid();
+    }, function () {
+      if (state.query !== pending) return;
+      state.results = [];
+      state.searching = false;
+      state.searchFailed = true;
+      paintGrid();
+    });
+  }
+
+  /** The grid, the note above it and the tab counts, updated in place. Never the input. */
+  function paintGrid() {
+    if (!archiveNodes.grid) return;
+    mount(archiveNodes.grid, archiveBody());
+    if (archiveNodes.note) mount(archiveNodes.note, searchNote());
+
+    var searching = Boolean(state.query) && state.results !== null;
+    var counts = searching ? matchCounts() : null;
+    TABS.forEach(function (name) {
+      var node = archiveNodes.counts[name];
+      if (node) node.textContent = counts ? num(counts[name]) : '';
+    });
+  }
+
+  /* How many result rows are drawn at once.
+
+     A one-character query matches most of the archive, and a few thousand anchors built
+     synchronously is a locked main thread on the device §10 names. The cap is a rendering
+     limit and says so on screen — it never silently narrows what MATCHED, which is the
+     number the note above reports. */
+  var RESULT_LIMIT = 60;
+
+  /**
+   * One search result.
+   *
+   * A row rather than a card, and the reason is in the shard: search-index.json carries
+   * five fields and no thumbnail, deliberately, because that is what lets it be one
+   * unpaginated file fetched on a keystroke (see searchIndexFile in shards.ts). Drawing
+   * cards would mean a thumb per result, which means either a fatter index everybody
+   * downloads or an item shard per match. Uniform rows also mean a result looks the same
+   * whether or not the reader happens to have scrolled far enough to have that card loaded.
+   *
+   * §6: the title is a user string, so it goes through bdi() and textContent like every
+   * other one. Nothing here concatenates the query into markup — the match is computed in
+   * archive.js and never rendered.
+   */
+  function resultRow(row) {
+    var title = titlePair(row);
+    var kind = row.category ? CATEGORY_KIND[row.category] : null;
+
+    return el('a.result', {
+      href: '/item/' + encodeURIComponent(row.id),
+      'aria-label': pick(title)
+    }, [
+      el('span.result__text', null, [
+        el('span.result__title', null, bdi(pick(title))),
+        gloss(title) ? el('span.result__gloss.gloss-line', null, bdi(gloss(title))) : null
+      ]),
+      el('span.result__meta', null, [
+        kind ? el('span.badge badge--' + kind, { text: t('kind.' + kind) }) : null,
+        row.decade ? el('span.era', { text: decadeLabel(row.decade) }) : null
+      ])
+    ]);
+  }
+
+  /** The matches for the ACTIVE tab. See tabBar()'s note on why the scope is the tab. */
+  function scopedResults() {
+    var rows = state.results || [];
+    if (state.tab === 'all') return rows;
+    return rows.filter(function (row) { return row.category === state.tab; });
+  }
+
+  /** The line above the grid: how many matched, and anything the reader should know. */
+  function searchNote() {
+    if (!state.query) return null;
+    if (state.searching && state.results === null) {
+      return el('p.search__note', { role: 'status', text: t('search.working') });
+    }
+    if (state.searchFailed) {
+      return el('p.search__note.search__note--warn', { role: 'status', text: t('search.err') });
+    }
+    var rows = scopedResults();
+    if (!rows.length) return el('p.search__note', { role: 'status', text: t('search.none') });
+    if (rows.length > RESULT_LIMIT) {
+      return el('p.search__note', {
+        role: 'status',
+        text: t('search.capped', { n: num(RESULT_LIMIT), total: num(rows.length) })
+      });
+    }
+    return el('p.search__note', { role: 'status', text: t('search.count', { n: num(rows.length) }) });
+  }
+
+  /**
+   * What sits under the tabs: the results while a query is live, the grid otherwise.
+   *
+   * Search REPLACES the grid rather than filtering it in place, because the two answer
+   * different questions. The grid is everything in this tab, in publication order, paged;
+   * the results are the subset of the whole archive that matches, which is not a prefix of
+   * the grid and mostly is not in it at all.
+   */
+  function archiveBody() {
+    if (state.query) {
+      if (state.searching && state.results === null) return null;
+      var rows = scopedResults().slice(0, RESULT_LIMIT);
+      if (!rows.length) return null;   // searchNote() above already says so
+      return el('div.results', null, rows.map(resultRow));
+    }
+
+    var items = currentItems();
+    if (items.length) return cardGrid(items);
+
+    var b = tabState();
+    var why = state.error || b.error;
+    return el('p.profile__empty', {
+      text: why ? t(why) : t(state.tab === 'all' ? 'feed.empty' : 'tabs.empty')
+    });
+  }
+
+  function searchField() {
+    var input = el('input.input.search__input', {
+      type: 'search',
+      /* `search` gets the clear affordance and the right keyboard; enterkeyhint stops a
+         phone offering "Go" for a box that submits nothing. */
+      enterkeyhint: 'search',
+      autocomplete: 'off',
+      spellcheck: 'false',
+      placeholder: t('search.placeholder'),
+      oninput: function () {
+        state.query = input.value;
+        scheduleSearch();
+      },
+      /* The index is fetched on the FIRST interaction and never on page load (§9's budget
+         counts first paint; this file is not in it). Focus is the earliest honest moment:
+         a reader who has put the cursor in the box is about to type, and a request started
+         now is usually finished before the debounce above fires — so the first keystroke
+         feels instant without anybody who never searches paying for it.
+
+         The error is swallowed: this is a prefetch, and runSearch() is what reports a
+         failure to somebody who has actually asked a question. */
+      onfocus: function () { ARCHIVE.searchIndex().catch(function () {}); },
+      onkeydown: function (event) {
+        // Escape clears the box and returns the grid. The browser's own clear button on a
+        // type=search input fires `input`, so that path needs nothing.
+        if (event.key !== 'Escape' || !input.value) return;
+        input.value = '';
+        state.query = '';
+        runSearch();
+      }
+    });
+    // A property, not the attribute: on an input the attribute is the DEFAULT value, and a
+    // form reset would be the only thing that ever read it. Same reason the decade slider
+    // sets its value this way.
+    input.value = state.query;
+
+    return el('div.search', null, [
+      labelFor(t('search.label'), input),
+      input
+    ]);
+  }
+
   function renderArchive() {
-    var more = state.page < state.pages;
+    var b = tabState();
+    var more = !state.query && b.page < b.pages;
+
+    // Dropped before the new ones are built. A node from the previous mount is detached the
+    // moment #view is replaced, and writing into one is a repaint nobody sees.
+    archiveNodes = { grid: null, note: null, counts: {} };
+
+    var head = el('section.hero', null, [
+      el('h1.hero__line', { text: copyText('hero.line') }),
+      el('p.hero__blurb', { text: copyText('hero.blurb') }),
+      el('ul.hero__stats', null, [
+        // The tab's own total, not the archive's: the number under the Images tab has to
+        // be the number of images, or it is a figure that contradicts what is beneath it.
+        el('li', { text: t('hero.memories', { n: num(b.total) }) }),
+        el('li', { text: t('hero.decades') })
+      ])
+    ]);
+
+    var controls = el('div.archive-controls', null, [tabBar(), searchField()]);
+
+    archiveNodes.note = el('div.search__note-slot', null, searchNote());
+    archiveNodes.grid = el('div.archive-body', null, archiveBody());
 
     return el('div', null, [
-      el('section.hero', null, [
-        el('h1.hero__line', { text: copyText('hero.line') }),
-        el('p.hero__blurb', { text: copyText('hero.blurb') }),
-        el('ul.hero__stats', null, [
-          el('li', { text: t('hero.memories', { n: num(state.total) }) }),
-          el('li', { text: t('hero.decades') })
-        ])
-      ]),
-      state.feed.length
-        ? cardGrid(state.feed)
-        : el('p.profile__empty', { text: state.error ? t(state.error) : t('feed.empty') }),
+      head,
+      controls,
+      archiveNodes.note,
+      archiveNodes.grid,
       more
         ? el('div.feed-end', null, [
             el('span.dot'), el('span.dot'), el('span.dot'),
@@ -719,7 +1124,13 @@
           el('span.badge', { text: t('kind.' + displayKind(entry)) }),
           entry.decade ? el('span.era', { text: decadeLabel(entry.decade) }) : null,
           el('span.viewer__place')
-        ])
+        ]),
+        /* Empty until the item shard lands (upgradeSlide). §9's prerendered page has
+           carried body_ar/body_en since M3 and this view never did, so a reader arriving
+           from a shared link watched the description DISAPPEAR as the SPA hydrated over
+           the page they had just read. The description is the archival metadata §9 makes
+           a required field on upload; the surface that shows a memory has to show it. */
+        el('div.viewer__body')
       ])
     ]);
     return slide;
@@ -733,6 +1144,27 @@
     var place = qs('.viewer__place', slide);
     if (place) {
       place.textContent = pick({ ar: item.place_ar || '', en: item.place_en || '' });
+    }
+
+    /* The description, in the reader's language with the other side as the fallback — the
+       same pick/titlePair rule the title uses, because a contributor writes in one language
+       and an empty panel is worse than one in the language they had.
+
+       Split on blank lines into paragraphs, exactly as prerender.ts does, so the shared
+       page and the hydrated view break the text in the same places. bdi() and textContent
+       throughout (§6): this is user prose, the longest user string in the system, and the
+       one most likely to contain something that looks like markup. */
+    var body = qs('.viewer__body', slide);
+    if (body) {
+      var prose = pick({
+        ar: item.body_ar || item.body_en || '',
+        en: item.body_en || item.body_ar || ''
+      });
+      mount(body, prose
+        ? String(prose).split(/\n\s*\n/).map(function (para) {
+            return el('p.viewer__para', null, bdi(para));
+          })
+        : null);
     }
   }
 
@@ -783,8 +1215,13 @@
      feed, followed by the feed itself. One function so the scroller, the chrome and the
      index arithmetic cannot disagree about the list they are indexing into. */
   function viewerList() {
-    if (!state.lead) return state.feed;
-    return [state.lead].concat(state.feed.filter(function (r) { return r.id !== state.lead.id; }));
+    /* The ACTIVE tab's items, not the whole feed. A reader who opened a memory from the
+       Videos tab scrolls on through videos — the viewer continues the list they were
+       reading rather than silently widening it back to the archive, which would be the same
+       surprise as a tab that stops applying once you click something in it. */
+    var list = currentItems();
+    if (!state.lead) return list;
+    return [state.lead].concat(list.filter(function (r) { return r.id !== state.lead.id; }));
   }
 
   function renderViewerChrome(index) {
@@ -1022,7 +1459,8 @@
   }
 
   function loadMoreIntoViewer() {
-    if (state.page >= state.pages) return;
+    var b = tabState();
+    if (b.page >= b.pages) return;
     var before = viewerList().length;
     loadNextPage().then(function () {
       var scroller = qs('.viewer__scroller');
@@ -1787,7 +2225,10 @@
     /* The parked handle first: loadOwnHandle would otherwise read the placeholder and put
        its initial in the masthead a moment before the real name replaces it. */
     claimRememberedHandle().then(function () { return loadOwnHandle(); });
-    refreshEngagement(state.feed.map(function (r) { return r.id; })).then(function () {
+    /* Every tab that has been loaded, not only the All feed. A member signing in while
+       reading the Videos tab must get their own likes and saves back on the cards in front
+       of them, and those cards are not in state.feed. */
+    refreshEngagement(loadedIds()).then(function () {
       if (state.viewer) renderViewerChrome(state.viewer.index);
     });
 
@@ -3577,6 +4018,13 @@
        at the memory the reader is trying to leave. */
     if (!routedItemId()) state.lastView = path();
 
+    /* Same condition, and for a closely related reason. /item/{id} carries no tab, so
+       reading one out of it would reset a reader who opened a memory from Videos back to
+       All — and the viewer scrolls through the ACTIVE tab, so the list under them would
+       change the moment they arrived. The tab they came from survives in state; the URL
+       they came from survives in lastView, which is what the back button uses. */
+    if (!routedItemId()) state.tab = routedTab();
+
     renderMasthead();
     renderFooter();
 
@@ -3592,7 +4040,18 @@
       return;
     }
 
-    if (state.error && !state.feed.length) {
+    /* An unreadable archive, on every route EXCEPT the archive itself.
+     *
+     * The exclusion is M6's and it closes a trap the tabs introduce. This branch returns
+     * before renderArchive() and before ensureFirstPage(), so with `state.error` set — which
+     * only the ALL feed's page 1 can do — a reader clicking through to /c/image would get
+     * the blank error page and that tab would never be given the chance to load. The tabs
+     * read different shards; one of them failing is not all of them failing.
+     *
+     * Nothing is swallowed: renderArchive() puts the same message where the grid would be,
+     * with the masthead, the footer and the other three tabs still on the screen, which is
+     * strictly more than this page offered. */
+    if (state.error && !state.feed.length && name !== 'archive') {
       mount(view, el('div.page-head', null, [
         el('h1.page-head__title', { text: t('archive.err.title') }),
         el('p.page-head__blurb', { text: t(state.error) })
@@ -3625,8 +4084,14 @@
       mount(view, renderInfoPage());
     } else if (name === 'events') {
       mount(view, renderEvents());
+      // /events reads the ALL feed and filters it (§1 gives events their own surface, not
+      // their own shard), so it needs that tab's first page whatever the reader last chose.
+      ensureFirstPage('all');
     } else {
       mount(view, renderArchive());
+      // The tab on screen, which after a /c/{cat} navigation is one nothing has fetched
+      // yet. Guarded inside, so this is a no-op on every render after the first.
+      ensureFirstPage(state.tab);
     }
 
     /* The viewer is a route, not a mode: /item/{id} opens it over the archive. */
@@ -3647,7 +4112,7 @@
    */
   function openViewerFor(id) {
     var inFeed = -1;
-    state.feed.forEach(function (row, i) { if (row.id === id) inFeed = i; });
+    currentItems().forEach(function (row, i) { if (row.id === id) inFeed = i; });
     if (inFeed > -1) { state.lead = null; openViewer(inFeed); return; }
 
     ARCHIVE.item(id).then(function (item) {
@@ -3666,6 +4131,10 @@
       state.lead = {
         id: item.id,
         kind: item.kind,
+        // The item shard carries it for exactly this reconstruction — without it the one
+        // card a reader arrives from WhatsApp on would be the only card in the archive
+        // with no category, and a shared video would wear a photograph's badge.
+        category: item.category,
         title_ar: item.title_ar,
         title_en: item.title_en,
         decade: item.decade,
@@ -3709,9 +4178,14 @@
     scrollTimer = global.setTimeout(function () {
       var remaining = global.document.body.scrollHeight - (global.pageYOffset + global.innerHeight);
       if (remaining > 1200) return;
-      var before = state.feed.length;
+      /* Not while a query is on screen: the results replace the grid, so another page of
+         cards would be appended behind something nobody is looking at, and the scroll that
+         triggered it was a reader moving down a result list. */
+      if (state.query) return;
+      var b = tabState();
+      var before = b.items.length;
       loadNextPage().then(function () {
-        if (state.feed.length !== before && route() === 'archive' && !state.viewer) {
+        if (b.items.length !== before && route() === 'archive' && !state.viewer) {
           mount(qs('#view'), renderArchive());
         }
       }).catch(function () { /* the reader keeps what is already loaded */ });
@@ -3751,13 +4225,21 @@
      from the release. §9's budget counts exactly this sequence. */
   ARCHIVE.ready()
     .then(function () { return ARCHIVE.content(); })
-    .then(function () { render(); return loadNextPage(); })
     .then(function () {
+      /* render() reads the tab out of the URL and asks ensureFirstPage() for that tab's
+         page 1, re-rendering when it lands. Boot deliberately does not fetch a page itself
+         any more: with four possible sources (M6's tabs) "the first feed page" is whichever
+         one the URL names, and two places deciding that is how they come to disagree — the
+         reader who opens /c/voice would get the All feed's page 1 as well as their own.
+
+         search-index.json is NOT here and must not be. §9 budgets HTML + CSS + JS + the
+         first feed page; the search index is none of the four and is fetched on the first
+         interaction with the box. */
       render();
-      /* Last, and not awaited by anything above it. index.json only refines two lists that
-         already have a fallback (the decade bar and the geo cells), so making the first
-         paint wait on it would spend a request from §9's budget on something no first
-         screen shows. */
+      /* Last, and not awaited by anything above it. index.json only refines lists that
+         already have a fallback (the decade bar, the geo cells, the tab page counts), so
+         making the first paint wait on it would spend a request from §9's budget on
+         something no first screen shows. */
       return ARCHIVE.index().catch(function () { return null; });
     })
     .catch(function (err) {

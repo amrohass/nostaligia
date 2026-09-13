@@ -263,6 +263,171 @@ html[lang="en"] .hero__blurb { font: 400 15px/1.7 var(--font-en); margin-top: 12
 }
 html[lang="en"] .hero__stats li { font: 500 12px var(--font-en); }
 
+/* ─────────────────────────── Tabs and search (M6 addendum) ───────────────────────────
+   §9: "CSS logical properties only (ms-, me-, ps-, pe-, inset-inline) — never left/right."
+   Everything below is written that way, so the tab row reads All → Images → Videos → Voices
+   from the start of the line in both languages: left-to-right in English, right-to-left in
+   Arabic, with no mirroring rule and no `[dir]` selector anywhere. `flex-direction: row`
+   already follows the document's direction; the only way to break that is to say `left` or
+   `right`, and the RTL test bans both across every stylesheet.
+
+   Direction is deliberately NOT set on any of these, for the same reason the decade slider
+   does not set it: the controls inherit the document's, which is what makes them correct in
+   both languages rather than correct in the one somebody tested. */
+
+.archive-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 2px 10px;
+  padding-inline: var(--gutter);
+}
+
+.tabs {
+  display: flex;
+  /* Wraps at desktop widths, where there is room and a second line is not a surprise. Below
+     900px it becomes a single scrolling row instead — see the responsive block, and the note
+     there about why: a wrapping row starts the grid at a different height depending on how
+     long the words are in the reader's language. */
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-block: 2px;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* 44px of target on the shortest label. §10's exit criterion is a mid-range Android and
+     "الكل" is four narrow glyphs — a chip sized to its text is a chip nobody can hit. */
+  min-height: 44px;
+  padding-block: 6px;
+  padding-inline: 16px;
+  border: 1px solid var(--olive-a22);
+  border-radius: var(--r-pill);
+  background: var(--paper-raised);
+  color: var(--ink-65);
+  font: 600 12.5px var(--font-ar);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+              color var(--dur) var(--ease);
+}
+html[lang="en"] .tab {
+  font: 600 11.5px var(--font-en);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.tab:hover { border-color: var(--olive-a35); color: var(--olive); }
+
+/* The active tab, keyed off the attribute the router sets rather than a class the view has
+   to remember to add. One source of truth for "which tab is this", and a screen reader is
+   told the same thing the paint says. */
+.tab[aria-current="page"] {
+  background: var(--olive);
+  border-color: var(--olive);
+  color: var(--paper);
+}
+
+/* Empty until a query is live, so the chip does not change width when a search starts and
+   the row does not reflow under the reader's finger. */
+.tab__count:empty { display: none; }
+/* --font-ar by default, --font-en only under an English document — the same shape
+   `.decade-slider__value` uses, and for a reason that is not symmetry.
+
+   This said `var(--font-en)` unconditionally until 9 Sep 2026. The count is produced by
+   I18N.num(), which renders ARABIC-INDIC digits in Arabic (٢, U+0662), and Inter's
+   unicode-range in fonts.css stops at U+00FF — so in the language this archive is built for,
+   every count fell straight through Inter to `system-ui` and was drawn in whatever the
+   reader's OS supplied. Beside a label set in IBM Plex Sans Arabic.
+
+   Nothing could have caught it from source: frontend-fonts-test.mjs checks that some
+   declared range covers every character in the interface's own STRINGS, and a digit
+   generated at runtime is in no string. It is visible in a browser, which is where
+   rtl-browser-probe.mjs now measures it. */
+.tab__count {
+  font: 600 11px var(--font-ar);
+  opacity: .8;
+  font-variant-numeric: tabular-nums;
+}
+html[lang="en"] .tab__count { font: 600 11px var(--font-en); }
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  max-width: 360px;
+}
+.search .field__label {
+  white-space: nowrap;
+}
+.search__input {
+  /* The box is the flexible half of the row: the label is a fixed few words and the input
+     takes whatever is left, down to a width that still shows a place name. */
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+}
+
+.search__note-slot:empty { display: none; }
+.search__note {
+  margin: 0;
+  padding-block: 0 10px;
+  padding-inline: var(--gutter);
+  font: 500 12px var(--font-ar);
+  color: var(--gold-ink);
+}
+html[lang="en"] .search__note { font: 500 12px var(--font-en); }
+.search__note--warn { color: var(--terracotta); }
+
+/* ── Results ────────────────────────────────────────────────
+   A list, not the masonry, and that is a consequence of the shard rather than a style
+   choice: search-index.json carries no thumbnail (see searchIndexFile in shards.ts), so
+   there is no picture to put on a card. Rows also render identically whether or not the
+   reader has scrolled far enough for that item's card to be loaded. */
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-block: 0 24px;
+  padding-inline: var(--gutter);
+}
+
+.result {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding-block: 12px;
+  padding-inline: 14px;
+  border-radius: var(--r-lg);
+  border: 1px solid transparent;
+  color: inherit;
+  text-decoration: none;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.result:hover { background: var(--paper-raised); border-color: var(--olive-a14); }
+
+.result__text { min-width: 0; }
+.result__title {
+  display: block;
+  font: 600 14px/1.7 var(--font-ar);
+  color: var(--ink);
+}
+html[lang="en"] .result__title { font: 600 13.5px/1.5 var(--font-en); }
+.result__gloss { display: block; }
+
+.result__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* ─────────────────────────── Archive grid ─────────────────────────── */
 
 .grid {
@@ -611,6 +776,31 @@ html[lang="en"] .viewer__gloss { font: 400 13px/1.8 var(--font-ar); }
 .viewer__meta { display: flex; align-items: center; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
 .viewer__meta .badge { background: var(--gold-a18); color: var(--gold); }
 .viewer__meta .era { color: var(--gold); }
+
+/* The description (M6 addendum). Empty until the item shard lands, and `:empty` rather than
+   a conditional class so the caption's flex `gap` does not leave a hole above a memory that
+   carries no body text — which every event listing does. */
+.viewer__body:empty { display: none; }
+.viewer__body {
+  margin-top: 6px;
+  /* Capped and scrollable rather than pushing the media off the screen. A description is
+     archival metadata and can run to several paragraphs; the viewer is a full-screen
+     surface whose subject is the photograph. */
+  max-height: 28vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* --cream-a75, not the --cream-a65 the gloss line beside it uses: this is prose somebody is
+   meant to READ rather than a secondary label, and the gloss's contrast is chosen for a line
+   the eye skips. Reusing the existing rung rather than adding one (§9: never hardcode a
+   colour, and a ramp with a step per call site is a ramp nobody can hold in their head). */
+.viewer__para {
+  font: 400 13.5px/2 var(--font-ar);
+  color: var(--cream-a75);
+  margin: 0 0 8px;
+}
+html[lang="en"] .viewer__para { font: 400 13.5px/1.8 var(--font-en); }
+.viewer__para:last-child { margin-bottom: 0; }
 .viewer__place { font: 400 11.5px var(--font-ar); color: var(--cream-a55); }
 html[lang="en"] .viewer__place { font: 400 11.5px var(--font-en); }
 
@@ -1874,6 +2064,31 @@ html[lang="en"] .authpage__back { font: 400 12px var(--font-en); }
   html[lang="en"] .hero__line { font-size: 26px; }
   .hero__blurb { font-size: 13px; }
   .hero__stats { gap: 16px; margin: 12px 0 14px; }
+
+  /* M6's tabs and search on a phone. The controls stack — the four chips need the full
+     width and the search box needs the line under them — and the tab row scrolls sideways
+     rather than wrapping, so the grid never starts at a different height depending on how
+     long the words are in the reader's language. */
+  .archive-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding-inline: var(--gutter-sm);
+  }
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    /* Nothing here says left or right: `padding-inline` and the scroll container both
+       follow the document's direction, so the row starts at the reading edge in Arabic and
+       in English without a mirroring rule. */
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { padding-inline: 14px; }
+  .search { max-width: none; }
+  .search__note { padding-inline: var(--gutter-sm); }
+  .results { padding-inline: var(--gutter-sm); }
+  .result { padding-inline: 10px; }
   .page-head { padding: 22px 16px 4px; }
   .events { padding: 16px 16px 32px; gap: 14px; }
   .site-footer { padding: 26px 18px 0; }

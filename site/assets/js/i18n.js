@@ -704,6 +704,34 @@
        unchanged — this is the caption on it. */
     'feed.eventNoImage': { ar: 'فعالية', en: 'event' },
 
+    /* ── Tabs and search (M6 addendum) ──────────────────────
+       The tab labels are PLURAL NOUNS naming what is behind them, not the singular badge
+       words beside them on a card ('kind.photo' is "صورة", one photograph; this is "صور",
+       the photographs). Arabic makes the two genuinely different words rather than one word
+       with an -s, which is why they are separate keys rather than the badge strings reused
+       with a suffix. */
+    'tabs.label': { ar: 'تصفية الأرشيف حسب النوع', en: 'Filter the archive by type' },
+    'tabs.all':   { ar: 'الكل',    en: 'All' },
+    'tabs.image': { ar: 'صور',     en: 'Images' },
+    'tabs.video': { ar: 'فيديو',   en: 'Videos' },
+    'tabs.voice': { ar: 'أصوات',   en: 'Voices' },
+    // A tab with nothing in it is not the empty archive: 'feed.empty' says the archive has
+    // nothing published, which would be a lie on a young archive that simply has no film yet.
+    'tabs.empty': { ar: 'لا ذكريات من هذا النوع بعد.', en: 'Nothing of this type yet.' },
+
+    'search.label':       { ar: 'ابحث في العناوين', en: 'Search titles' },
+    'search.placeholder': { ar: 'ابحث عن ذكرى…',    en: 'Search for a memory…' },
+    'search.working':     { ar: 'جارٍ البحث…',       en: 'Searching…' },
+    'search.count':       { ar: '{n} نتيجة',         en: '{n} results' },
+    'search.none':        { ar: 'لا ذكرى تطابق هذا البحث في هذا التبويب.',
+                            en: 'No memory in this tab matches that search.' },
+    /* The cap is a RENDERING limit, so the message names both numbers: a reader who is told
+       "60 results" for a one-letter query that matched 400 has been given a wrong figure,
+       and the count above is the one they would quote. */
+    'search.capped':      { ar: 'أول {n} من {total} نتيجة', en: 'First {n} of {total} results' },
+    'search.err':         { ar: 'تعذّر تحميل فهرس البحث. حاول مرّة أخرى.',
+                            en: 'The search index could not be loaded. Try again.' },
+
     // ── Comments (M3) ───────────────────────────────────────
     'comments.someone':    { ar: 'عضو', en: 'A member' },
     'comments.you':        { ar: 'أنت', en: 'You' },

@@ -3,6 +3,8 @@
        manifest.json  ->  /v/{ts}/  ->  feed/page-N.json · item/{id}.json
                                         decade/{d}.json · geo/{cell}.json
                                         profile/{handle}.json · content.json
+                                        category/{cat}/page-N.json
+                                        search-index.json  (on demand only)
        redactions.json (short TTL, filtered against everything above)
 
    ── Zero database reads ─────────────────────────────────────
@@ -51,7 +53,13 @@
     shards: {},           // path -> in-flight or settled fetch promise
     blocks: null,         // content.json, once loaded
     index: null,          // index.json, once loaded
-    places: null          // places.json, once loaded
+    places: null,         // places.json, once loaded
+    /* The M6 addendum's search index, as a PROMISE rather than as its resolved value.
+       Holding the promise is what makes "lazy, and fetched exactly once" one fact instead
+       of two: a reader typing quickly asks for it on several consecutive keystrokes, and a
+       flag set after the response lands would let every keystroke before that start its
+       own request. Null until the first one. */
+    searchIndex: null
   };
 
   function ArchiveError(key, detail) {
@@ -153,6 +161,10 @@
     state.blocks = null;
     state.index = null;
     state.places = null;
+    // Per-RELEASE like the three above: search-index.json lives inside /v/{ts}/, so keeping
+    // it across a pointer flip would let a reader search an archive that is no longer the
+    // one on screen — and find, or fail to find, a title that has since changed.
+    state.searchIndex = null;
     return ready();
   }
 
@@ -179,6 +191,101 @@
         total: body.total,
         items: keep(body.items)
       };
+    });
+  }
+
+  /**
+   * category/{cat}/page-N.json — the feed, filtered to one tab, at the same page size.
+   *
+   * Same shape as feedPage() and the same redaction filter, because a tab is the feed with
+   * a filter on it rather than a different surface. `total` is likewise the published
+   * figure and is NOT adjusted, for the reason feedPage gives.
+   *
+   * A missing page is an EMPTY tab, not an error. The publisher writes page 1 for every
+   * category including the empty ones, so the only way to reach this branch is a release
+   * built before the addendum — and on one of those the correct rendering of the Videos tab
+   * is "nothing here", not a broken archive.
+   */
+  function categoryPage(cat, n) {
+    var page = Math.max(1, n | 0);
+    return ready().then(function () {
+      return shard('category/' + encodeURIComponent(cat) + '/page-' + page + '.json');
+    }).then(function (body) {
+      return {
+        category: body.category || cat,
+        page: body.page,
+        pages: body.pages,
+        total: body.total,
+        items: keep(body.items)
+      };
+    }, function (err) {
+      if (err && err.key === 'archive.err.missing') {
+        return { category: cat, page: page, pages: 1, total: 0, items: [] };
+      }
+      throw err;
+    });
+  }
+
+  /**
+   * search-index.json, fetched the FIRST time somebody searches and never on page load.
+   *
+   * §9 budgets "HTML + CSS + JS + first feed page" at 150 KB brotli. This file is none of
+   * those four and must not become a fifth: a visitor who never types anything must never
+   * pay for it. That is a property of the CALL SITE as much as of this function, which is
+   * why it is not chained into boot's manifest → content → feed sequence — see public.js.
+   *
+   * Memoised on the promise (see state.searchIndex) so a reader typing quickly issues one
+   * request rather than one per keystroke, and cleared by reload() with the rest of the
+   * per-release files.
+   */
+  function searchIndex() {
+    if (state.searchIndex) return state.searchIndex;
+    state.searchIndex = ready()
+      .then(function () { return shard('search-index.json'); })
+      .then(function (body) {
+        return (body && body.items) || [];
+      }, function (err) {
+        // A release built before the addendum has no index. An empty one searches to
+        // nothing, which is the honest rendering of "this archive cannot be searched yet"
+        // and is not an error the reader can do anything about.
+        if (err && err.key === 'archive.err.missing') return [];
+        // Anything else — offline, a 500 — is retryable, so the memo is dropped and the
+        // next keystroke tries again.
+        state.searchIndex = null;
+        throw err;
+      });
+    return state.searchIndex;
+  }
+
+  /**
+   * Case-insensitive substring match over both titles, whatever the interface language.
+   *
+   * Both sides always, deliberately: a diaspora reader browsing in English is searching an
+   * archive whose titles are mostly Arabic, and a reader in Arabic may be looking for a
+   * street somebody catalogued in English. Matching only the active language would make the
+   * language toggle silently change what the archive contains.
+   *
+   * toLowerCase() does nothing to Arabic — it has no case — and everything to the Latin
+   * half, which is the half that needs it. What this deliberately does NOT do is normalise
+   * Arabic orthography (أ/ا/إ, ة/ه, tashkeel), so "المنارة" and "المناره" are different
+   * queries. That is a real limitation and a bigger change than a substring match; it is
+   * noted here rather than half-done.
+   *
+   * Redaction filtering is applied here rather than by the caller, like every other list
+   * this module hands out (§8) — and it is applied on each SEARCH rather than once when the
+   * index arrives, so a takedown that lands while a reader has the page open takes effect
+   * on their next keystroke instead of at their next reload.
+   */
+  function search(query) {
+    var q = String(query == null ? '' : query).trim().toLowerCase();
+    if (!q) return Promise.resolve([]);
+    return searchIndex().then(function (items) {
+      return (items || []).filter(function (row) {
+        if (!row || !row.id || isRedacted(row.id)) return false;
+        var ar = row.title_ar ? String(row.title_ar).toLowerCase() : '';
+        var en = row.title_en ? String(row.title_en).toLowerCase() : '';
+        return ar.indexOf(q) > -1 || en.indexOf(q) > -1;
+      });
     });
   }
 
@@ -291,12 +398,19 @@
           pages: body.pages || 1,
           total: body.total || 0,
           decades: body.decades || [],
-          cells: body.cells || []
+          cells: body.cells || [],
+          /* M6's tab bar and search box. `categories` names how many pages each tab has, so
+             the front end does not carry a page count it would have to guess at; `search`
+             is present only when the release actually contains a search index, which is
+             what stops the box being offered on a release built before the addendum.
+             Both default to absent rather than to a made-up value. */
+          categories: body.categories || null,
+          search: body.search || null
         };
         return state.index;
       }, function (err) {
         if (err && err.key === 'archive.err.missing') {
-          state.index = { pages: 1, total: 0, decades: [], cells: [] };
+          state.index = { pages: 1, total: 0, decades: [], cells: [], categories: null, search: null };
           return state.index;
         }
         throw err;
@@ -407,6 +521,9 @@
        view depend on this module's internals, which is what _state exists NOT to be. */
     indexNow: function () { return state.index; },
     feedPage: feedPage,
+    categoryPage: categoryPage,
+    searchIndex: searchIndex,
+    search: search,
     item: item,
     decade: decade,
     geo: geo,

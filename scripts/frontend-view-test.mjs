@@ -541,6 +541,155 @@ const FILES = {
 }
 
 
+
+/* ── M6 addendum · the tabs and the live search ───────────────────────────── */
+
+console.log('# archive.js — category shards, and a search index that is not in the budget');
+
+/* The stub CDN above, plus the files the addendum adds. Built as an extension of FILES
+   rather than as a second fixture, so a test here cannot pass against an archive the tests
+   above would not recognise. */
+const M6_FILES = {
+  ...FILES,
+  [`${RELEASE}category/image/page-1.json`]: {
+    category: 'image', page: 1, pages: 1, total: 2,
+    items: [{ id: 'keep-1', category: 'image' }, { id: 'gone-1', category: 'image' }]
+  },
+  [`${RELEASE}category/voice/page-1.json`]: {
+    category: 'voice', page: 1, pages: 1, total: 1, items: [{ id: 'keep-2', category: 'voice' }]
+  },
+  [`${RELEASE}index.json`]: {
+    pages: 2, total: 3, decades: [1960, 1990], cells: ['sv8yz'],
+    categories: { image: { pages: 1, total: 2 }, video: { pages: 1, total: 0 }, voice: { pages: 1, total: 1 } },
+    search: { total: 3 }
+  },
+  [`${RELEASE}search-index.json`]: {
+    total: 4,
+    items: [
+      { id: 'keep-1', title_ar: 'ميدان المنارة', title_en: 'Al-Manara Square', category: 'image', decade: 1960 },
+      { id: 'keep-2', title_ar: 'تسجيل صوتي', title_en: 'A Voice Recording', category: 'voice', decade: 1970 },
+      { id: 'keep-3', title_ar: 'فيلم المنارة', title_en: 'Manara Film', category: 'video', decade: 1980 },
+      // Redacted (redactions.json names it). It must never survive into a result.
+      { id: 'gone-1', title_ar: 'ميدان المنارة القديم', title_en: 'Old Manara', category: 'image', decade: 1950 }
+    ]
+  }
+};
+
+{
+  const win = archiveWindow(M6_FILES);
+  const A = win.ARCHIVE;
+  await A.ready();
+
+  const images = await A.categoryPage('image', 1);
+  ok(images.items.length === 1 && images.items[0].id === 'keep-1',
+     'a category page filters redacted ids exactly as the feed does (§8)');
+  ok(images.total === 2,
+     '...and reports the PUBLISHED total unadjusted, like feedPage — a count that quietly ' +
+     'disagreed with the release would make a paging bug look like a takedown');
+
+  // A release built before the addendum has no category shards at all. The correct
+  // rendering of the Videos tab on one of those is "nothing here", not a broken archive —
+  // and not an exception that blanks the page.
+  const win2 = archiveWindow(FILES);
+  await win2.ARCHIVE.ready();
+  const missing = await win2.ARCHIVE.categoryPage('video', 1);
+  ok(missing.total === 0 && missing.items.length === 0 && missing.pages === 1,
+     'a category with no shard is an empty tab, not an error');
+}
+
+{
+  /* THE budget assertion, and the one thing the budget script itself cannot check. §9's
+     ceiling covers "HTML + CSS + JS + first feed page"; the addendum requires the search
+     index to be fetched on first interaction and NOT on load. That is a property of the
+     call sites, so it is asserted here against the request log of a real boot sequence. */
+  const win = archiveWindow(M6_FILES);
+  const A = win.ARCHIVE;
+
+  await A.ready();
+  await A.content();
+  await A.feedPage(1);
+  await A.index();
+
+  const early = win._requested.filter((u) => u.includes('search-index.json'));
+  ok(early.length === 0,
+     'the whole first-paint sequence (manifest, content, feed page 1, index) does NOT ' +
+     'fetch search-index.json — it is outside §9\'s budget by construction');
+
+  const hits = await A.search('منارة');
+  ok(win._requested.filter((u) => u.includes('search-index.json')).length === 1,
+     '...and the first search is what fetches it');
+
+  // Memoised on the PROMISE, so a reader typing quickly issues one request rather than one
+  // per keystroke. Three searches fired without awaiting the first is the real shape of it.
+  const win3 = archiveWindow(M6_FILES);
+  await win3.ARCHIVE.ready();
+  await Promise.all([win3.ARCHIVE.search('a'), win3.ARCHIVE.search('b'), win3.ARCHIVE.search('c')]);
+  ok(win3._requested.filter((u) => u.includes('search-index.json')).length === 1,
+     'three searches in flight at once still fetch the index exactly once');
+
+  // §8 again, and it is the assertion that would be easiest to lose in a refactor: the
+  // index is a static file cached for a year and a takedown does not rewrite it.
+  ok(hits.length === 2, `a query matches on the Arabic side (${hits.length} hits)`);
+  ok(!hits.some((r) => r.id === 'gone-1'),
+     'a redacted id never reaches a search result, even though the index still names it');
+  ok(hits.map((r) => r.id).sort().join(',') === 'keep-1,keep-3',
+     '...and the two that are not redacted DO survive — the filter is a filter, not an empty list');
+}
+
+{
+  const win = archiveWindow(M6_FILES);
+  const A = win.ARCHIVE;
+  await A.ready();
+
+  /* Both title fields, whatever the interface language. A diaspora reader browsing in
+     English is searching an archive whose titles are mostly Arabic; matching only the
+     active language would make the language toggle silently change what the archive
+     contains. */
+  const en = await A.search('manara');
+  ok(en.map((r) => r.id).sort().join(',') === 'keep-1,keep-3',
+     `an English query matches title_en regardless of UI language (${en.length} hits)`);
+  ok((await A.search('AL-MANARA')).length === 1, 'matching is case-insensitive');
+  ok((await A.search('صوتي')).map((r) => r.id).join(',') === 'keep-2',
+     'an Arabic query matches title_ar');
+
+  // Substring, not prefix — the addendum says substring, and a heritage title is most often
+  // searched for by the word in the middle of it ("المنارة", not "ميدان").
+  ok((await A.search('Square')).map((r) => r.id).join(',') === 'keep-1',
+     'a match in the middle of a title counts');
+
+  ok((await A.search('')).length === 0, 'an empty query matches nothing rather than everything');
+  ok((await A.search('   ')).length === 0, '...and neither does whitespace');
+  ok((await A.search('zzzz')).length === 0, 'a query with no matches returns an empty list');
+}
+
+{
+  // A release built before the addendum has no index. Searching one must resolve to nothing
+  // rather than reject — there is nothing the reader can do about it and an error banner
+  // over the archive would be worse than a quiet "no results".
+  const win = archiveWindow(FILES);
+  await win.ARCHIVE.ready();
+  const out = await win.ARCHIVE.search('anything').then((r) => r, () => 'REJECTED');
+  ok(Array.isArray(out) && out.length === 0,
+     'a release with no search index searches to nothing rather than throwing');
+}
+
+{
+  // index.json's two new keys, and the fact that their ABSENCE is a signal. The tab bar's
+  // page counts and the search box both key off these, so a release built before the
+  // addendum has to be distinguishable from one with an empty archive.
+  const win = archiveWindow(M6_FILES);
+  const idx = await win.ARCHIVE.index();
+  ok(idx.categories && idx.categories.image.total === 2 && idx.categories.video.total === 0,
+     'index.json names how many items each tab holds');
+  ok(idx.search && idx.search.total === 3, '...and that this release has a search index');
+
+  const old = archiveWindow(FILES);
+  const oldIdx = await old.ARCHIVE.index();
+  ok(oldIdx.categories === null && oldIdx.search === null,
+     'a release built before the addendum reports both as absent, not as zero');
+}
+
+
 /* ── M4 · the gazetteer the map draws its text from ───────────────────────── */
 
 {

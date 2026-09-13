@@ -105,6 +105,43 @@ ok(physical.length === 0,
      'no scaleX(-1) anywhere — mirroring a control with a transform reverses its keyboard behaviour too');
 }
 
+/* ── 2b · M6's tabs and search inherit their direction too ─────────────────── */
+//
+// The addendum's exit criterion is "tabs and search correct in ar + en", and the way they
+// are correct is the way the slider above is: nothing here sets a direction at all. A flex
+// row lays its children out from the reading edge, so All → Images → Videos → Voices starts
+// at the left in English and at the right in Arabic, from ONE source order and with no
+// `[dir]` selector anywhere.
+//
+// So there is nothing to assert that the file "does"; what can be asserted is that it does
+// not intervene. The order itself is a property of the rendered tree and is checked in
+// scripts/frontend-nav-test.mjs, which boots the shell and reads the hrefs off the anchors.
+
+{
+  const all = cssFiles.map((n) => `\n/*${n}*/\n` + uncommented(read(`site/assets/css/${n}`))).join('');
+
+  // Every rule whose selector mentions one of the addendum's own class families.
+  const M6 = /\.(?:archive-controls|tabs|tab|tab__[\w-]+|search|search__[\w-]+|results|result|result__[\w-]+)\b[^{]*\{([^}]*)\}/g;
+  const blocks = [...all.matchAll(M6)].map((m) => m[1]);
+  ok(blocks.length >= 10, `CONTROL: ${blocks.length} tab/search rules found to inspect`);
+
+  const overrides = [...all.matchAll(M6)]
+    .filter((m) => /(?:^|[;\s])(?:direction|writing-mode)\s*:/.test(m[1]))
+    .map((m) => m[0].split('{')[0].trim());
+  ok(overrides.length === 0,
+     `nothing overrides direction or writing-mode on the tabs, the search box or a result — ` +
+     `they inherit the document's, which is what makes one source order correct in both ` +
+     `languages${overrides.length ? ` — ${overrides.join(' | ')}` : ''}`);
+
+  /* The scan above is a "found nothing" assertion over a regex written by hand, so the
+     regex is proved to find the thing first. Without this, a family name typed wrong here
+     would report a clean bill of health over rules it never looked at. */
+  const probe = '.tabs { direction: ltr; } .result__title { writing-mode: vertical-rl; }';
+  const caught = [...probe.matchAll(M6)].filter((m) => /(?:direction|writing-mode)\s*:/.test(m[1]));
+  ok(caught.length === 2,
+     `CONTROL: the scan DOES catch a direction override on these selectors (caught ${caught.length})`);
+}
+
 /* ── 3 · directional glyphs mirror between the two languages ───────────────── */
 //
 // An arrow is not a translation-invariant character. "Back" is where the reading started,

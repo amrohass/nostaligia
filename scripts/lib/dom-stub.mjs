@@ -97,7 +97,6 @@ function createNode(tagName, namespace) {
     rows: '',
     scrollTop: 0,
     clientHeight: 800,
-    dataset: {},
     attributes: Object.create(null),
     childNodes: [],
     parentNode: null,
@@ -239,6 +238,34 @@ function createNode(tagName, namespace) {
     removeProperty(k) { delete this._props[k]; },
     getPropertyValue(k) { return this._props[k] || ''; },
   };
+
+  /* `dataset` REFLECTS to the attribute, exactly as a real DOM's does.
+   *
+   * It was a plain object until 9 Sep 2026, and the gap was invisible until something
+   * needed to look a node up by what it had written there. public.js builds each viewer
+   * slide with `{ dataset: { id: entry.id } }` and then finds it again with
+   * `qs('.viewer__slide[data-id="…"]')` — which is how upgradeSlide() replaces a slide's
+   * placeholder with its real media once the item shard lands. Against a plain object that
+   * selector matched nothing, upgradeSlide returned at its first line, and every assertion
+   * about a hydrated slide would have been an assertion about a slide that was never
+   * hydrated. Silently, and in the passing direction for anything checking that a
+   * placeholder was still there.
+   *
+   * A Proxy rather than a getter per key, because the names are the caller's: camelCase in,
+   * dash-case out, which is the browser's own rule and the one the selector depends on. */
+  const dataAttr = (key) => 'data-' + String(key).replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+  node.dataset = new Proxy(Object.create(null), {
+    set(target, key, value) {
+      target[key] = String(value);
+      node.attributes[dataAttr(key)] = String(value);
+      return true;
+    },
+    deleteProperty(target, key) {
+      delete target[key];
+      delete node.attributes[dataAttr(key)];
+      return true;
+    },
+  });
 
   return node;
 }
