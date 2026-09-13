@@ -144,8 +144,8 @@ const browser = await chromium.launch({ headless: !HEADED, slowMo: SLOW ? 250 : 
  * A page with the stub installed, console and page errors captured. `withTurnstile: false`
  * gives a page with NO doubles at all — which is what the admin test uses.
  */
-async function newPage({ withTurnstile = true } = {}) {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+async function newPage({ withTurnstile = true, viewport = { width: 1280, height: 900 } } = {}) {
+  const ctx = await browser.newContext({ viewport });
   const page = await ctx.newPage();
   page.consoleErrors = [];
   page.pageErrors = [];
@@ -904,6 +904,172 @@ try {
          `...and it says the address is not confirmed — "${hint.trim()}"`,
          'a member who cannot contribute has to be able to find out here, not by pressing Share');
       ck(page.pageErrors.length === 0, `no uncaught page errors`, page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════════════════
+     7 · THE VIEWER ON A PHONE
+     ═══════════════════════════════════════════════════════════════════════════════════
+
+     Three defects reported 13 Sep 2026, all of them invisible to every other file here:
+     each is a property of a rendered BOX at a width nothing else in this repository opens
+     a browser at. A DOM snapshot calls all three a pass — the nodes were present in every
+     case, which is precisely why they shipped.
+
+       · the comment list was `display: none` under `@media (max-width: 900px)`. Every
+         published comment was fetched and built and then hidden, so §1's "immersive viewer
+         with comments" carried none of them on a phone;
+       · the comment form is ~144px and sat inside a `height: 64px` bar under an
+         `overflow: hidden` ancestor, so the SUBMIT BUTTON rendered below the fold —
+         measured at y=840 of 844 and y=663 of 667;
+       · the action rail is moved to the stage's bottom inline-end corner on a phone, which
+         is where the caption's lines end, so it was drawn over the M6 description.
+
+     Asserted by GEOMETRY, in both languages, at the three widths the brief names. Reaching
+     for `toBeVisible()` would not have caught any of them: an element clipped by an
+     ancestor's overflow, or covered by a sibling with a higher z-index, is "visible". */
+  section(7, 'the viewer on a phone — the description, the comment list, and the submit button');
+  {
+    const PHONES = [
+      { w: 375, h: 667, lang: 'ar' },
+      { w: 390, h: 844, lang: 'ar' },
+      { w: 414, h: 896, lang: 'en' },
+    ];
+
+    /* An item with a description AND comments, which the deployed archive has exactly one
+       of. Substituted rather than searched for: this file must keep asserting the layout
+       after a takedown, and "the one post that happens to have prose on it" is not a
+       fixture, it is a coincidence the suite would inherit. */
+    const ITEM_SHARD = /\/item\/[0-9a-f-]+\.json/;
+    const BODY_AR = 'كان الزفاف يمرّ من هنا كل خميس.\n\nوكنّا نقف على الدرج ننتظر.';
+    const BODY_EN = 'The procession came through here every Thursday.\n\nWe waited on the steps.';
+    const COMMENTS = [
+      { author: { avatar_path: null, display_name: 'ساكن رام الله', handle: 'resident_1' },
+        body: 'أذكر هذا المكان جيدًا.', day: '2026-09-10', id: 'fixture-1', lang: 'ar' },
+      { author: { avatar_path: null, display_name: 'Amr', handle: 'amr' },
+        body: 'I remember this corner.', day: '2026-09-11', id: 'fixture-2', lang: 'en' },
+    ];
+
+    /** Opens the first memory in the feed, on a phone, signed in, with prose and comments. */
+    async function phoneViewer({ w, h, lang }) {
+      const page = await newPage({ viewport: { width: w, height: h } });
+      const session = await mintDisposable('member');
+      await page.addInitScript((rt) => {
+        try { sessionStorage.setItem('rma.refresh', rt); } catch (e) { /* private mode */ }
+      }, session.refresh_token);
+
+      await page.route(ITEM_SHARD, async (route) => {
+        const res = await route.fetch();
+        const shard = await res.json();
+        shard.body_ar = BODY_AR;
+        shard.body_en = BODY_EN;
+        shard.comments = COMMENTS;
+        shard.comment_count = COMMENTS.length;
+        await route.fulfill({ response: res, body: JSON.stringify(shard),
+                              headers: { ...res.headers(), 'content-type': 'application/json' } });
+      });
+
+      await page.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
+      await ready(page);
+      await page.waitForSelector('.memory', { timeout: 20000 });
+      if (lang === 'en') {
+        await page.click('.lang-toggle');
+        await page.waitForTimeout(800);
+      }
+      await page.locator('.memory').first().click();
+      await page.waitForSelector('.viewer', { timeout: 20000 });
+      await page.waitForTimeout(2500);
+      return page;
+    }
+
+    /* The two questions a snapshot cannot answer. `laidOut` is "does this box have area and
+       is it inside the window", which is what the submit button failed. `covered` samples
+       the element's own centre with elementFromPoint and asks whether what the browser
+       would hand a tap is this element or something on top of it — which is what the
+       description failed under the rail. */
+    const GEOM = `(() => {
+      const box = (sel) => {
+        const n = document.querySelector(sel);
+        if (!n) return null;
+        const r = n.getBoundingClientRect();
+        const cs = getComputedStyle(n);
+        return {
+          w: r.width, h: r.height, top: r.top, bottom: r.bottom, left: r.left, right: r.right,
+          display: cs.display,
+          laidOut: r.width > 0 && r.height > 0 && r.top >= -0.5 && r.left >= -0.5
+                   && r.bottom <= innerHeight + 0.5 && r.right <= innerWidth + 0.5,
+        };
+      };
+      const overlaps = (a, b) => {
+        const x = document.querySelector(a); const y = document.querySelector(b);
+        if (!x || !y) return false;
+        const p = x.getBoundingClientRect(); const q = y.getBoundingClientRect();
+        return !(p.right <= q.left || p.left >= q.right || p.bottom <= q.top || p.top >= q.bottom);
+      };
+      const slide = [...document.querySelectorAll('.viewer__slide')]
+        .find((s) => (s.querySelector('.viewer__body')?.textContent || '').trim()) || null;
+      const body = slide ? slide.querySelector('.viewer__body') : null;
+      return {
+        hScroll: document.documentElement.scrollWidth > innerWidth,
+        bodyText: (body?.textContent || '').trim().length,
+        bodyBox: body ? (() => { const r = body.getBoundingClientRect();
+          return { h: r.height, top: r.top, left: r.left, right: r.right }; })() : null,
+        railOverBody: (() => {
+          const rail = document.querySelector('.viewer__rail');
+          if (!rail || !body) return null;
+          const p = rail.getBoundingClientRect(); const q = body.getBoundingClientRect();
+          return !(p.right <= q.left || p.left >= q.right || p.bottom <= q.top || p.top >= q.bottom);
+        })(),
+        listDisplay: (() => { const n = document.querySelector('.comments__list');
+          return n ? getComputedStyle(n).display : 'absent'; })(),
+        rows: document.querySelectorAll('.comments__list .comment').length,
+        firstRow: box('.comments__list .comment'),
+        input: box('.comment-form__input'),
+        submit: box('.comment-form .btn'),
+        mediaH: (() => { const n = slide && slide.querySelector('.viewer__media');
+          return n ? n.getBoundingClientRect().height : 0; })(),
+      };
+    })()`;
+
+    for (const phone of PHONES) {
+      const tag = `${phone.w}×${phone.h} ${phone.lang}`;
+      const page = await phoneViewer(phone);
+      const g = await page.evaluate(GEOM);
+
+      ck(!g.hScroll, `${tag}: the page does not scroll sideways`,
+         'a phone layout that overflows its own viewport is the one thing a reader cannot work around');
+
+      /* ── the description (defect 3) ── */
+      ck(g.bodyText > 0, `${tag}: the description is rendered`, JSON.stringify(g.bodyBox));
+      ck(g.railOverBody === false,
+         `${tag}: the action rail is not drawn over the description`,
+         'the rail is 46px at a 12px inset; the caption reserves that column with padding-inline-end');
+
+      /* ── the comment list (defect 2a) ── */
+      ck(g.listDisplay !== 'none',
+         `${tag}: the comment list is not display:none`, `display: ${g.listDisplay}`);
+      ck(g.rows === COMMENTS.length,
+         `${tag}: both published comments are in the list (${g.rows})`);
+      ck(g.firstRow && g.firstRow.laidOut,
+         `${tag}: the first comment is inside the viewport`, JSON.stringify(g.firstRow));
+
+      /* ── the composer (defect 2b) ── */
+      ck(g.input && g.input.laidOut,
+         `${tag}: the comment input is inside the viewport`, JSON.stringify(g.input));
+      ck(g.submit && g.submit.laidOut,
+         `${tag}: THE SUBMIT BUTTON is inside the viewport`,
+         `${JSON.stringify(g.submit)} — it rendered below the fold at every phone width until 13 Sep`);
+      ck(g.input && g.input.h <= phone.h * 0.25,
+         `${tag}: the input is a composer, not a quarter of the screen (${Math.round(g.input?.h ?? 0)}px)`);
+
+      /* ── and the photograph survived the rearrangement ── */
+      ck(g.mediaH >= phone.h * 0.35,
+         `${tag}: the photograph still has the screen (${Math.round(g.mediaH)}px of ${phone.h})`,
+         'the first attempt at this fix left it 110px tall — a heritage archive cannot pay for comments with its pictures');
+
+      ck(page.pageErrors.length === 0, `${tag}: no uncaught page errors`,
+         page.pageErrors.join('\n        '));
       await page.context().close();
     }
   }

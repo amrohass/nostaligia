@@ -2175,34 +2175,96 @@ html[lang="en"] .authpage__back { font: 400 12px var(--font-en); }
   .era { font-size: 9.5px; }
 
   .viewer { flex-direction: column; }
-  .viewer__slide { padding: 56px 16px 24px; }
+
+  /* ── A phone cannot show photograph, caption and comments at once ──
+     Desktop puts the comments in a column BESIDE the media. Stacked on a 390px screen the
+     same three are ~900px of content in ~840px of viewport, and every way of fitting them
+     crushes one: the first attempt here left the photograph 110px tall at 375px. So the
+     slide scrolls — everything desktop shows is present, in the same order; §9's faithful
+     echo is about what is THERE, not about one screenful.
+     `proximity`, not the scroller's default `mandatory`: mandatory snapping with a snap area
+     taller than the scrollport pulls the reader off the bottom of a slide they are still
+     reading, losing the description a second way. */
+  .viewer__scroller { scroll-snap-type: y proximity; }
+  .viewer__slide {
+    padding: 56px 16px 24px;
+    block-size: auto;
+    min-block-size: 100%;
+  }
+  /* Still `flex: 1`, so a memory with little to say fills the screen with its photograph as
+     on desktop; the floor stops a long description trading the picture away. */
+  .viewer__media-wrap { min-block-size: 42dvh; }
+  /* No inner scroller on a phone: right on a desktop slide that cannot scroll, but inside
+     one that can it is a second scroll region the reader must discover they can drag. */
+  .viewer__body { max-block-size: none; overflow-y: visible; }
   .viewer__rail { inset-inline-start: auto; inset-inline-end: 12px; top: auto; bottom: 24px; transform: none; }
   .viewer__rail .rail-action__label { display: none; }
   .viewer__rail .rail-action:first-child .rail-action__label { display: block; }
   .viewer__hint { display: none; }
+
+  /* The rule above moves the rail to the stage's bottom inline-end corner for thumb reach,
+     which is where the caption's lines end: the buttons were drawn ON TOP of the title and
+     of the M6 description. Measured 13 Sep — the rail's box intersects `.viewer__body` at
+     375, 390 and 414 and not at 1280, which is the whole of "the description shows on a
+     large screen and not on a phone": the element renders at every width, and on a phone
+     every line of it starts under a button. The rail is a 46px glyph at a 12px inset, so the
+     caption gives that column back rather than the rail moving — thumb reach was the point
+     of putting it there. */
+  .viewer__caption { padding-inline-end: 58px; }
+
+  /* ── The comments panel on a phone ──────────────────────────
+     This was `height: 64px` with the list `display: none`, and all three parts were broken
+     at once. Measured at 375x667, 390x844 and 414x896:
+       · the list was not small, it was DISPLAY:NONE — every published comment was fetched,
+         built into the DOM and hidden, so §1's "viewer with comments" had none on it;
+       · the form is 144px and sat in a 64px bar under `overflow: hidden`, so the submit
+         button rendered at y=840 of 844 and y=663 of 667 — off-screen, every width, both
+         languages;
+       · the sign-in prompt had every span but the padlock hidden, leaving a signed-out
+         visitor an 18px lock icon with no words on it.
+     So the bar becomes a sheet: no fixed height, sized by its content, capped against the
+     VISIBLE viewport. `dvh` not `vh` — a phone's `vh` is the large viewport, and a sheet
+     measured against it puts its last row under the URL bar, which is this bug again. The
+     `vh` line is the fallback where `dvh` is unknown. */
   .viewer__comments {
     width: 100%;
-    height: 64px;
     flex: none;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 18px;
-    background: var(--terracotta);
+    max-block-size: 38vh;
+    max-block-size: 38dvh;
     border-top: 1px solid var(--cream-a10);
     border-inline-start: 0;
   }
-  .viewer__comments .comments__head { border: 0; padding: 0; }
-  .viewer__comments .comments__subject,
-  .viewer__comments .comments__list { display: none; }
-  .viewer__comments .locked-prompt {
-    margin: 0;
-    width: auto;
-    border: 0;
-    background: none;
-    padding: 0;
+  .viewer__comments .comments__head {
+    padding-block: 12px 10px;
+    padding-inline: var(--gutter-sm);
   }
-  .viewer__comments .locked-prompt span:not(.locked-prompt__lock) { display: none; }
+  /* Worth saying on desktop, where the panel is a column beside the media; on a phone it
+     repeats the caption just above it. */
+  .viewer__comments .comments__subject { display: none; }
+  .viewer__comments .comments__list {
+    padding-block: 12px;
+    padding-inline: var(--gutter-sm);
+    gap: 14px;
+  }
+  /* The list gives up height — it already scrolls. These two never do. */
+  .viewer__comments .comment-form {
+    flex: none;
+    margin-top: 8px;
+    padding-block: 0 12px;
+    padding-inline: var(--gutter-sm);
+  }
+  .viewer__comments .locked-prompt {
+    flex: none;
+    margin-block: 10px 12px;
+    margin-inline: var(--gutter-sm);
+  }
+  /* A composer, not a document box: `min-height: 56px` with `rows="2"` is a 73px field,
+     most of what the sheet has to spend. 44px is the WCAG 2.5.8 target, and `resize:
+     vertical` still lets a member writing more drag it open. */
+  .viewer__comments .comment-form__input { min-block-size: 44px; block-size: 44px; }
+  /* The note and the button share a row and the note wraps; at 11px it wraps to two lines
+     instead of three and the row stops being taller than the field above it. */
+  .viewer__comments .comment-form__actions .review-note { font-size: 11px; line-height: 1.5; }
 
   /* Section 9: "Mobile is a faithful echo of desktop, not a reduced version." The map
      stays, at a taller aspect because a phone is narrow -- 16/10 on a 360px screen is
