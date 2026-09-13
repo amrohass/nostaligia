@@ -166,12 +166,21 @@ function boot(account) {
     whenReady: () => Promise.resolve(true),
   };
 
+  const toasts = [];
   for (const rel of SHELL) {
     if (rel.endsWith('public.js')) Object.assign(win, { TURNSTILE });
     const names = Object.keys(win).filter((k) => /^[A-Z][A-Z0-9_]*$/.test(k));
     new Function('window', ...names, read(rel))(win, ...names.map((n) => win[n]));
+    /* public.js binds UI as a bare parameter, but calls `UI.toast(...)` — a property read
+       at call time — so wrapping the method on the same object is seen. claimHandle reports
+       every refusal this way and nowhere else, which makes the toast the only place the
+       member's actual sentence can be read. */
+    if (rel.endsWith('ui.js')) {
+      const real = win.UI.toast;
+      win.UI.toast = function (message) { toasts.push(message); return real.apply(this, arguments); };
+    }
   }
-  return { win, calls };
+  return { win, calls, toasts };
 }
 
 /** Opens the signup dialog the way a visitor does and submits it with `handle`. */
@@ -275,13 +284,48 @@ try {
   console.log('# a reserved handle is still the call of the database');
   {
     const account = await makeAccount();
-    const { win, calls } = boot(account);
+    const { win, calls, toasts } = boot(account);
     await signUpWith(win, 'رام_الله', account.email);
     ok(calls.some((c) => c.method === 'PATCH' && /\/rest\/v1\/profiles/.test(c.url)),
        'a reserved handle is SENT — the client does not pre-empt the reserved list');
     const after = await profileRow(account.id);
     ok(/^member_[0-9a-f]{12}$/.test(after.handle),
        `...the database refused it and the placeholder stands (${after.handle})`);
+    /* And WHICH refusal the member is told about, from the real 400. Both server-side
+       verdicts are SQLSTATE 23514; only the body separates them, so this is the assertion
+       that the separation works against the deployed PostgREST rather than against a stub
+       carrying a body somebody typed. */
+    ok(toasts.includes(win.I18N.t('signup.err.handleReserved')),
+       `the member is told the archive keeps the name (${JSON.stringify(toasts)})`);
+    ok(!toasts.includes(win.I18N.t('signup.err.handleTaken')),
+       '...and NOT that someone else has it, which is a different thing to go and do');
+  }
+
+  /* ═══ 3c · a handle another member already holds ══════════════════════════
+     The third outcome, and the only one of the three that needs two accounts. 409 / 23505
+     on 0004's unique index over the NORMALIZED handle — so this also proves the normalized
+     index is what collides, not the raw string: the second account types it capitalised. */
+  console.log('# a handle somebody else already has');
+  {
+    const owner = await makeAccount();
+    const wanted = 'manara_' + RUN;
+    await signUpWith(boot(owner).win, wanted, owner.email);
+    const ownerRow = await profileRow(owner.id);
+    ok(ownerRow.handle === wanted, `CONTROL: the first member got the name (${ownerRow.handle})`);
+
+    const second = await makeAccount();
+    const { win, toasts } = boot(second);
+    await signUpWith(win, 'Manara_' + RUN, second.email);
+    const secondRow = await profileRow(second.id);
+    ok(/^member_[0-9a-f]{12}$/.test(secondRow.handle),
+       `the second member does not get it (${secondRow.handle})`);
+    ok(toasts.includes(win.I18N.t('signup.err.handleTaken')),
+       `...and is told somebody already has it (${JSON.stringify(toasts)})`);
+    ok(!toasts.includes(win.I18N.t('signup.err.handleReserved')),
+       '...not that the archive keeps it, which would send them looking for a rule');
+    /* The string all three used to collapse into. t() returns the key when it is gone. */
+    ok(!toasts.some((m) => m === 'signup.err.handleBad' || /غير مقبول|not allowed/.test(m)),
+       'and no message on any of these paths is the generic "that handle is not allowed"');
   }
 
   /* ═══ 4 · what the database will not take is refused BEFORE the account ═══

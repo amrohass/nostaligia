@@ -2258,6 +2258,46 @@
   }
 
   /**
+   * WHICH refusal the database just gave, as an i18n key.
+   *
+   * There are three ways a handle can be turned away and they need three different things
+   * from the member: fix the spelling, pick a different name, pick a different name. Until
+   * 13 Sep 2026 the last two shared one sentence — "that handle is not allowed, pick
+   * another from your profile" — which is true of all three and actionable for none, and
+   * which was reached by an `else` rather than by a decision.
+   *
+   * MEASURED against the deployed PostgREST rather than assumed, because the discrimination
+   * lives in a response body nothing else in this repository reads:
+   *
+   *   taken     409  23505  duplicate key value violates unique constraint
+   *                         "profiles_handle_normalized_key"
+   *   format    400  23514  new row for relation "profiles" violates check constraint
+   *                         "profiles_handle_allowed"
+   *   reserved  400  23514  handle "رام_الله" is reserved
+   *
+   * Both 400s carry the same SQLSTATE, so the code alone cannot separate them. The
+   * constraint name can: PostgreSQL's own wording for a CHECK violation names the
+   * constraint, and the two reserved-handle triggers (0004's list and 0051's tombstones)
+   * RAISE with a message of ours that does not. Positive tests for both, and null when
+   * neither matches — a refusal this cannot identify must not be dressed as one it can.
+   *
+   * The format branch should be unreachable now that the form validates first, and it is
+   * kept honest rather than removed: it re-runs handleProblem() so the member is told which
+   * rule, and only if that also comes back empty does the caller fall through to a message
+   * that claims nothing.
+   */
+  function handleRefusalKey(err, handle) {
+    if (!err) return null;
+    if (err.status === 409) return 'signup.err.handleTaken';
+    if (err.status !== 400) return null;
+    var message = (err.detail && err.detail.message) || '';
+    if (/violates check constraint/.test(message)) {
+      return handleProblem(normalizeHandle(handle)) || null;
+    }
+    return 'signup.err.handleReserved';
+  }
+
+  /**
    * The chosen handle, written onto the profile the account already has.
    *
    * ── The defect this replaces, because it is worth not repeating ──
@@ -2304,12 +2344,10 @@
         }
         renderMasthead();
       }, function (err) {
-        /* 409 is the normalized-handle unique index (0004) and means what the member
-           thinks it means. Everything else — the reserved-handle trigger and both CHECK
-           constraints raise 23514, which PostgREST answers 400 — means the name itself is
-           not one this archive will take. Two different things for the member to do, so
-           two messages. */
-        UI.toast(t(err && err.status === 409 ? 'signup.err.handleTaken' : 'signup.err.handleBad'));
+        /* Three refusals, three messages — see handleRefusalKey. `handleKept` when it
+           cannot tell: that one promises only a temporary name the member can change,
+           which is true whatever went wrong, and claims nothing about the name itself. */
+        UI.toast(t(handleRefusalKey(err, handle) || 'signup.err.handleKept'));
       });
   }
 
@@ -3773,16 +3811,10 @@
             loadProfile();
           })
           .catch(function (err) {
-            /* Same split as claimHandle(): 409 is the normalized-handle unique index
-               (0004) and means taken; the reserved-handle trigger and both CHECKs raise
-               23514, which PostgREST answers 400, and mean the name itself is not one this
-               archive will take. Only when a handle was actually sent — otherwise a 409
-               from anywhere else would be reported as a name collision. */
-            if (handleChanged && err && (err.status === 409 || err.status === 400)) {
-              note.textContent = t(err.status === 409 ? 'signup.err.handleTaken' : 'signup.err.handleBad');
-            } else {
-              note.textContent = t(err && err.key ? err.key : 'admin.err.generic');
-            }
+            /* Only when a handle was actually sent: a 409 from anywhere else on this form
+               is not a name collision and must not be reported as one. */
+            var refusal = handleChanged ? handleRefusalKey(err, wantedHandle) : null;
+            note.textContent = t(refusal || (err && err.key) || 'admin.err.generic');
             note.hidden = false;
           });
       }

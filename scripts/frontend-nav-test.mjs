@@ -696,29 +696,68 @@ console.log('# /me — renaming yourself');
      && /select=/.test(renamed.calls[0].filter),
      `...onto their own row only, with the select= DB.patch requires (${renamed.calls[0] ? renamed.calls[0].filter : ''})`);
 
-  /* The two refusals, told apart. They are different things for the member to do, and
-     0004's unique index and the reserved-handle trigger answer with different codes. */
-  const taken = await editorWin(PLACEHOLDER, (body) => (body.handle
-    ? Promise.reject(Object.assign(new Error('conflict'), { key: 'admin.err.conflict', status: 409 }))
-    : Promise.resolve([{ handle: PLACEHOLDER }])));
-  taken.form.querySelector('input[autocomplete=username]').value = 'taken_name';
-  taken.form.fire('submit');
-  for (let i = 0; i < 8; i++) await settle();
-  const takenNote = textOf(taken.form.querySelector('.form-error'));
-  ok(takenNote === taken.win.I18N.t('signup.err.handleTaken'),
-     `409 is reported as a name someone else holds ("${takenNote}")`);
+  /* ── The three refusals, told apart (13 Sep 2026) ──
+     A handle can be turned away three ways and each asks the member for something
+     different: fix the spelling, pick a different name because someone has it, pick a
+     different name because the archive keeps it. The last two shared one sentence — "that
+     handle is not allowed, pick another from your profile" — reached by an `else` rather
+     than by a decision, and true of all three.
 
-  const bad = await editorWin(PLACEHOLDER, (body) => (body.handle
-    ? Promise.reject(Object.assign(new Error('check'), { key: 'admin.err.generic', status: 400 }))
-    : Promise.resolve([{ handle: PLACEHOLDER }])));
-  bad.form.querySelector('input[autocomplete=username]').value = 'admin';
-  bad.form.fire('submit');
-  for (let i = 0; i < 8; i++) await settle();
-  const badNote = textOf(bad.form.querySelector('.form-error'));
-  ok(badNote === bad.win.I18N.t('signup.err.handleBad'),
-     `400 is reported as a name the archive will not take, which is a different fix ("${badNote}")`);
-  ok(badNote !== bad.win.I18N.t('signup.err.handleTaken'),
-     '...and specifically not "taken", which is the conflation that hid the original defect');
+     The stubs carry the BODIES PostgREST actually returns, measured against the deployed
+     project, because that body is the only thing that separates the two 400s: both are
+     SQLSTATE 23514, and only the CHECK one names a constraint. A stub that rejected with a
+     bare status could not tell them apart and neither could the code under test. */
+  const REFUSALS = {
+    taken: { status: 409, key: 'admin.err.conflict', detail: {
+      code: '23505',
+      message: 'duplicate key value violates unique constraint "profiles_handle_normalized_key"' } },
+    reserved: { status: 400, key: 'admin.err.generic', detail: {
+      code: '23514', message: 'handle "admin" is reserved' } },
+    checkConstraint: { status: 400, key: 'admin.err.generic', detail: {
+      code: '23514',
+      message: 'new row for relation "profiles" violates check constraint "profiles_handle_allowed"' } },
+  };
+  const refusing = (which) => (body) => (body.handle
+    ? Promise.reject(Object.assign(new Error(which), REFUSALS[which]))
+    : Promise.resolve([{ handle: PLACEHOLDER }]));
+
+  async function noteFor(which, typed) {
+    const w = await editorWin(PLACEHOLDER, refusing(which));
+    w.form.querySelector('input[autocomplete=username]').value = typed;
+    w.form.fire('submit');
+    for (let i = 0; i < 8; i++) await settle();
+    return { note: textOf(w.form.querySelector('.form-error')), win: w.win };
+  }
+
+  const taken = await noteFor('taken', 'taken_name');
+  ok(taken.note === taken.win.I18N.t('signup.err.handleTaken'),
+     `409 says someone already has it ("${taken.note}")`);
+
+  const reserved = await noteFor('reserved', 'admin');
+  ok(reserved.note === reserved.win.I18N.t('signup.err.handleReserved'),
+     `a reserved name says the archive keeps it ("${reserved.note}")`);
+  ok(reserved.note !== taken.note,
+     '...and it is NOT the "someone has it" message — nobody has it, and looking for who would waste the time of a member who cannot act on it');
+
+  /* The generic that used to be behind both. Deleted from I18N, so `t()` now returns the
+     key itself — which is exactly what this asserts neither message has become. */
+  const GENERIC = 'signup.err.handleBad';
+  ok(reserved.win.I18N.t(GENERIC) === GENERIC,
+     'signup.err.handleBad is gone from the copy deck, not merely unreferenced');
+  for (const [label, shown] of [['taken', taken.note], ['reserved', reserved.note]])  {
+    ok(shown !== GENERIC && shown.length > 0 && !shown.startsWith('signup.err.'),
+       `the ${label} message is real copy, not a key that leaked through ("${shown}")`);
+  }
+
+  /* And the branch that should now be unreachable: a CHECK constraint refusing a handle
+     the form already validated. It must NOT be dressed as one of the three — the code
+     cannot tell which rule, so it says only that the save did not go through. */
+  const unexpected = await noteFor('checkConstraint', 'ramallah_1967');
+  ok(unexpected.note === unexpected.win.I18N.t('admin.err.generic'),
+     `a refusal the client cannot identify claims nothing about the name ("${unexpected.note}")`);
+  ok(unexpected.note !== unexpected.win.I18N.t('signup.err.handleTaken')
+     && unexpected.note !== unexpected.win.I18N.t('signup.err.handleReserved'),
+     '...and specifically does not guess at one of the three');
 
   /* ── The rules, checked before the row is written (13 Sep 2026) ──
      The refusals above are the SERVER's, and they arrive after the fact. Both CHECK

@@ -788,14 +788,24 @@
        including the primary-key conflict that was the real defect — so the one message
        that could be checked (is that name free?) was true of a name nobody had. */
     'signup.err.handleRequired': { ar: 'اختر اسمًا مستعارًا.', en: 'Choose a handle.' },
-    'signup.err.handleTaken':    { ar: 'هذا الاسم المستعار محجوز. غيّره من صفحتك.',
-                                   en: 'That handle is taken. Change it from your profile.' },
-    'signup.err.handleBad':      { ar: 'هذا الاسم المستعار غير مقبول. اختر غيره من صفحتك.',
-                                   en: 'That handle is not allowed. Pick another from your profile.' },
+    /* "محجوز" meant BOTH "someone already has it" and "the archive keeps it back", which
+       is the same conflation the English never had. Someone else holds it: مُستخدَم. */
+    'signup.err.handleTaken':    { ar: 'هذا الاسم المستعار مُستخدَم بالفعل. اختر اسمًا آخر.',
+                                   en: 'Someone already has that handle. Choose another.' },
+    /* 0004's reserved list and 0051's `deleted_user_` tombstones. The member has done
+       nothing wrong and there is nothing to correct — the name is one the archive keeps,
+       so the only useful thing to say is that, and to ask for a different one. */
+    'signup.err.handleReserved': { ar: 'هذا الاسم محفوظ للأرشيف ولا يمكن اختياره. اختر اسمًا آخر.',
+                                   en: 'That name is kept by the archive and cannot be used. Choose another.' },
     'signup.err.handleKept':     { ar: 'تعذّر حفظ الاسم المستعار الآن — حسابك يحمل اسمًا مؤقتًا يمكنك تغييره من صفحتك.',
                                    en: 'Your handle could not be saved just now — your account has a temporary one you can change from your profile.' },
-    /* The four refusals told apart, and told BEFORE the account exists — which handleTaken
-       and handleBad above never could be. Each names the thing to change. */
+    /* The four FORMAT refusals, told apart and told BEFORE the account exists — which the
+       two server-side verdicts above never can be. Each names the thing to change.
+       `signup.err.handleBad` — "that handle is not allowed, pick another from your profile"
+       — used to be the `else` behind all of this. It was true of a capital letter, of a
+       name somebody else held and of a name the archive keeps back, so it told a member
+       which of the three they were facing: none. Deleted rather than left defined, because
+       a string that says nothing is one edit from being wired as a fallback again. */
     'signup.err.handleLength':     { ar: 'الاسم المستعار من ٣ إلى ٣٠ حرفًا.',
                                      en: 'A handle is 3 to 30 characters.' },
     'signup.err.handleChars':      { ar: 'حروف وأرقام و_ فقط، بلا مسافات أو نقاط أو شرطات.',
