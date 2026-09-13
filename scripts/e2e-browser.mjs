@@ -1072,6 +1072,52 @@ try {
          page.pageErrors.join('\n        '));
       await page.context().close();
     }
+
+    /* ── The deep link, which is the URL this archive actually spreads on ──
+       Found while fixing the three above, in the same component, so it is fixed and
+       asserted with them. render() runs once before the feed page has loaded and again
+       after it; on a /item/{id} landing BOTH passes miss the feed and each started its own
+       shard fetch, and each continuation appended an overlay — measured as six slides for a
+       three-item archive. The second set is never upgraded, so a reader who ended up on one
+       got no media, no comments and NO DESCRIPTION: the reported symptom arriving by a
+       different road. Racy, so it reproduced on some loads and not others. */
+    for (const { w, h } of [{ w: 1280, h: 900 }, ...PHONES]) {
+      const page = await newPage({ viewport: { width: w, height: h } });
+      await page.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
+      await ready(page);
+      await page.waitForSelector('.memory', { timeout: 20000 });
+      const href = await page.locator('.memory').first().getAttribute('href');
+      await page.goto(`${ORIGIN}${href}`, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.viewer', { timeout: 20000 });
+      await page.waitForTimeout(2500);
+
+      const d = await page.evaluate(() => {
+        const top = [...document.querySelectorAll('.viewer__slide')]
+          .find((s) => Math.abs(s.getBoundingClientRect().top) < 30);
+        return {
+          overlays: document.querySelectorAll('.viewer').length,
+          scrollers: document.querySelectorAll('.viewer__scroller').length,
+          position: (document.querySelector('.viewer__position')?.textContent || '').trim(),
+          path: location.pathname,
+          topId: top ? top.dataset.id : null,
+          topBody: top ? (top.querySelector('.viewer__body')?.textContent || '').trim().length : -1,
+        };
+      });
+      ck(d.overlays === 1, `${w}px deep link: exactly one viewer is mounted (${d.overlays})`,
+         'two overlays stack, and only one of them ever receives its item shard');
+      ck(d.scrollers === 1, `${w}px deep link: and one scroller (${d.scrollers})`);
+      ck(d.path === `/item/${d.topId}`,
+         `${w}px deep link: the address bar names the memory on the screen`,
+         `url ${d.path}, showing ${d.topId}`);
+      /* Arabic-Indic digits: the counter is rendered through I18N.num, and hardcoding "1"
+         would make this assertion pass only in English. */
+      ck(d.position.startsWith('١') || d.position.startsWith('1'),
+         `${w}px deep link: the position counter says the FIRST slide ("${d.position}")`,
+         'a stale scroll event from a removed scroller resolved to the last one');
+      ck(page.pageErrors.length === 0, `${w}px deep link: no uncaught page errors`,
+         page.pageErrors.join('\n        '));
+      await page.context().close();
+    }
   }
 } finally {
   await browser.close();

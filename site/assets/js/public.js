@@ -1371,6 +1371,15 @@
   /* ── Viewer plumbing ─────────────────────────────────────── */
 
   function openViewer(index) {
+    /* Never two. `qs('#overlays').appendChild` below stacks rather than replaces, and
+       openViewerFor() can reach here twice for one landing: render() runs once before the
+       feed page has loaded and again after it, and on a deep link BOTH passes miss the feed
+       and start their own shard fetch, so both continuations opened an overlay. Measured
+       13 Sep on a direct /item/{id} load — six slides for a three-item archive, the second
+       set never upgraded, so whichever one the reader ended up on carried no media, no
+       comments and NO DESCRIPTION, and the address bar named a different memory than the
+       one on the screen. Racy, so it reproduced on some loads and not others. */
+    closeViewer();
     state.viewer = { index: index };
 
     var scroller = el('div.viewer__scroller', { onscroll: onViewerScroll },
@@ -1396,7 +1405,7 @@
     renderViewerChrome(index);
     focusItem(index);
 
-    scroller.scrollTop = index * scroller.clientHeight;
+    scroller.scrollTop = slideOffset(scroller, index);
 
     state.releaseTrap = UI.trapFocus(overlay, leaveViewer);
     global.addEventListener('keydown', onViewerKey);
@@ -1434,15 +1443,50 @@
     }, function () { /* a slide that could not load its shard keeps its thumbnail */ });
   }
 
+  /* ── Where a slide starts, and which one the reader is on ──
+   *
+   * Both were `index * scroller.clientHeight`, exact only while every slide is one
+   * scrollport tall — true on a desktop and, since 13 Sep 2026, false on a phone, where a
+   * slide is `min-block-size: 100%` with `block-size: auto` because the photograph, the
+   * caption and the comments do not fit one screenful of a 375px device. With variable
+   * heights that arithmetic addresses the wrong slide: a shared link opened the memory
+   * BEFORE the one it named, which reads as a loading bug.
+   *
+   * The scroller's children are exactly the slides, and it is `position: absolute`, so it is
+   * their offsetParent and `offsetTop` is already relative to it.
+   */
+  function slideOffset(scroller, index) {
+    var slide = scroller.children[index];
+    return slide ? slide.offsetTop : 0;
+  }
+
+  /* The slide the TOP EDGE of the scrollport is inside — not the nearest slide start. On a
+     phone a slide can be taller than the scrollport, and a reader half way down one is
+     still reading it; nearest-start would hand them the next item's id while the thing they
+     are looking at has not moved. */
+  function viewerIndexAt(scroller) {
+    var slides = scroller.children;
+    for (var i = slides.length - 1; i >= 0; i--) {
+      if (slides[i].offsetTop <= scroller.scrollTop + 1) return i;
+    }
+    return 0;
+  }
+
   var scrollSettle = null;
   function onViewerScroll(event) {
     global.clearTimeout(scrollSettle);
     var scroller = event.currentTarget;
     scrollSettle = global.setTimeout(function () {
+      /* The scroller this event came from may no longer be the one on the screen: render()
+         closes and reopens the viewer on every pass over /item/{id}, and the 90ms settle
+         below outlives the overlay. A DETACHED element reports offsetTop 0 for every child
+         and clientHeight 0 for itself, so the stale event resolved to the LAST slide —
+         which is how a deep link ended up announcing "3 / 3" and replaceState-ing a
+         different memory's id into the address bar while the reader was on the first. */
+      if (!state.viewer || scroller !== qs('.viewer__scroller')) return;
       var list = viewerList();
-      var index = Math.round(scroller.scrollTop / scroller.clientHeight);
-      index = Math.max(0, Math.min(list.length - 1, index));
-      if (!state.viewer || index === state.viewer.index) return;
+      var index = Math.max(0, Math.min(list.length - 1, viewerIndexAt(scroller)));
+      if (index === state.viewer.index) return;
       state.viewer.index = index;
       renderViewerChrome(index);
       focusItem(index);
@@ -4240,6 +4284,11 @@
       return refreshEngagement([id]).then(function () {
         // The reader may have navigated away while the shard was in flight.
         if (routedItemId() !== id) return;
+        /* Or the other pass of the race may already have opened this very item. The guard
+           in openViewer() makes a second call safe; this makes it unnecessary, so a reader
+           who has started scrolling is not dropped back to the first slide. */
+        var showing = state.viewer && viewerList()[state.viewer.index];
+        if (showing && showing.id === id) return;
         openViewer(0);
       });
     }, function () {

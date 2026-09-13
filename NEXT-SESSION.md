@@ -314,7 +314,18 @@ against the deployed pipeline, not argued.
    ```
    node scripts/harness-bootstrap.mjs --status        live / stale, per role
    node scripts/e2e-authenticated.mjs            62   1 known-red: takedown 207, see below
-   PLAYWRIGHT_DIR=… node scripts/e2e-browser.mjs 103  green
+   PLAYWRIGHT_DIR=… node scripts/e2e-browser.mjs 156  green (section 7 = the phone viewer,
+                                                     added 13 Sep: the description under the
+                                                     rail, the display:none comment list and
+                                                     the off-screen submit button, plus the
+                                                     deep link that mounted two overlays)
+   node scripts/signup-handle-e2e.mjs            26   green. The handle, typed into the real
+                                                     form and read back out of the DEPLOYED
+                                                     database. Creates throwaway accounts and
+                                                     ANONYMIZES them afterwards (0051 — a hard
+                                                     delete is impossible by design); it says
+                                                     so per run, and a number short of the
+                                                     total means litter to clear by hand.
    node scripts/privacy-shards-test.mjs          62   1 RED (known, not a leak), 0 skipped
                                                      The red is the suite's own non-vacuity guard:
                                                      the archive has 3 posts at location_precision=
