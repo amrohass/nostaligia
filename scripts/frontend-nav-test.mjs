@@ -719,6 +719,38 @@ console.log('# /me — renaming yourself');
      `400 is reported as a name the archive will not take, which is a different fix ("${badNote}")`);
   ok(badNote !== bad.win.I18N.t('signup.err.handleTaken'),
      '...and specifically not "taken", which is the conflation that hid the original defect');
+
+  /* ── The rules, checked before the row is written (13 Sep 2026) ──
+     The refusals above are the SERVER's, and they arrive after the fact. Both CHECK
+     constraints are knowable from the browser, and until now nothing checked them or even
+     named them, which is how `Masar` — a capital letter, nothing more — became
+     member_<hex> for every member on the deployed system. The editor is the second surface
+     that sends this column; scripts/signup-handle-e2e.mjs covers the first against the
+     real database. */
+  const capital = await editorWin(PLACEHOLDER);
+  capital.form.querySelector('input[autocomplete=username]').value = 'Masar';
+  capital.form.fire('submit');
+  for (let i = 0; i < 8; i++) await settle();
+  ok(capital.calls[0] && capital.calls[0].body.handle === 'masar',
+     `a capital is lower-cased to match normalized_handle() rather than refused (${
+       capital.calls[0] ? JSON.stringify(capital.calls[0].body.handle) : 'no call'})`);
+
+  for (const [typed, key] of [
+    ['abu ammar', 'signup.err.handleChars'],
+    ['tala.jabi', 'signup.err.handleChars'],
+    ['ab', 'signup.err.handleLength'],
+    ['amro_رام', 'signup.err.handleScript'],
+    ['amro__hass', 'signup.err.handleUnderscore'],
+  ]) {
+    const w = await editorWin(PLACEHOLDER);
+    w.form.querySelector('input[autocomplete=username]').value = typed;
+    w.form.fire('submit');
+    for (let i = 0; i < 8; i++) await settle();
+    const note = textOf(w.form.querySelector('.form-error'));
+    ok(note === w.win.I18N.t(key), `"${typed}" is refused as ${key} ("${note}")`);
+    ok(w.calls.length === 0,
+       `...without a write, so the member is told which rule rather than "not allowed" (${w.calls.length} calls)`);
+  }
 }
 
 /* ═══ 7 · the share sheet asks an event different questions ══════════════════

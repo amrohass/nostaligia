@@ -1055,6 +1055,14 @@ html[lang="en"] .field__label { font: 600 11.5px var(--font-en); }
 .field__label .opt { font-weight: 400; color: var(--ink-45); }
 .field__hint { font: 400 11.5px var(--font-ar); }
 html[lang="en"] .field__hint { font: 400 11px var(--font-en); }
+/* The handle rules, read BEFORE typing rather than reported after — so it is quiet, and
+   sits under the field rather than in the error slot, which belongs to a refusal. */
+.field__rules {
+  font: 400 11px/1.7 var(--font-ar);
+  color: var(--ink-55);
+  margin: -1px 0 0;
+}
+html[lang="en"] .field__rules { font: 400 10.5px/1.6 var(--font-en); }
 
 .input {
   border: 1px solid var(--olive-a25);

@@ -1949,6 +1949,9 @@
          opposite of what onboarding should collect. */
       body.push(field(t('field.handle'), { type: 'text', placeholder: t('field.handlePh'), autocomplete: 'username' },
         el('span.field__hint', { text: t('field.handleNote') })));
+      /* The rules, on the screen. Enforced by two CHECK constraints and nowhere in the
+         interface until 13 Sep 2026 — which is how every member came to be member_<hex>. */
+      body.push(el('p.field__rules', { text: t('field.handleRules') }));
       body.push(field(t('field.email'), { type: 'email', placeholder: 'name@example.com', email: true, autocomplete: 'email' }));
       body.push(field(t('field.password'), { type: 'password', placeholder: '••••••••', autocomplete: 'new-password' }));
       body.push(el('div.pact', null, [
@@ -1994,11 +1997,26 @@
         var email = (UI.qs('input[type=email]', form) || {}).value || '';
         var password = (UI.qs('input[type=password]', form) || {}).value || '';
         var handleInput = UI.qs('input[autocomplete=username]', form);
-        var handle = handleInput ? handleInput.value.trim() : '';
+        /* Normalized on the way out of the field, so the validation, the PATCH and the
+           sessionStorage park across a confirmation round trip all see one value. */
+        var handle = handleInput ? normalizeHandle(handleInput.value) : '';
         var submitButton = UI.qs('button[type=submit]', form);
 
         clearError();
-        if (mode === 'signup' && !handle) { showError('signup.err.handleRequired'); return; }
+        if (mode === 'signup') {
+          if (!handle) { showError('signup.err.handleRequired'); return; }
+          /* BEFORE the account exists. Afterwards the dialog is the success panel and the
+             refusal is a toast — a message with nothing the member can do about it. */
+          var handleProblemKey = handleProblem(handle);
+          if (handleProblemKey) {
+            showError(handleProblemKey);
+            if (handleInput) handleInput.focus();
+            return;
+          }
+          /* Echo the normalized form back: a member who typed "Masar" is getting `masar`,
+             and §7 makes the handle public enough that they should see it first. */
+          if (handleInput && handleInput.value !== handle) handleInput.value = handle;
+        }
 
         busy = true;
         if (submitButton) { submitButton.disabled = true; submitButton.textContent = t('auth.working'); }
@@ -2131,6 +2149,68 @@
 
     scrim = overlayShell('scrim', [form], close);
     widget = TURNSTILE.mount(captchaSlot);
+  }
+
+  /* ── The handle rules, mirrored from the database ─────────
+   *
+   * The 7 Sep INSERT→PATCH fix was correct and deployed, and the handle still never
+   * persisted. Measured 13 Sep against the live database: all 22 profiles still hold 0057's
+   * `member_<12 hex>` placeholder, and `updated_at` equals `created_at` on every row — so no
+   * UPDATE has ever reached one. The PATCH was not the problem. Two CHECK constraints were:
+   *
+   *   profiles_handle_is_normalized  CHECK (handle = normalized_handle(handle))
+   *   profiles_handle_allowed        CHECK (is_allowed_handle(handle))
+   *
+   * Between them: 3–30 characters; a-z, Arabic letters, digits and `_` and nothing else; at
+   * least one letter; one script; no leading, trailing or doubled underscore; and already
+   * lower-cased. So `Masar`, `abu ammar`, `m.janim.07` and any Arabic name with a space
+   * raise 23514 → 400 → a TOAST saying "pick another from your profile", fired while the
+   * dialog had already become the success panel. Nothing on the screen had ever named a
+   * rule, so a member typing their own name was refused by a message they could not act on.
+   *
+   * A capital is NORMALIZED rather than refused, because `normalized_handle()` lower-cases
+   * and the CHECK then requires the stored value to equal it. A space or a dot has no
+   * normalization and is refused BEFORE the account exists, while the field is still there.
+   *
+   * Not a guard (§5): the database refuses a bad handle. This is what stops a member ever
+   * sending one by accident, or learning the rule from a toast.
+   */
+
+  /* U+0640 tatweel and the combining marks `public.normalized_handle` translates away. */
+  var HANDLE_MARKS = /[\u0640\u064B-\u065F\u0670]/g;
+
+  function normalizeHandle(raw) {
+    var value = String(raw == null ? '' : raw).trim();
+    if (value.normalize) value = value.normalize('NFKC');
+    return value.replace(HANDLE_MARKS, '').toLowerCase();
+  }
+
+  /**
+   * The i18n key for why this handle would be refused, or null if it would not.
+   *
+   * Mirrors `public.is_allowed_handle` term for term, code-point ranges included, so the two
+   * read side by side. Iterated by CODE POINT, because Postgres `char_length` counts
+   * characters and `String.length` does not. Uniqueness and the reserved list are not here:
+   * a browser cannot know them, and claimHandle's 409/400 split already reports them.
+   */
+  function handleProblem(handle) {
+    var chars = Array.from(handle);
+    if (chars.length < 3 || chars.length > 30) return 'signup.err.handleLength';
+
+    var latin = 0;
+    var arabic = 0;
+    for (var i = 0; i < chars.length; i++) {
+      var cp = chars[i].codePointAt(0);
+      if (cp >= 97 && cp <= 122) latin++;
+      else if ((cp >= 1569 && cp <= 1594) || (cp >= 1601 && cp <= 1610)) arabic++;
+      else if (!((cp >= 48 && cp <= 57) || cp === 95)) return 'signup.err.handleChars';
+    }
+    if (!latin && !arabic) return 'signup.err.handleChars';
+    /* One script. A handle that mixes them is unreadable in both and is the shape a
+       homograph impersonation takes. */
+    if (latin && arabic) return 'signup.err.handleScript';
+    if (/^_|_$|__/.test(handle)) return 'signup.err.handleUnderscore';
+    return null;
   }
 
   /**
@@ -3612,9 +3692,21 @@
            reserved-handle trigger and both CHECK constraints in front of a save that was
            about a bio, and a member editing their bio must not be refused over a name
            they did not touch. */
-        var wantedHandle = handleInput.value.trim();
+        var wantedHandle = normalizeHandle(handleInput.value);
         var handleChanged = wantedHandle && wantedHandle !== (own.handle || '');
-        if (handleChanged) patch.handle = wantedHandle;
+        if (handleChanged) {
+          /* Same rules as the signup dialog: a 400 here becomes "not allowed", which does
+             not say which rule. Checked first so the member is told what to change. */
+          var handleProblemKey = handleProblem(wantedHandle);
+          if (handleProblemKey) {
+            note.textContent = t(handleProblemKey);
+            note.hidden = false;
+            handleInput.focus();
+            return;
+          }
+          if (handleInput.value !== wantedHandle) handleInput.value = wantedHandle;
+          patch.handle = wantedHandle;
+        }
 
         DB.patch('profiles', 'id=eq.' + encodeURIComponent(state.account.id) + '&select=handle',
           patch)
@@ -3654,7 +3746,8 @@
       el('div.field', null, [
         labelFor(t('field.handle'), handleInput),
         handleInput,
-        el('p.privacy-row__hint', { text: t('profile.handleHint') })
+        el('p.privacy-row__hint', { text: t('profile.handleHint') }),
+        el('p.privacy-row__hint', { text: t('field.handleRules') })
       ]),
       el('div.field', null, [labelFor(t('profile.displayName'), displayInput), displayInput]),
       el('div.field', null, [labelFor(t('profile.bio'), bioInput), bioInput]),

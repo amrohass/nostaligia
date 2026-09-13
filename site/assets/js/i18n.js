@@ -779,6 +779,11 @@
     'field.handlePh':   { ar: 'مثال: ramallah_1967', en: 'e.g. ramallah_1967' },
     'field.handleNote': { ar: 'اسم تختاره أنت ويظهر للجميع — ليس اسمك الحقيقي',
                           en: 'A public name you choose — not your legal name' },
+    /* The rules the database enforces, said out loud. Until 13 Sep 2026 they lived in two
+       CHECK constraints and nowhere on the screen, so a member typing "Masar" — or an Arabic
+       name with a space — was refused by a toast and kept the member_<hex> placeholder. */
+    'field.handleRules': { ar: 'حروف عربية أو إنجليزية صغيرة وأرقام و_ فقط، من ٣ إلى ٣٠ حرفًا، بلا مسافات، ولغة واحدة.',
+                           en: 'Lowercase Latin or Arabic letters, digits and _ only — 3 to 30 characters, no spaces, one script.' },
     /* Three outcomes, not one. Until 6 Sep 2026 every refusal on this path said "taken",
        including the primary-key conflict that was the real defect — so the one message
        that could be checked (is that name free?) was true of a name nobody had. */
@@ -789,6 +794,16 @@
                                    en: 'That handle is not allowed. Pick another from your profile.' },
     'signup.err.handleKept':     { ar: 'تعذّر حفظ الاسم المستعار الآن — حسابك يحمل اسمًا مؤقتًا يمكنك تغييره من صفحتك.',
                                    en: 'Your handle could not be saved just now — your account has a temporary one you can change from your profile.' },
+    /* The four refusals told apart, and told BEFORE the account exists — which handleTaken
+       and handleBad above never could be. Each names the thing to change. */
+    'signup.err.handleLength':     { ar: 'الاسم المستعار من ٣ إلى ٣٠ حرفًا.',
+                                     en: 'A handle is 3 to 30 characters.' },
+    'signup.err.handleChars':      { ar: 'حروف وأرقام و_ فقط، بلا مسافات أو نقاط أو شرطات.',
+                                     en: 'Letters, digits and _ only — no spaces, dots or dashes.' },
+    'signup.err.handleScript':     { ar: 'اختر العربية أو الإنجليزية، لا مزيجًا منهما.',
+                                     en: 'Choose Arabic or Latin letters, not a mix of both.' },
+    'signup.err.handleUnderscore': { ar: 'لا تبدأ الشرطة السفلية الاسم ولا تنهيه ولا تتكرر.',
+                                     en: 'An underscore cannot start or end a handle, or be doubled.' },
 
     // ── A member's own submissions (M3) ─────────────────────
     // The surface a refused upload never had. §6 holds `expect_by` until a timing probe
