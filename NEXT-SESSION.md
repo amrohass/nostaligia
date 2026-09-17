@@ -3,7 +3,55 @@ overrides your defaults.
 
 ---
 
-## 8 Sep 2026 — the newest session, read this part first
+## 17 Sep 2026 — the newest session, read this part first
+
+**Reported:** the comments UI still broken on Amro's iPhone (Safari, slide 2 of 3, opened
+by going straight to `/item/{id}`), three days after `0e82e30`. **The screenshot never
+reached the session**, and **no real iOS device was available**. Everything below is
+Playwright WebKit and Chromium with the iPhone 15 descriptor, which is NOT iOS Safari.
+
+**Ruled out, by measurement:**
+
+- *Stale prerendered page.* The served `/item/c51f77d2…` HTML is byte-identical (3465
+  bytes) to what the working tree's `prerender.ts` produces from the live shard, and publish
+  last ran 17 Sep 12:39Z. The page embeds no layout anyway — three unversioned stylesheet
+  links, no inline style.
+- *Edge cache.* All 14 assets that page references were byte-identical to HEAD (git blob
+  hashes), answered `REVALIDATED` under `max-age=14400`. `CLOUDFLARE_ZONE_ID` /
+  `CLOUDFLARE_PURGE_TOKEN` are still unset (confirmed by name via `supabase secrets list`),
+  but they purge R2 objects on takedown and play no part in a Pages deploy.
+- *Wrong slide under a right counter.* Forced the 2/3 ordering (feed delayed, images
+  delayed), with scroll anchoring on and off: scroll-snap re-snapping holds the slide.
+
+**Found and fixed (`6de9af2`, deployed and verified live):** `/item/{id}` is the
+prerendered document, and it never loaded Turnstile's API. So on every shared link "sign in
+to comment" opened a dialog with an empty gap where the challenge goes, and every submit was
+refused. `turnstile.js` now loads the API itself when a document lacks it.
+
+**New test, `scripts/e2e-deeplink.mjs`** (`--live` for the deployed origin). It exists
+because `e2e-browser.mjs` could not see this: its server answers `/item/*` with the shell,
+it stubs `window.TURNSTILE`, and it ran Chromium on the first card only. Measured: live
+before the fix 8 failed of 62; after, 66 of 66; the two mutants fail 12 and 2.
+
+**Still open, and the next thing to do is get the screenshot.** Every LAYOUT check on the
+deep link passed before the fix too. If the iPhone report is about layout, this commit is
+not its fix, and the live candidate is iOS 26 Safari's floating tab bar, which clips or
+overlaps the bottom of opaque `position: fixed` layers — exactly where the sheet's Send
+button and sign-in prompt sit (flush with the viewport's bottom edge). Playwright cannot
+model that bar; only a real device can confirm it.
+
+**Two pre-existing things noticed, not touched:**
+
+- `privacy-shards-test.mjs` reports "both transactions rolled back" as FAILED. It is a
+  whole-table count: all 65 matching rows are `deleted_user_*` tombstones (bio visibility
+  private, bio null), zero carry a fixture value. Production was not mutated — the
+  assertion should look for the fixture strings only.
+- WebKit logs "Refused to apply a stylesheet … style-src" on every page, the shell
+  included, with no `securitypolicyviolation` event behind it. Source unidentified.
+
+---
+
+## 8 Sep 2026 — an earlier session
 
 **The full report is `docs/session-report-2026-09-07-events-and-backup.md`.** Five items:
 events without media, Docker, the backup and a real restore, the `/item/*` OG check, and one

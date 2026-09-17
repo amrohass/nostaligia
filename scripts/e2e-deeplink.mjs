@@ -202,7 +202,16 @@ try {
     await ctx.addInitScript((l) => { try { localStorage.setItem('rma.lang', l); } catch (e) { /* private */ } }, lang);
     const page = await ctx.newPage();
     const pageErrors = [];
-    page.on('pageerror', (e) => pageErrors.push(String(e)));
+    /* One exclusion, and only one: WebKit reports Turnstile's OWN frame trying to reach
+       ours ("Blocked a frame with origin …challenges.cloudflare.com…") as an uncaught
+       error. It is not this page's code, it happens on the shell too — measured 17 Sep,
+       two runs of two, WebKit only, from the masthead's sign-in — and it arrives seconds
+       after the widget mounts, so without this the check below would pass or fail on
+       timing. Anything that does not name Turnstile's origin still fails the run. */
+    page.on('pageerror', (e) => {
+      const text = String(e);
+      if (!text.includes(cfg.domains.turnstile)) pageErrors.push(text);
+    });
     let apiRequests = 0;
     page.on('request', (r) => { if (r.url().startsWith(TURNSTILE_API)) apiRequests++; });
     const doubleLoad = [];
