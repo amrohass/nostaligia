@@ -269,7 +269,14 @@ Deno.test("nothing the shard withholds can appear in the page", () => {
 
 /* ── 5 · The duplicated lists ──────────────────────────────── */
 
-Deno.test("SPA_SCRIPTS is exactly the shell's script list, in order", async () => {
+/* LOCAL scripts only, and the name says so because it used to say "exactly the shell's
+   script list" while the filter below dropped the one that is not local — Turnstile's API.
+   That gap was real: the prerendered page never loaded it, so on every shared link the
+   sign-in dialog had no captcha and could not succeed (measured 17 Sep 2026). turnstile.js
+   now loads the API itself on any document that lacks it, which is why the list here does
+   not have to carry it; scripts/e2e-deeplink.mjs is what proves that in a browser, on the
+   document the Pages Function really serves. A Deno test cannot. */
+Deno.test("SPA_SCRIPTS is exactly the shell's LOCAL script list, in order", async () => {
   const shell = await Deno.readTextFile("site/index.html");
   const local = [...shell.matchAll(/<script src="([^"]+)"/g)]
     .map((m) => m[1])

@@ -26,10 +26,44 @@
   'use strict';
 
   var SITE_KEY = global.CONFIG.turnstile.siteKey;
+  var SCRIPT_BASE = global.CONFIG.origins.turnstile + '/turnstile/';
 
   function api() {
     return global.turnstile || null;
   }
+
+  /* ── The API script is loaded HERE, not only by the page ─────
+
+     The shell carries a <script> tag for it. The page a shared link actually lands on
+     does not: /item/{id} is the publisher's prerendered HTML (prerender.ts), which copies
+     the shell's LOCAL scripts and never had this one. So on every deep link the widget
+     had no API to render with — the sign-in dialog opened from "sign in to comment"
+     showed an empty gap where the challenge belongs, and six seconds later every submit
+     was refused as up.err.robotUnavailable. Measured 17 Sep 2026 on the live origin, in
+     WebKit and Chromium alike. The reader that path exists for — somebody who was sent
+     one memory — could not sign in to answer it.
+
+     So the module that needs the API makes sure it is coming, whatever document it is
+     running in. It is a no-op when the page already carries the tag. `render=explicit`
+     as in the shell: nothing renders until mount() asks. The origin is config.js's, which
+     is the same value the CSP's script-src admits. */
+  function ensureScript() {
+    var doc = global.document;
+    if (api() || doc.querySelector('script[src^="' + SCRIPT_BASE + '"]')) return;
+    var parent = doc.head || doc.body;
+    if (!parent) return;
+    var script = doc.createElement('script');
+    script.src = SCRIPT_BASE + 'v0/api.js?render=explicit';
+    script.async = true;
+    script.defer = true;
+    parent.appendChild(script);
+  }
+
+  /* At load, not when a dialog opens: whenReady() gives the script six seconds, and the
+     shell's own tag has been downloading since the page began. Starting the download at
+     the first tap would hand a reader on a slow connection a refusal the shell's readers
+     never see. */
+  ensureScript();
 
   /* The script is `async defer`, so it may not have arrived when a dialog opens. Poll
      briefly rather than blocking the dialog on it — a member opening the sign-in form
