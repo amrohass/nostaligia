@@ -40,7 +40,14 @@ overlaps the bottom of opaque `position: fixed` layers — exactly where the she
 button and sign-in prompt sit (flush with the viewport's bottom edge). Playwright cannot
 model that bar; only a real device can confirm it.
 
-**Two pre-existing things noticed, not touched:**
+**Three pre-existing things noticed, not touched:**
+
+- **CI on `main` has failed on every push since at least 7 Sep** (`048c418` through
+  `14a5f2d`), always the same four steps: "SigV4 round-trip against a real S3
+  implementation", "MinIO, with the three buckets §2 names", "R2Store against a real S3
+  implementation", and "Two publishers, one lease". Three of the four are the S3/MinIO
+  service. Not diagnosed — the job logs need an authenticated `gh`, which this machine
+  does not have. Nothing in the 17 Sep commits touches those jobs.
 
 - `privacy-shards-test.mjs` reports "both transactions rolled back" as FAILED. It is a
   whole-table count: all 65 matching rows are `deleted_user_*` tombstones (bio visibility
