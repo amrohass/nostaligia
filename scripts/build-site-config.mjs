@@ -186,7 +186,9 @@ if (siteOrigin.includes('PLACEHOLDER')) {
 // every route, which is what a security header set should do -- an exception carved out
 // per-path is an exception someone forgets to close.
 const headerLines = Object.entries(cfg.headers).map(([k, v]) => `  ${k}: ${v}`);
-const headers = [
+// A function, not a value: it names the asset version, which is computed further down from
+// config.js — and config.js is built from the same config as this.
+const makeHeaders = () => [
   `# ${GENERATED}`,
   '#',
   '# Cloudflare Pages reads this file. GitHub Pages IGNORES it completely, so none of these',
@@ -204,7 +206,13 @@ const headers = [
   '# scripts/build-site-config.mjs). A new front end is a new PATH, so a year is safe. It',
   '# replaces the 4-hour browser cache the zone applied to the old unversioned names, under',
   '# which a returning browser could run a new HTML shell against JavaScript hours older.',
-  '/assets/v/*',
+  '#',
+  '# THIS version only, never /assets/v/*: _headers matches the REQUEST path, so a wildcard',
+  '# also stamped "immutable, a year" on the shell served in place of an OLD version\'s file.',
+  '# Measured on a Pages preview 19 Sep. A stale tab would have cached that HTML for a year',
+  '# under the old path, and a revert — which recreates the same content hash — would then',
+  '# have left that browser\'s map or dashboard broken until it expired.',
+  `/assets/v/${ASSET_VERSION}/*`,
   '  Cache-Control: public, max-age=31536000, immutable',
   '',
   '# The pointer the whole read path hangs off. Short TTL so a rollback is visible fast.',
@@ -482,7 +490,7 @@ export async function onRequest(context) {
 `;
 
 const outputs = [
-  ['site/_headers', headers],
+  ['site/_headers', makeHeaders()],
   ['site/_redirects', redirects],
   ['web/js/config.js', js],
   ['functions/item/[[path]].js', itemFunction]
