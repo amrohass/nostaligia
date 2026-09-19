@@ -98,6 +98,9 @@ const QUARANTINE_BUCKET = "quarantine";
  * Five minutes is set against the slowest legitimate case: a member on a Ramallah mobile
  * connection has to START the PUT within it, not finish it. S3 checks the signature's
  * expiry when the request begins.
+ *
+ * Migration 0065's reaper counts its window from this number (c_url_ttl in
+ * public.expire_unstarted_uploads). Change both together.
  */
 export const URL_TTL_SECONDS = 300;
 

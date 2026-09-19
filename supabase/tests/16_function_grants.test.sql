@@ -189,6 +189,10 @@ select set_eq(
     ('my_rejections() -> authenticated'),
     ('my_rejections() -> service_role'),
 
+    -- The never-started-upload reaper (0065). It returns quota, so no browser role may call
+    -- it; pg_cron runs it as the owner, and the service role may run it by hand.
+    ('expire_unstarted_uploads() -> service_role'),
+
     -- M4's gazetteer (0048). All four are `authenticated` and none of them is a boundary:
     -- 0017 already grants every signed-in user SELECT on `places`, and the two writes are
     -- SECURITY INVOKER, so a member calling save_place is refused by the policy rather than

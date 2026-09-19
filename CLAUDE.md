@@ -521,6 +521,15 @@ Written after a real compromised-key incident (~24,000% billing spike).
     Every release rewrites every shard, so an unthrottled counter signal exceeds this
     ceiling on its own. It lives in `public.publish_pending()`; change it there and here
     together.
+  - **Abandoned-upload window** (set 19 Sep 2026 with 0065): an upload whose complete-upload
+    never ran (`ingest_attempts = 0`) is failed as `upload_expired` after the signed URL's
+    **5 minutes plus 60 minutes for a member, 6 hours for a moderator or admin**, and that
+    day's upload COUNT is returned. **Never its bytes:** the reaper cannot see R2, so a PUT
+    that finished before the tab closed is indistinguishable from one that never began, and
+    a returned byte allowance would let claim-PUT-abandon repeat without limit into a
+    quarantine bucket that has no lifecycle rule. It lives in
+    `public.expire_unstarted_uploads()`, run by pg_cron every 15 minutes; change it there and
+    here together, and the 5 minutes with `URL_TTL_SECONDS` in request-upload.
 - CSP with no `unsafe-inline`, plus HSTS, via Cloudflare `_headers`.
 - Lifecycle rule purging rejected/orphaned objects after 30 days.
 

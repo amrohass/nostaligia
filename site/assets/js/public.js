@@ -3549,10 +3549,11 @@
   /* Withdraw is offered where the member's own label is "In review", "Not accepted" or
      "Processing failed" — pending or rejected, and nothing in flight.
 
-     NOT on "Upload incomplete". Those rows are orphaned drafts whose bytes never reached
-     quarantine: request-upload creates the row before the PUT, a failed PUT leaves it
-     behind, and nothing ever times it out. That is a pipeline defect with its own repair,
-     and a remove button here would be a workaround shipped in its place.
+     NOT on "Upload incomplete". Those rows are drafts whose bytes have not arrived:
+     request-upload creates the row before the PUT, and a failed PUT leaves it behind. The
+     repair is the pipeline's, not a remove button — 0065's reaper fails an unstarted upload
+     once its window closes (65 minutes for a member) and returns the day's slot, and the
+     row then reads "Processing failed", where withdraw IS offered.
 
      NOT on "Processing" either: the worker holds that row, and pulling it mid-transcode
      races the worker's own write.

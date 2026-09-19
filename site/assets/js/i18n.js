@@ -855,6 +855,10 @@
                                     en: 'The file could not be opened. Try exporting it again.' },
     'mine.err.job_deadline':      { ar: 'المعالجة استغرقت وقتًا أطول من المسموح.',
                                     en: 'Processing ran longer than allowed.' },
+    // 0065's reaper: the bytes never arrived and the window closed. Not a worker name, but
+    // it lands in the same column and the same line. The slot it held has been returned.
+    'mine.err.upload_expired':    { ar: 'لم يصل الملف خلال مهلة الرفع. يمكنك رفعه من جديد.',
+                                    en: 'The file never arrived within the upload window. You can upload it again.' },
     // 0064. The day of the decision and, beneath it, the moderator's note — never their name.
     'mine.reviewedOn':     { ar: 'رُوجعت بتاريخ {d}', en: 'Reviewed on {d}' },
     // Withdrawing a pending or rejected submission. Two steps; only the second writes.

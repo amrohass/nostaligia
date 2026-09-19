@@ -1317,9 +1317,10 @@ console.log('# M6 — the tabs, the search box, and the description on an item')
 /* ═══ · /me — your own submissions: the reason, and withdraw (0064, 18 Sep 2026) ══════
    Two claims the database cannot make for the screen. The reason a moderator wrote has to
    reach the row it belongs to, and the withdraw button has to be absent exactly where it
-   would be a workaround: "Upload incomplete" rows are orphaned drafts with no bytes behind
-   them (a pipeline defect with its own repair), and an APPROVED post whose ingest reads
-   failed is still approved, which goes through the removal request instead. */
+   would be a workaround: an "Upload incomplete" row may still be mid-transfer, and the
+   pipeline — 0065's reaper — is what ends it, after which it reads "Processing failed" and
+   the button appears. An APPROVED post whose ingest reads failed is still approved, and
+   goes through the removal request instead. */
 
 console.log('# /me — a rejection says why, and withdraw is offered only where it is honest');
 
@@ -1335,6 +1336,8 @@ console.log('# /me — a rejection says why, and withdraw is offered only where 
     post('p-incomplete', 'never arrived', 'pending', 'awaiting_bytes'),
     post('p-processing', 'being encoded', 'pending', 'processing'),
     post('p-failed', 'would not decode', 'pending', 'failed', { ingest_error: 'decode_failed' }),
+    // What 0065's reaper leaves behind: an upload whose bytes never came, past its window.
+    post('p-expired', 'never came back', 'pending', 'failed', { ingest_error: 'upload_expired' }),
     post('p-approved-failed', 'approved but broken', 'approved', 'failed'),
     post('p-withdrawn', 'already withdrawn', 'withdrawn', 'ready'),
     post('p-published', 'published', 'approved', 'ready'),
@@ -1390,15 +1393,18 @@ console.log('# /me — a rejection says why, and withdraw is offered only where 
   const rowOf = (title) => rows().find((r) => textOf(r.querySelector('.mine__title')) === title);
   const button = (row, key) => row && row.querySelectorAll('button').find((b) => textOf(b) === t(key));
 
-  ok(rows().length === 6,
+  ok(rows().length === 7,
      `CONTROL: the list shows every open submission (${rows().map((r) => textOf(r.querySelector('.mine__title'))).join(' | ')})`);
   ok(rowOf('already withdrawn') === undefined,
      'a withdrawn submission has left the member\'s list');
 
   const offered = rows().filter((r) => button(r, 'mine.withdraw'))
     .map((r) => textOf(r.querySelector('.mine__title'))).sort();
-  ok(JSON.stringify(offered) === JSON.stringify(['in review', 'turned down', 'would not decode']),
-     `withdraw is offered on in-review, rejected and failed rows and nowhere else (${offered.join(', ')})`);
+  ok(JSON.stringify(offered) === JSON.stringify(['in review', 'never came back', 'turned down', 'would not decode']),
+     `withdraw is offered on in-review, rejected and failed rows — reaped ones included — and nowhere else (${offered.join(', ')})`);
+  const expired = rowOf('never came back');
+  ok(expired && textOf(expired).includes(t('mine.err.upload_expired')) && t('mine.err.upload_expired') !== 'mine.err.upload_expired',
+     `a reaped upload says the file never arrived, in words (${expired && textOf(expired.querySelector('.mine__error'))})`);
   ok(!button(rowOf('never arrived'), 'mine.withdraw'),
      'NOT on "Upload incomplete" — no remove button over a broken upload');
   ok(!button(rowOf('approved but broken'), 'mine.withdraw'),
@@ -1434,7 +1440,7 @@ console.log('# /me — a rejection says why, and withdraw is offered only where 
   await settle();
   button(rowOf('in review'), 'mine.withdrawYes').fire('click');
   for (let i = 0; i < 6; i++) await settle();
-  ok(patches.length === 2 && rowOf('in review') === undefined && rows().length === 5,
+  ok(patches.length === 2 && rowOf('in review') === undefined && rows().length === 6,
      'an accepted withdraw removes the row from the list');
 }
 
