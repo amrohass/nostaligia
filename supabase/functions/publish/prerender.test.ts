@@ -276,11 +276,17 @@ Deno.test("nothing the shard withholds can appear in the page", () => {
    now loads the API itself on any document that lacks it, which is why the list here does
    not have to carry it; scripts/e2e-deeplink.mjs is what proves that in a browser, on the
    document the Pages Function really serves. A Deno test cannot. */
+/* The shell names versioned paths (/assets/v/<hash>/js/x.js); these pages name logical ones,
+   and the site's /item/* Function points them at the live version as it serves them. So the
+   comparison strips exactly the version segment. */
+const logical = (src: string) => src.replace(/^\/assets\/v\/[0-9a-f]{12}\//, "/assets/");
+
 Deno.test("SPA_SCRIPTS is exactly the shell's LOCAL script list, in order", async () => {
   const shell = await Deno.readTextFile("site/index.html");
   const local = [...shell.matchAll(/<script src="([^"]+)"/g)]
     .map((m) => m[1])
-    .filter((src) => src.startsWith("/"));
+    .filter((src) => src.startsWith("/"))
+    .map(logical);
 
   assert(local.length > 5, `CONTROL: the shell loads ${local.length} local scripts`);
   assertEquals(SPA_SCRIPTS.join("|"), local.join("|"),
@@ -293,7 +299,8 @@ Deno.test("SPA_STYLES is exactly the shell's stylesheet list, in order", async (
     .map((m) => m[0])
     .filter((tag) => /rel="stylesheet"/.test(tag))
     .map((tag) => /href="([^"]+)"/.exec(tag)?.[1] ?? "")
-    .filter(Boolean);
+    .filter(Boolean)
+    .map(logical);
 
   assert(links.length > 0, "CONTROL: the shell loads stylesheets");
   assertEquals(SPA_STYLES.join("|"), links.join("|"),

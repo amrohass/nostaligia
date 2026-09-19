@@ -291,7 +291,7 @@ const MUTATIONS = [
     invariant: '§7 — a recovery link is HELD, not adopted, until the password is actually set',
     catches: ['frontend-auth-test'],
     kind: 'source',
-    file: 'site/assets/js/auth.js',
+    file: 'web/js/auth.js',
     mutate: (src) => {
       /* The "fix" this guards against, written the way somebody would actually write it:
          adopt the session on landing, as the official SDK does. Everything still works —
@@ -310,7 +310,7 @@ const MUTATIONS = [
     invariant: 'a reset link comes back to THIS origin, not to whatever Site URL happens to be',
     catches: ['frontend-auth-test'],
     kind: 'source',
-    file: 'site/assets/js/auth.js',
+    file: 'web/js/auth.js',
     mutate: (src) => {
       /* Drop redirect_to. GoTrue still sends the mail and still answers 200, so nothing
          fails and nothing looks different — the member simply lands wherever the project's
@@ -334,7 +334,7 @@ const MUTATIONS = [
       return JSON.stringify(cfg, null, 2) + '\n';
     },
     run: 'node scripts/build-site-config.mjs && node scripts/frontend-csp-test.mjs',
-    restoreAlso: ['site/_headers', 'site/assets/js/config.js'],
+    restoreAlso: ['site/_headers', 'web/js/config.js'],
   },
   {
     id: 'exif-strip-flag',
@@ -367,7 +367,7 @@ const MUTATIONS = [
     invariant: 'a visible caption is ATTACHED to its control, so the control has a name',
     catches: ['frontend-view-test'],
     kind: 'source',
-    file: 'site/assets/js/ui.js',
+    file: 'web/js/ui.js',
     mutate: (src) => {
       /* The tidy-up this guards against: keep the caption, drop the association. Nothing
          on screen moves — the same words in the same font, in the same place — and every
@@ -386,7 +386,7 @@ const MUTATIONS = [
     invariant: 'no <label> is built with props that name no control',
     catches: ['frontend-view-test'],
     kind: 'source',
-    file: 'site/assets/js/public.js',
+    file: 'web/js/public.js',
     mutate: (src) => {
       /* The old construction, put back at ONE call site — which is exactly how it would
          return: somebody adds a field and copies the block above it. The licence select is
@@ -468,7 +468,7 @@ const MUTATIONS = [
     invariant: "0060 — a confirmation status we could not READ must not lock a member out",
     catches: ['e2e-browser'],
     kind: 'source',
-    file: 'site/assets/js/public.js',
+    file: 'web/js/public.js',
     mutate: (src) => {
       /* The tightening somebody would make on purpose, reading `!== false` as sloppy. It
          is not: a single failed RPC would then close every write path in the archive for
@@ -485,7 +485,7 @@ const MUTATIONS = [
     invariant: '0060 — an unconfirmed member meets the screen BEFORE writing a description',
     catches: ['e2e-browser'],
     kind: 'source',
-    file: 'site/assets/js/public.js',
+    file: 'web/js/public.js',
     mutate: (src) => {
       const gate = '    if (!confirmedEnough()) { openConfirmDialog(openShareSheet); return; }';
       if (!src.includes(gate)) return null;
@@ -499,7 +499,7 @@ const MUTATIONS = [
     invariant: '§7 — the address a confirmation mail goes to is never the browser\'s to name',
     catches: ['e2e-browser'],
     kind: 'source',
-    file: 'site/assets/js/public.js',
+    file: 'web/js/public.js',
     mutate: (src) => {
       /* The helpful-looking edit: send the address so the server does not have to look it
          up. Today it would be correct and the mail would arrive; tomorrow it is a parameter

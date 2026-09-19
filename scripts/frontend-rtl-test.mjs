@@ -33,7 +33,7 @@ function ok(cond, name) {
   else { failed++; console.log(`not ok ${passed + failed} - ${name}`); }
 }
 
-const cssFiles = readdirSync(join(root, 'site/assets/css')).filter((n) => n.endsWith('.css'));
+const cssFiles = readdirSync(join(root, 'web/css')).filter((n) => n.endsWith('.css'));
 
 /* ── 1 · logical properties only ───────────────────────────────────────────── */
 //
@@ -60,7 +60,7 @@ const uncommented = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '');
 
 const physical = [];
 for (const name of cssFiles) {
-  const src = uncommented(read(`site/assets/css/${name}`));
+  const src = uncommented(read(`web/css/${name}`));
   src.split('\n').forEach((line, i) => {
     for (const m of line.matchAll(PHYSICAL)) physical.push(`${name}:${i + 1} ${m[0].trim()}`);
   });
@@ -79,7 +79,7 @@ ok(physical.length === 0,
 
 // Logical properties are actually being used, rather than the file simply having no layout.
 {
-  const all = cssFiles.map((n) => read(`site/assets/css/${n}`)).join('\n');
+  const all = cssFiles.map((n) => read(`web/css/${n}`)).join('\n');
   const logical = (all.match(/inset-inline|margin-inline|padding-inline|border-inline|text-align\s*:\s*(?:start|end)/g) ?? []).length;
   ok(logical >= 20, `CONTROL: ${logical} logical-property declarations are present — the ban is not passing over an empty stylesheet`);
 }
@@ -91,7 +91,7 @@ ok(physical.length === 0,
 // this project breaks it is by overriding `direction` on the control or its container.
 
 {
-  const all = cssFiles.map((n) => `\n/*${n}*/\n` + uncommented(read(`site/assets/css/${n}`))).join('');
+  const all = cssFiles.map((n) => `\n/*${n}*/\n` + uncommented(read(`web/css/${n}`))).join('');
   const sliderBlocks = [...all.matchAll(/\.decade-slider[^{]*\{([^}]*)\}/g)].map((m) => m[1]);
   ok(sliderBlocks.length >= 3, `CONTROL: ${sliderBlocks.length} .decade-slider rules found to inspect`);
   const overrides = sliderBlocks.filter((b) => /(?:^|[;\s])(?:direction|writing-mode|transform)\s*:/.test(b));
@@ -118,7 +118,7 @@ ok(physical.length === 0,
 // scripts/frontend-nav-test.mjs, which boots the shell and reads the hrefs off the anchors.
 
 {
-  const all = cssFiles.map((n) => `\n/*${n}*/\n` + uncommented(read(`site/assets/css/${n}`))).join('');
+  const all = cssFiles.map((n) => `\n/*${n}*/\n` + uncommented(read(`web/css/${n}`))).join('');
 
   // Every rule whose selector mentions one of the addendum's own class families.
   const M6 = /\.(?:archive-controls|tabs|tab|tab__[\w-]+|search|search__[\w-]+|results|result|result__[\w-]+)\b[^{]*\{([^}]*)\}/g;
@@ -148,7 +148,7 @@ ok(physical.length === 0,
 // which is the left in English and the RIGHT in Arabic, so a string that ships the same
 // arrow in both is wrong in one of them. `admin.backToSite` was, until M6.
 
-const i18n = read('site/assets/js/i18n.js');
+const i18n = read('web/js/i18n.js');
 const MIRRORED = { '←': '→', '→': '←', '‹': '›', '›': '‹', '◂': '▸', '▸': '◂' };
 const entries = [...i18n.matchAll(/'([\w.]+)':\s*\{\s*ar:\s*'((?:[^'\\]|\\.)*)'\s*,\s*en:\s*'((?:[^'\\]|\\.)*)'/g)];
 ok(entries.length > 300, `CONTROL: ${entries.length} ar/en string pairs parsed out of i18n.js`);
@@ -164,9 +164,9 @@ ok(unmirrored.length === 0,
 
 /* ── 4 · one digit system, and the date locale §9 names ────────────────────── */
 
-const js = readdirSync(join(root, 'site/assets/js'))
+const js = readdirSync(join(root, 'web/js'))
   .filter((n) => n.endsWith('.js'))
-  .map((n) => ({ name: n, src: read(`site/assets/js/${n}`) }));
+  .map((n) => ({ name: n, src: read(`web/js/${n}`) }));
 
 {
   const locales = new Set();

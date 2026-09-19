@@ -17,6 +17,13 @@
 /v/*
   Cache-Control: public, max-age=31536000, immutable
 
+# Front-end JS and CSS, versioned by content hash (see "Versioned front-end assets" in
+# scripts/build-site-config.mjs). A new front end is a new PATH, so a year is safe. It
+# replaces the 4-hour browser cache the zone applied to the old unversioned names, under
+# which a returning browser could run a new HTML shell against JavaScript hours older.
+/assets/v/*
+  Cache-Control: public, max-age=31536000, immutable
+
 # The pointer the whole read path hangs off. Short TTL so a rollback is visible fast.
 /manifest.json
   Cache-Control: public, max-age=30, must-revalidate

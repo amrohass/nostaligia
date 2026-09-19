@@ -47,9 +47,9 @@ const codeOnly = (src) => src
   .split('\n')
   .filter((line) => !/^\s*\/\//.test(line))
   .join('\n');
-const jsFiles = readdirSync(join(root, 'site/assets/js'))
+const jsFiles = readdirSync(join(root, 'web/js'))
   .filter((f) => f.endsWith('.js'))
-  .map((f) => `site/assets/js/${f}`);
+  .map((f) => `web/js/${f}`);
 
 /* ── 1 · every message key resolves, in both languages ────────────────────── */
 
@@ -62,7 +62,7 @@ console.log('# i18n — a key that misses renders as itself');
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     dispatchEvent() {}, CustomEvent: class {}
   };
-  new Function('window', read('site/assets/js/i18n.js'))(winI);
+  new Function('window', read('web/js/i18n.js'))(winI);
 
   // Literal keys only: `t('kind.' + item.kind)` cannot be resolved statically, and a test
   // that guessed at the concatenations would assert its own guesses. The dynamic families
@@ -97,7 +97,7 @@ console.log('# i18n — a key that misses renders as itself');
   ok(roles.length === 3, `the role vocabulary comes from migration 0003 (${roles.join(', ') || 'NOT FOUND'})`);
   for (const r of roles) keys.add('role.' + r);
   // The states pendingPanel() derives, from the function itself.
-  const pub = read('site/assets/js/public.js');
+  const pub = read('web/js/public.js');
   for (const m of pub.matchAll(/return '([a-zA-Z]+)';/g)) { /* submissionState's returns */ }
   for (const s of ['processing', 'incomplete', 'failed', 'inReview', 'rejected', 'withdrawn']) {
     keys.add('mine.state.' + s);
@@ -140,7 +140,7 @@ console.log('# i18n — a key that misses renders as itself');
   // The decades DATA offers in the share sheet — every one must have a label or a
   // contributor is offered an option spelled "decade.1940".
   const winD = {};
-  new Function('window', read('site/assets/js/data.js'))(winD);
+  new Function('window', read('web/js/data.js'))(winD);
   for (const d of winD.DATA.DECADES) keys.add('decade.' + d);
 
   const missingAr = [...keys].filter((k) => { const v = winI.I18N.t(k); return !v || v === k; });
@@ -251,7 +251,7 @@ console.log('# §6 — no string becomes markup');
   // §6's other half: user strings render inside <bdi>. Asserted as "the helper exists and is
   // used", not as "every string is wrapped" — the second needs a renderer to inspect. What
   // this catches is the helper being deleted or quietly stopping being called.
-  const ui = read('site/assets/js/ui.js');
+  const ui = read('web/js/ui.js');
   ok(/function bdi\(/.test(ui) && /createElement\('bdi'\)/.test(ui),
      'ui.js builds a real <bdi> element (§6, the render half of the bidi rule)');
   /* A FLOOR on call sites, and it is a smell detector rather than a proof — said plainly,
@@ -263,7 +263,7 @@ console.log('# §6 — no string becomes markup');
      exported to render from. Adding an export purely for a test would put a seam in the
      shipped file to make the test easier, which is the wrong trade. The behavioural half
      is the assertion above: bdi() really does build a <bdi> element. */
-  const bdiUses = [...read('site/assets/js/public.js').matchAll(/\bbdi\(/g)].length;
+  const bdiUses = [...read('web/js/public.js').matchAll(/\bbdi\(/g)].length;
   ok(bdiUses >= 15,
      `public.js routes user strings through bdi() in ${bdiUses} places (a floor, not a proof)`);
 }
@@ -326,7 +326,7 @@ console.log('# labels — a caption that names nothing');
       createTextNode: (text) => ({ text }),
     },
   };
-  new Function('window', read('site/assets/js/ui.js'))(winU);
+  new Function('window', read('web/js/ui.js'))(winU);
   const labelFor = winU.UI.labelFor;
 
   const bare = {};
@@ -355,12 +355,22 @@ console.log('# prerender.ts — the duplicated list, pinned');
   const shell = read('site/index.html');
   const pre = read('supabase/functions/publish/prerender.ts');
 
-  const shellScripts = [...shell.matchAll(/<script src="([^"]+)"/g)]
+  /* The shell names VERSIONED paths (/assets/v/<hash>/js/x.js, scripts/build-site-config.mjs);
+     the prerendered pages name LOGICAL ones, which the /item/* Function points at the live
+     version as it serves them. So the comparison strips exactly the version segment — and
+     the assertion after it pins that the shell really is versioned, because a shell gone
+     back to bare paths would match SPA_SCRIPTS perfectly while serving files that are not
+     deployed any more. */
+  const logical = (src) => src.replace(/^\/assets\/v\/[0-9a-f]{12}\//, '/assets/');
+  const rawShellScripts = [...shell.matchAll(/<script src="([^"]+)"/g)]
     .map((m) => m[1])
     // Turnstile is loaded by the shell and NOT by a prerendered page, deliberately: that
     // page renders one item and offers no control that writes, so the widget would be a
     // third-party script on a document a crawler fetches, for nothing.
     .filter((src) => src.startsWith('/'));
+  const shellScripts = rawShellScripts.map(logical);
+  ok(rawShellScripts.length > 0 && rawShellScripts.every((s) => /^\/assets\/v\/[0-9a-f]{12}\/js\//.test(s)),
+     `every local script the shell loads is VERSIONED (${rawShellScripts.filter((s) => !/\/assets\/v\//.test(s)).join(', ') || 'all'})`);
   const preScripts = (/export const SPA_SCRIPTS = \[([^\]]*)\]/.exec(pre)?.[1] ?? '')
     .split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
 
@@ -378,7 +388,7 @@ console.log('# prerender.ts — the duplicated list, pinned');
     .filter((tag) => /rel="stylesheet"/.test(tag))
     .map((tag) => /href="([^"]+)"/.exec(tag))
     .filter(Boolean)
-    .map((m) => m[1]);
+    .map((m) => logical(m[1]));
   const preStyles = (/export const SPA_STYLES = \[([^\]]*)\]/.exec(pre)?.[1] ?? '')
     .split(/",\s*/).map((s) => s.trim().replace(/^"|"$|,$/g, '')).filter(Boolean);
   ok(shellStyles.length > 0 && shellStyles.join('|') === preStyles.join('|'),
@@ -419,7 +429,7 @@ function archiveWindow(files, overrides = {}) {
     _requested: requested,
     ...overrides
   };
-  new Function('window', read('site/assets/js/archive.js'))(win);
+  new Function('window', read('web/js/archive.js'))(win);
   return win;
 }
 
@@ -797,7 +807,7 @@ console.log('# the shells — every module loads against the globals before it')
      the budget script makes. A module the shell loads and this does not would be a module
      nobody ever executes in a test. */
   function shellScripts(file) {
-    return [...read(file).matchAll(/<script src="(\/assets\/js\/[^"]+)"/g)].map((m) => `site${m[1]}`);
+    return [...read(file).matchAll(/<script src="(\/assets\/(?:v\/[0-9a-f]+\/)?js\/[^"]+)"/g)].map((m) => `site${m[1]}`);
   }
 
   const publicOrder = shellScripts('site/index.html');
@@ -818,7 +828,7 @@ console.log('# the shells — every module loads against the globals before it')
   // the modules before it; admin.js is the one that was rewritten.
   const adminOrder = shellScripts('site/admin.html')
     .filter((rel) => !rel.endsWith('admin-boot.js'))
-    .concat(['site/assets/js/admin.js']);
+    .concat(['web/js/admin.js']);
 
   let adminThrew = null;
   try {

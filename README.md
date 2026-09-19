@@ -793,6 +793,21 @@ an Edge Function, a psql session and a future admin screen all leave identical e
 
 ## Working on this
 
+### Changing the front end
+
+The JavaScript and CSS you edit live in `web/js` and `web/css`. What is deployed is a copy
+under `site/assets/v/<version>/`, named by a hash of their content, and both HTML shells
+point at it. After any change under `web/` (or to `config/site.json`):
+
+```powershell
+node scripts/build-site-config.mjs          # re-hash, copy, re-point the shells
+node scripts/build-site-config.mjs --check  # what CI runs; fails if you forgot the line above
+```
+
+Commit the regenerated `site/` alongside your change. The old version directory is removed
+on purpose — see CLAUDE.md §9's 19 Sep amendment for why a stale tab is shown a reload
+notice instead of being served the new files.
+
 ### Applying migrations
 
 The Supabase CLI runs from npx; Docker is **not** needed to push to a remote project.

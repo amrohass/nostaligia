@@ -96,7 +96,7 @@ console.log('# auth.js — where the session lives');
 // ── 1 · the §7 decision, asserted rather than commented ─────────────────────
 {
   const win = makeWindow({ fetch: () => okJson(SESSION) });
-  load('site/assets/js/auth.js', win);
+  load('web/js/auth.js', win);
   await win.AUTH.signIn('a@b.test', 'pw');
 
   const everything = [...win._local.entries(), ...win._session.entries()]
@@ -117,7 +117,7 @@ console.log('# auth.js — where the session lives');
 // ── 2 · sign-out really clears it ───────────────────────────────────────────
 {
   const win = makeWindow({ fetch: () => okJson(SESSION) });
-  load('site/assets/js/auth.js', win);
+  load('web/js/auth.js', win);
   await win.AUTH.signIn('a@b.test', 'pw');
   await win.AUTH.signOut();
 
@@ -148,7 +148,7 @@ console.log('# auth.js — where the session lives');
   let leaked = false;
   for (const [status, body, expected] of cases) {
     const win = makeWindow({ fetch: () => errJson(status, body) });
-    load('site/assets/js/auth.js', win);
+    load('web/js/auth.js', win);
     const err = await win.AUTH.signIn('a@b.test', 'pw').then(() => null, e => e);
     if (!err || err.key !== expected) allMapped = false;
     if (err && /relation posts/.test(err.key)) leaked = true;
@@ -161,7 +161,7 @@ console.log('# auth.js — where the session lives');
 {
   const win = makeWindow({ fetch: () => okJson(SESSION) });
   win.CONFIG.supabase.anonKey = '';
-  load('site/assets/js/auth.js', win);
+  load('web/js/auth.js', win);
   const err = await win.AUTH.signIn('a@b.test', 'pw').then(() => null, e => e);
   ok(err && err.key === 'auth.err.notConfigured',
      'a missing anon key is named, not left to look like a wrong password');
@@ -175,7 +175,7 @@ console.log('# auth.js — where the session lives');
   const win = makeWindow({
     fetch: () => { calls++; return okJson(SESSION); }
   });
-  load('site/assets/js/auth.js', win);
+  load('web/js/auth.js', win);
   win.sessionStorage.setItem('rma.refresh', 'R1');
   await Promise.all([win.AUTH.accessToken(), win.AUTH.accessToken(), win.AUTH.accessToken()]);
   ok(calls === 1, 'three simultaneous token requests produce ONE refresh, not three');
@@ -188,7 +188,7 @@ console.log('# upload.js — the refusal map');
 // goes stale the moment a refusal is added, and it goes stale in the silent direction.
 {
   const win = makeWindow();
-  load('site/assets/js/upload.js', win);
+  load('web/js/upload.js', win);
 
   const sources = [
     'supabase/functions/request-upload/handler.ts',
@@ -303,7 +303,7 @@ console.log('# db.js — the bucket rule');
 // `cdn + storage_path` that would have handed back a URL for whatever it was passed.
 {
   const win = makeWindow();
-  load('site/assets/js/db.js', win);
+  load('web/js/db.js', win);
 
   const publicAsset = { bucket: 'public', storage_path: 'post-id/thumb.webp' };
   ok(win.DB.mediaUrl(publicAsset) === 'https://cdn.example/post-id/thumb.webp',
@@ -351,7 +351,7 @@ console.log('# db.js — the bucket rule');
     ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(body))
   });
   win.fetch = (url) => { requested = url; return okText([{ id: 'x', status: 'approved' }]); };
-  load('site/assets/js/db.js', win);
+  load('web/js/db.js', win);
 
   let refused = null;
   await win.DB.patch('posts', 'id=eq.abc', { status: 'approved' })
@@ -377,12 +377,12 @@ console.log('# db.js — the bucket rule');
     location: { search: '', hash: '' },
     dispatchEvent() {}, CustomEvent: class {}
   });
-  load('site/assets/js/i18n.js', winI);
+  load('web/js/i18n.js', winI);
 
   const winU = makeWindow();
-  load('site/assets/js/upload.js', winU);
+  load('web/js/upload.js', winU);
   const winA = makeWindow();
-  load('site/assets/js/auth.js', winA);
+  load('web/js/auth.js', winA);
 
   const keys = new Set(Object.values(winU.UPLOAD._refusals));
   for (const stage of ['probing', 'requesting', 'uploading', 'finishing', 'done']) {
@@ -435,7 +435,7 @@ console.log('# db.js — the bucket rule');
 {
   let fetched = 0;
   const win = makeWindow({ fetch: () => { fetched++; return okJson({}); } });
-  load('site/assets/js/upload.js', win);
+  load('web/js/upload.js', win);
 
   const file = (type, size) => ({ type, size, name: 'x' });
   const cases = [
@@ -480,7 +480,7 @@ console.log('# turnstile.js — every path out of token() settles');
         remove: () => {}
       }
     });
-    load('site/assets/js/turnstile.js', win);
+    load('web/js/turnstile.js', win);
     const handle = win.TURNSTILE.mount({});
     return { win, cbs, handle };
   }
@@ -531,7 +531,7 @@ console.log('# turnstile.js — every path out of token() settles');
     turnstile: { render: (_el, o) => { Object.assign(cbsQuiet, o); return 'w1'; }, reset: () => {}, remove: () => {} },
     setTimeout: fn => setTimeout(fn, 0)
   });
-  load('site/assets/js/turnstile.js', quietWin);
+  load('web/js/turnstile.js', quietWin);
   const quietR = await settled(quietWin.TURNSTILE.mount({}).token());
   ok(quietR.state === 'rejected' && quietR.e === 'up.err.robotUnavailable',
     'a widget that renders and then says NOTHING is refused on the deadline, not awaited forever');
@@ -557,7 +557,7 @@ console.log('# auth.js — the password reset path');
       return okJson({ id: 'u1', email: 'a@b.test', app_metadata: {} });
     }
   });
-  load('site/assets/js/auth.js', win);
+  load('web/js/auth.js', win);
 
   win.AUTH.beginRecovery({ access_token: 'RECOVERY-ACCESS', refresh_token: 'RECOVERY-REFRESH', expires_in: 3600 });
 
@@ -588,7 +588,7 @@ console.log('# auth.js — the password reset path');
 // ── 8c · a link that is dead, or was never there ────────────────────────────
 {
   const win = makeWindow({ fetch: () => errJson(401, { msg: 'invalid claim' }) });
-  load('site/assets/js/auth.js', win);
+  load('web/js/auth.js', win);
 
   // No link at all: the reset form should be unreachable, but if it is reached it must
   // refuse locally rather than send a Bearer-less PUT and mistranslate the 401.
@@ -608,7 +608,7 @@ console.log('# auth.js — the password reset path');
   const win = makeWindow({
     fetch: (url, init) => { calls.push({ url, body: JSON.parse(init.body) }); return okJson({}); }
   });
-  load('site/assets/js/auth.js', win);
+  load('web/js/auth.js', win);
 
   await win.AUTH.requestPasswordReset('a@b.test', 'CAPTCHA-TOKEN', 'https://example.test/reset');
 
@@ -629,7 +629,7 @@ console.log('# auth.js — the password reset path');
 // any two back together — the same shape as the over_request/over_email pair above.
 {
   const win = makeWindow();
-  load('site/assets/js/auth.js', win);
+  load('web/js/auth.js', win);
 
   const keyFor = async (status, body) => {
     win.fetch = () => errJson(status, body);
@@ -679,7 +679,7 @@ console.log('# every captcha-gated call site actually carries a captcha');
 // the widget that has to feed it. So the rule is written down instead of remembered.
 {
   const shells = ['site/index.html', 'site/admin.html'];
-  const modules = ['site/assets/js/public.js', 'site/assets/js/admin-boot.js', 'site/assets/js/upload.js'];
+  const modules = ['web/js/public.js', 'web/js/admin-boot.js', 'web/js/upload.js'];
 
   // The argument list of a call, brace/paren-aware enough for these three files: it stops
   // at the paren that closes the call, so a nested call in an argument does not end it.
@@ -737,10 +737,10 @@ console.log('# every captcha-gated call site actually carries a captcha');
   // list never loads the module that mints one — which is the shape admin.html had.
   for (const shell of shells) {
     const html = readFileSync(join(root, shell), 'utf8');
-    const loads = [...html.matchAll(/<script src="(\/assets\/js\/[^"]+)"/g)].map((m) => `site${m[1]}`);
+    const loads = [...html.matchAll(/<script src="(\/assets\/(?:v\/[0-9a-f]+\/)?js\/[^"]+)"/g)].map((m) => `site${m[1]}`);
     const gated = loads.filter((rel) => modules.includes(rel));
     const needsWidget = gated.length > 0;
-    ok(!needsWidget || loads.includes('site/assets/js/turnstile.js'),
+    ok(!needsWidget || loads.includes('web/js/turnstile.js'),
        `${shell} loads turnstile.js, because it loads ${gated.map((g) => g.split('/').pop()).join(' + ')}`);
     ok(!needsWidget || /challenges\.cloudflare\.com\/turnstile/.test(html),
        `${shell} loads Turnstile's own api.js — turnstile.js mints nothing without it`);

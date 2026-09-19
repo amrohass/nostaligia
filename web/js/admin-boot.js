@@ -125,9 +125,13 @@
     if (loaded) return;
     loaded = true;
     var script = global.document.createElement('script');
-    script.src = '/assets/js/admin.js';
+    /* From the directory ui.js was loaded from — this page's asset version — never a fixed
+       path: a fixed path is the one a tab opened before a deploy would fetch the NEW
+       dashboard from, into an old page. */
+    script.src = UI.assetBase + 'admin.js';
     script.onerror = function () {
       screen([el('p.form-error', { text: t('admin.err.loadFailed') })]);
+      UI.reloadNotice();
     };
     global.document.body.appendChild(script);
   }

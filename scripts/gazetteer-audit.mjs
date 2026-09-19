@@ -53,7 +53,7 @@ sandbox.window = sandbox;
 sandbox.global = sandbox;
 vm.createContext(sandbox);
 for (const f of ['pmtiles.js', 'mvt.js']) {
-  vm.runInContext(readFileSync(join(root, 'site/assets/js', f), 'utf8'), sandbox, { filename: f });
+  vm.runInContext(readFileSync(join(root, 'web/js', f), 'utf8'), sandbox, { filename: f });
 }
 const { PMTILES, MVT } = sandbox;
 

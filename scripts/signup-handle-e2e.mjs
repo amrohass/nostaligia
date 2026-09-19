@@ -132,7 +132,7 @@ async function profileRow(id) {
   return Array.isArray(rows) ? rows[0] : null;
 }
 
-const SHELL = [...read('site/index.html').matchAll(/<script src="(\/assets\/js\/[^"]+)"/g)]
+const SHELL = [...read('site/index.html').matchAll(/<script src="(\/assets\/(?:v\/[0-9a-f]+\/)?js\/[^"]+)"/g)]
   .map((m) => `site${m[1]}`);
 
 /**

@@ -12,10 +12,10 @@
      Preloaded: the 400 Arabic face is on the critical path for an Arabic-first page, and
      `swap` means the alternative is a flash of the system font on every first visit. -->
 <link rel="preload" href="/assets/fonts/plex-arabic-400-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/assets/css/fonts.css">
-<link rel="stylesheet" href="/assets/css/tokens.css">
-<link rel="stylesheet" href="/assets/css/atlas.css">
-<link rel="stylesheet" href="/assets/css/admin.css">
+<link rel="stylesheet" href="/assets/v/94b2e4a4e087/css/fonts.css">
+<link rel="stylesheet" href="/assets/v/94b2e4a4e087/css/tokens.css">
+<link rel="stylesheet" href="/assets/v/94b2e4a4e087/css/atlas.css">
+<link rel="stylesheet" href="/assets/v/94b2e4a4e087/css/admin.css">
 <!-- Turnstile. This page has its own sign-in form (admin-boot.js), and that form posts to
      the same captcha-gated /token endpoint as the public dialog. It went without a widget
      from M1 until 1 Sep 2026, which cost nothing at all while GoTrue's captcha was off and
@@ -33,17 +33,17 @@
 <!-- Leaflet is gone with M3; the places screen reads the real gazetteer table and the
      basemap is M4's (CLAUDE.md §2 — PMTiles on R2, never the public OSM endpoint).
      store.js is gone too: every screen below reads the database now. -->
-<script src="/assets/js/config.js"></script>
-<script src="/assets/js/i18n.js"></script>
-<script src="/assets/js/data.js"></script>
-<script src="/assets/js/ui.js"></script>
-<script src="/assets/js/auth.js"></script>
-<script src="/assets/js/turnstile.js"></script>
-<script src="/assets/js/db.js"></script>
+<script src="/assets/v/94b2e4a4e087/js/config.js"></script>
+<script src="/assets/v/94b2e4a4e087/js/i18n.js"></script>
+<script src="/assets/v/94b2e4a4e087/js/data.js"></script>
+<script src="/assets/v/94b2e4a4e087/js/ui.js"></script>
+<script src="/assets/v/94b2e4a4e087/js/auth.js"></script>
+<script src="/assets/v/94b2e4a4e087/js/turnstile.js"></script>
+<script src="/assets/v/94b2e4a4e087/js/db.js"></script>
 <!-- admin.js is NOT loaded here. admin-boot.js signs the visitor in, asks the database
      what role they hold, and injects it only for a moderator or admin (CLAUDE.md §5).
      That is bundle weight and tidiness, never secrecy: the file is readable by anyone who
      requests it, and the database refuses them regardless. -->
-<script src="/assets/js/admin-boot.js"></script>
+<script src="/assets/v/94b2e4a4e087/js/admin-boot.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-// Generate `site/_headers` and `site/assets/js/config.js` from config/site.json.
+// Generate `site/_headers` and `web/js/config.js` from config/site.json.
 //
 // CLAUDE.md section 2 asks for every origin/CSP/CORS value in one config module so that
 // pointing at a real domain is a one-file change. Two files have to carry those values at
@@ -11,7 +11,8 @@
 //     node scripts/build-site-config.mjs           # write
 //     node scripts/build-site-config.mjs --check   # verify, exit 1 on drift (CI)
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { assertAnonKey } from './lib/anon-key.mjs';
@@ -199,6 +200,13 @@ const headers = [
   '/v/*',
   '  Cache-Control: public, max-age=31536000, immutable',
   '',
+  '# Front-end JS and CSS, versioned by content hash (see "Versioned front-end assets" in',
+  '# scripts/build-site-config.mjs). A new front end is a new PATH, so a year is safe. It',
+  '# replaces the 4-hour browser cache the zone applied to the old unversioned names, under',
+  '# which a returning browser could run a new HTML shell against JavaScript hours older.',
+  '/assets/v/*',
+  '  Cache-Control: public, max-age=31536000, immutable',
+  '',
   '# The pointer the whole read path hangs off. Short TTL so a rollback is visible fast.',
   '/manifest.json',
   '  Cache-Control: public, max-age=30, must-revalidate',
@@ -209,7 +217,7 @@ const headers = [
   ''
 ].join('\n');
 
-// ── site/assets/js/config.js ────────────────────────────────────────────────
+// ── web/js/config.js ────────────────────────────────────────────────
 // Same IIFE-on-window shape as i18n.js / store.js / ui.js. No build step, no modules.
 const js = `/* ${GENERATED}
    Edit config/site.json and re-run the generator. */
@@ -268,6 +276,77 @@ ${Object.entries(cfg.domains).map(([k, v]) => `      ${k}: 'https://${v}'`).join
   });
 })(window);
 `;
+
+// -- Versioned front-end assets -----------------------------------------------
+//
+// THE DEFECT, measured 19 Sep 2026 on ramallahnostalgia.org: every HTML route answers
+// `max-age=0, must-revalidate`, and every /assets/* file answered `max-age=14400` — the
+// zone's browser-cache TTL, set nowhere in this repository. So after any deploy a returning
+// browser loaded the NEW shell and ran it against JavaScript up to four hours OLD: the new
+// admin.js's reject dialog against an old admin-boot, a new i18n key rendered by old code as
+// its own name. Nothing reported it; the page simply behaved like neither version.
+//
+// So the JS and CSS are served under a path that names their content —
+//
+//     /assets/v/<12 hex of sha256 over every file>/js/public.js
+//
+// — the release tree's /v/<ts>/ pattern applied to the front end: immutable directory,
+// pointer elsewhere. Here the pointer is the HTML (always revalidated), which is why a year's
+// cache on the versioned path is safe: a new front end is a new path, never a new body.
+//
+// A content hash rather than the release tree's ISO timestamp, and on purpose: CI runs this
+// with --check and fails on any difference, which only works if the name is a function of
+// the sources. A timestamp would differ on every run.
+//
+// The editable sources live in web/js and web/css — OUTSIDE site/, and that is the other
+// half of the fix. Left at site/assets/js they would still be DEPLOYED at their old
+// unversioned paths, and a tab opened before a deploy would lazily load /assets/js/map.js
+// and silently get the new one. Absent from the deployed tree, the same request falls
+// through _redirects to the shell as text/html, `nosniff` makes the browser refuse to run
+// it, and the loader's onerror shows the reader something (UI.reloadNotice, admin-boot's
+// own message). Fail visible, never mixed.
+//
+// Only the CURRENT version is kept. An old tab asking for last deploy's version fails the
+// same visible way, which is the behaviour asked for; keeping versions around would trade
+// that for a mixed-version window, the thing this exists to remove.
+const lf = (s) => s.replace(/\r\n/g, '\n');
+const ASSET_SOURCES = [['js', 'web/js'], ['css', 'web/css']];
+const assetFiles = [];   // [kind, name, content]
+for (const [kind, dir] of ASSET_SOURCES) {
+  for (const name of readdirSync(join(root, dir)).filter((f) => f.endsWith('.' + kind)).sort()) {
+    // config.js is hashed as it is ABOUT to be written, so a config change and its new
+    // version land in the same run.
+    const content = dir === 'web/js' && name === 'config.js'
+      ? js
+      : lf(readFileSync(join(root, dir, name), 'utf8'));
+    assetFiles.push([kind, name, content]);
+  }
+}
+{
+  const hasConfig = assetFiles.some(([k, n]) => k === 'js' && n === 'config.js');
+  if (!hasConfig) assetFiles.push(['js', 'config.js', js]);
+  assetFiles.sort(([ak, an], [bk, bn]) => (ak + '/' + an < bk + '/' + bn ? -1 : 1));
+}
+const assetHash = createHash('sha256');
+for (const [kind, name, content] of assetFiles) assetHash.update(`${kind}/${name}\0${content}\0`);
+const ASSET_VERSION = assetHash.digest('hex').slice(0, 12);
+
+// A reference to /assets/js/x.js or /assets/css/x.css, bare or already versioned (any
+// version), inside a quoted attribute. Fonts and images are not versioned: they are named by
+// content already and never change in place.
+const ASSET_REF = /(["'])\/assets\/(?:v\/[0-9a-f]{12}\/)?(js|css)\/([A-Za-z0-9._-]+)/g;
+function versionRefs(rel, html) {
+  return html.replace(ASSET_REF, (match, quote, kind, name) => {
+    if (!assetFiles.some(([k, n]) => k === kind && n === name)) {
+      throw new Error(`${rel} references /assets/${kind}/${name}, which web/${kind}/ does not have`);
+    }
+    return `${quote}/assets/v/${ASSET_VERSION}/${kind}/${name}`;
+  });
+}
+
+// The two HTML shells. Written by hand, re-pointed here: whatever version (or none) a
+// reference names, it leaves naming this one.
+const SHELLS = ['site/index.html', 'site/admin.html'];
 
 // Both targets live inside site/, the Cloudflare Pages output directory declared in
 // wrangler.toml. `_headers` is only applied at the ROOT of that directory — written to
@@ -342,6 +421,15 @@ ${fnHeaders}
    falls through to the SPA, which is what every /item URL did before this existed. */
 const ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+/* The front-end version THIS deployment serves. The prerendered pages in R2 name LOGICAL
+   paths — /assets/js/public.js — because the publisher runs on its own schedule and must
+   not have to know which front end is live; those paths no longer exist on the site. This
+   function deploys WITH the versioned assets, so it is the one place that can point a page
+   at them without the two ever drifting. Only src/href of <script> and <link> are touched:
+   a post's own text is escaped by the publisher, so "/assets/js/" in a caption stays prose. */
+const ASSET_VERSION = ${JSON.stringify(ASSET_VERSION)};
+const ASSET_REF = /(<(?:script|link)\\b[^>]*?\\s(?:src|href)=")\\/assets\\/(js|css)\\//g;
+
 export async function onRequest(context) {
   const { request, next } = context;
 
@@ -387,35 +475,82 @@ export async function onRequest(context) {
   const cache = upstream.headers.get('Cache-Control');
   if (cache) headers.set('Cache-Control', cache);
 
-  return new Response(request.method === 'HEAD' ? null : upstream.body, {
-    status: 200,
-    headers,
-  });
+  if (request.method === 'HEAD') return new Response(null, { status: 200, headers });
+  const html = (await upstream.text()).replace(ASSET_REF, '$1/assets/v/' + ASSET_VERSION + '/$2/');
+  return new Response(html, { status: 200, headers });
 }
 `;
 
 const outputs = [
   ['site/_headers', headers],
   ['site/_redirects', redirects],
-  ['site/assets/js/config.js', js],
+  ['web/js/config.js', js],
   ['functions/item/[[path]].js', itemFunction]
 ];
 
+// The versioned copies and the re-pointed shells are outputs like any other: drift in
+// either is a deploy whose HTML names files that are not there, or files nothing names.
+for (const [kind, name, content] of assetFiles) {
+  outputs.push([`site/assets/v/${ASSET_VERSION}/${kind}/${name}`, content]);
+}
+for (const rel of SHELLS) {
+  outputs.push([rel, versionRefs(rel, lf(readFileSync(join(root, rel), 'utf8')))]);
+}
+
 let drifted = false;
+
+// Unversioned JS/CSS inside the deployed tree would be SERVED at the old paths — to exactly
+// the stale tabs this scheme exists to stop silently mixing. Never deleted here: whatever is
+// there was put there by hand, and belongs in web/.
+for (const kind of ['js', 'css']) {
+  if (existsSync(join(root, 'site/assets', kind))) {
+    console.error(`::error::site/assets/${kind}/ exists — sources belong in web/${kind}/; anything under ` +
+      `site/assets/${kind}/ is served unversioned to tabs that should fail visibly instead`);
+    drifted = true;
+  }
+}
+
+// Every version directory but this one, and any file in this one no source accounts for.
+const vRoot = join(root, 'site/assets/v');
+const expected = new Set(assetFiles.map(([k, n]) => `${k}/${n}`));
+const leftovers = [];
+if (existsSync(vRoot)) {
+  for (const dir of readdirSync(vRoot)) {
+    if (dir !== ASSET_VERSION) { leftovers.push(`site/assets/v/${dir}`); continue; }
+    for (const kind of readdirSync(join(vRoot, dir))) {
+      for (const name of readdirSync(join(vRoot, dir, kind))) {
+        if (!expected.has(`${kind}/${name}`)) leftovers.push(`site/assets/v/${dir}/${kind}/${name}`);
+      }
+    }
+  }
+}
+for (const rel of leftovers) {
+  if (check) {
+    console.error(`::error::${rel} is not the current asset version — run: node scripts/build-site-config.mjs`);
+    drifted = true;
+    continue;
+  }
+  rmSync(join(root, rel), { recursive: true, force: true });
+  console.log(`removed    ${rel}`);
+}
+
 for (const [rel, content] of outputs) {
   const path = join(root, rel);
   let current = null;
   try { current = readFileSync(path, 'utf8'); } catch { /* not yet generated */ }
-  if (current === content) { console.log(`unchanged  ${rel}`); continue; }
+  // Compared with CRLF folded to LF: git stores LF, and a Windows checkout's CRLF is not drift.
+  if (current !== null && lf(current) === content) { console.log(`unchanged  ${rel}`); continue; }
   if (check) {
     console.error(`::error::${rel} is out of date — run: node scripts/build-site-config.mjs`);
     drifted = true;
     continue;
   }
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
   console.log(`wrote      ${rel}`);
 }
 
+console.log(`\nfront-end asset version: ${ASSET_VERSION}`);
 if (check && drifted) process.exit(1);
 if (check) console.log(`\nall ${outputs.length} generated files match config/site.json`);
 

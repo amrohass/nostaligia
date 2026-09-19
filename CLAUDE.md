@@ -644,6 +644,27 @@ A named human owns the takedown path with a stated response time. This is a laun
   M4's own stated fallback ("tile-failure fallback to list view"). M4 adds the PMTiles
   basemap on top of it rather than replacing it, and the decade bar is the control M4's
   slider becomes. The RTL slider direction is still M6's.
+- **Amended 19 Sep 2026 — JS and CSS are served under a content-versioned path, and the
+  sources moved to `web/`.** Measured on production: HTML answered `max-age=0`, every
+  `/assets/*` file `max-age=14400` (the zone's browser-cache TTL, set nowhere in this repo),
+  so after any deploy a returning browser ran the new shell against JavaScript up to four
+  hours old. Now `scripts/build-site-config.mjs` — the site's publish step, already run with
+  `--check` in CI — copies `web/js` and `web/css` to `site/assets/v/<12 hex of their sha256>/`
+  (immutable, a year), re-points both shells, and keeps only the current version. A content
+  hash rather than the release tree's ISO timestamp so `--check` can regenerate it.
+  **Edit `web/`, then run the generator** — that is the build step §9 allows, and CI fails
+  the commit that skips it. Three consequences, each deliberate:
+  **(a)** the sources are OUTSIDE `site/`, so the old unversioned paths are not deployed: a
+  tab opened before a deploy that lazily asks for `/assets/js/map.js` gets the shell as
+  `text/html`, `nosniff` refuses it, and the loader's `onerror` shows `UI.reloadNotice()` —
+  a visible "reload" rather than new code silently loaded into an old page. `--check` fails
+  if `site/assets/js` or `site/assets/css` ever reappears;
+  **(b)** the lazily loaded modules (the map, the dashboard) load from the directory `ui.js`
+  was loaded from, never a fixed path, so a tab only ever runs one version;
+  **(c)** the prerendered item pages keep naming LOGICAL paths — the publisher runs on its
+  own schedule and must not know which front end is live — and the generated `/item/*`
+  Pages Function, which deploys WITH the assets, points them at the current version as it
+  serves them. Fonts are not versioned; they are content-named and never change in place.
 - Performance budget: **< 150 KB brotli** for HTML + CSS + JS + first feed page. Arabic font
   subset with `unicode-range` split, WOFF2, `font-display: swap` — and **verify shaping after
   subsetting**.

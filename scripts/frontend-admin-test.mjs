@@ -73,11 +73,11 @@ function row(extra = {}) {
   };
 }
 
-const SHELL = [...read('site/admin.html').matchAll(/<script src="(\/assets\/js\/([^"]+))"/g)]
-  .map((m) => `site/assets/js/${m[2]}`)
+const SHELL = [...read('site/admin.html').matchAll(/<script src="(\/assets\/(?:v\/[0-9a-f]+\/)?js\/([^"]+))"/g)]
+  .map((m) => `web/js/${m[2]}`)
   // admin-boot.js is the role check and the loader; the dashboard itself is admin.js.
   .filter((rel) => !rel.endsWith('admin-boot.js'))
-  .concat(['site/assets/js/admin.js']);
+  .concat(['web/js/admin.js']);
 
 /**
  * Boot the dashboard on one section, with `rows` as the moderation queue.

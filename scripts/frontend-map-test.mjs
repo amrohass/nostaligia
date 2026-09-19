@@ -232,8 +232,8 @@ function mapWindow(archiveBytes, opts = {}) {
     TextDecoder: globalThis.TextDecoder,
     _requests: requests
   };
-  new Function('window', read('site/assets/js/pmtiles.js'))(win);
-  new Function('window', read('site/assets/js/mvt.js'))(win);
+  new Function('window', read('web/js/pmtiles.js'))(win);
+  new Function('window', read('web/js/mvt.js'))(win);
   return win;
 }
 
@@ -436,7 +436,7 @@ console.log('# map.js — the arithmetic that decides where things land');
   const win = mapWindow(buildArchive({}));
   win.document = { documentElement: {}, createElement: () => ({ style: {}, setAttribute() {}, addEventListener() {} }) };
   win.getComputedStyle = () => ({ getPropertyValue: () => '' });
-  new Function('window', read('site/assets/js/map.js'))(win);
+  new Function('window', read('web/js/map.js'))(win);
   const { project, unproject, STYLE, LABELS, WANTED } = win.MAP;
 
   const centre = project(0, 0);
@@ -478,7 +478,7 @@ console.log('# map.js — the arithmetic that decides where things land');
   const unreachable = LABELS.filter((r) => !(r.minZoom >= 8 && r.minZoom <= EXTRACT_MAX_ZOOM + OVERZOOM));
   ok(unreachable.length === 0,
      `every label rule can be reached at a zoom the map can actually show${unreachable.length ? ' — ' + unreachable.map((r) => `${r.layer}@z${r.minZoom}`).join(', ') : ''}`);
-  ok(new RegExp(`header\\.maxZoom \\+ ${OVERZOOM}`).test(read('site/assets/js/map.js')),
+  ok(new RegExp(`header\\.maxZoom \\+ ${OVERZOOM}`).test(read('web/js/map.js')),
      `CONTROL: map.js really does allow ${OVERZOOM} levels of overzoom past the archive — the ceiling above is not a number this test invented`);
 }
 
@@ -531,7 +531,7 @@ console.log('# map.js — which name a feature is labelled with, and where a str
   const win = mapWindow(buildArchive({}));
   win.document = { documentElement: {}, createElement: () => ({ style: {}, setAttribute() {}, addEventListener() {} }) };
   win.getComputedStyle = () => ({ getPropertyValue: () => '' });
-  new Function('window', read('site/assets/js/map.js'))(win);
+  new Function('window', read('web/js/map.js'))(win);
   const { labelText, lineAnchor } = win.MAP;
   const roads = win.MVT.decodeTile(NAMED, ['roads']).roads.features;
 
@@ -578,18 +578,18 @@ console.log('# the map is loaded on demand, and the budget depends on that');
 {
   const shell = read('site/index.html');
   for (const module of ['map.js', 'mvt.js', 'pmtiles.js']) {
-    ok(!shell.includes(`/assets/js/${module}`),
+    ok(!new RegExp(`/assets/(v/[0-9a-f]+/)?js/${module.replace(".", "\\.")}`).test(shell),
        `${module} is NOT in the shell's script list — §9's budget is measured from it`);
   }
 
   // ...and something must therefore load them, or /map is a permanently empty panel.
-  const ui = read('site/assets/js/ui.js');
+  const ui = read('web/js/ui.js');
   ok(/loadScript/.test(ui) && /pmtiles\.js/.test(ui) && /mvt\.js/.test(ui) && /map\.js/.test(ui),
      'UI.loadMap fetches all three');
   // The order is load-bearing: map.js reads PMTILES and MVT off `window` at IIFE time.
   // Matched on the loaded PATH rather than the bare filename — the comment above loadMap
   // names map.js while explaining exactly this, and a filename search finds the prose.
-  const order = ['pmtiles.js', 'mvt.js', 'map.js'].map((m) => ui.indexOf(`/assets/js/${m}`));
+  const order = ['pmtiles.js', 'mvt.js', 'map.js'].map((m) => ui.indexOf(`ASSET_BASE + '${m}'`));
   ok(order.every((n) => n > -1) && order[0] < order[1] && order[1] < order[2],
      'and in dependency order — map.js reads the other two off window when it runs');
 
@@ -598,7 +598,7 @@ console.log('# the map is loaded on demand, and the budget depends on that');
      the file are the documented fallbacks inside palette()'s `defaults`, for a document
      with no stylesheet at all. Any hex outside that block is a colour that stopped coming
      from tokens.css, which is invisible until someone changes a token and nothing moves. */
-  const map = read('site/assets/js/map.js');
+  const map = read('web/js/map.js');
   const defaults = /var defaults = \{([\s\S]*?)\};/.exec(map);
   ok(defaults !== null, 'CONTROL: palette()’s defaults block is where this test thinks it is');
   const outside = map.replace(defaults ? defaults[0] : '', '').match(/#[0-9A-Fa-f]{6}/g) || [];

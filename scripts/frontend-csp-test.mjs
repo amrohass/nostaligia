@@ -46,7 +46,7 @@ const stubWindow = {
   document: { createElement: stubNode, createTextNode: () => ({}) },
   DATA: { tone: () => ['#A98D66', '#8A9268'] }
 };
-new Function('window', readFileSync(join(root, 'site/assets/js/ui.js'), 'utf8'))(stubWindow);
+new Function('window', readFileSync(join(root, 'web/js/ui.js'), 'utf8'))(stubWindow);
 const { el, toneStyle } = stubWindow.UI;
 
 const run = (styleValue) => { recorded.length = 0; el('div', { style: styleValue }); return recorded; };
@@ -82,8 +82,8 @@ ok(run('padding:20px;;').length === 1 && run(';').length === 0,
 // reporting on files no visitor can reach.
 const files = [
   'site/index.html', 'site/admin.html',
-  ...readdirSync(join(root, 'site/assets/js')).filter(f => f.endsWith('.js')).map(f => `site/assets/js/${f}`),
-  ...readdirSync(join(root, 'site/assets/css')).filter(f => f.endsWith('.css')).map(f => `site/assets/css/${f}`),
+  ...readdirSync(join(root, 'web/js')).filter(f => f.endsWith('.js')).map(f => `web/js/${f}`),
+  ...readdirSync(join(root, 'web/css')).filter(f => f.endsWith('.css')).map(f => `web/css/${f}`),
   // Not in site/, and served to browsers anyway. The publisher writes prerender.ts's output
   // to item/{id}/index.html in the R2 bucket, which is the FIRST document anyone arriving
   // from a shared link ever loads (CLAUDE.md section 9). Scanning site/ alone would leave

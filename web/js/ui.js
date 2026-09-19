@@ -31,6 +31,14 @@
   var doc = global.document;
   var SVG_NS = 'http://www.w3.org/2000/svg';
 
+  /* The directory THIS file was loaded from — /assets/v/<version>/js/ on a deployment
+     (scripts/build-site-config.mjs). The modules fetched later (the map; admin-boot does the
+     same for the dashboard) come from the same directory, so a tab only ever runs files of
+     one version. Read now: document.currentScript is null inside every callback. The
+     fallback is for a harness that evaluates this file with no script element at all. */
+  var SELF = (doc && doc.currentScript && doc.currentScript.src) || '';
+  var ASSET_BASE = SELF ? SELF.slice(0, SELF.lastIndexOf('/') + 1) : '/assets/js/';
+
   /** el('div.memory', {onclick: fn}, [children]) */
   function el(spec, props, children) {
     var parts = String(spec).split('.');
@@ -348,20 +356,46 @@
         var node = doc.createElement('script');
         node.src = src;
         node.onload = function () { resolve(src); };
-        node.onerror = function () { scripts[src] = null; reject(new Error('ui.err.script')); };
+        node.onerror = function () {
+          scripts[src] = null;
+          reloadNotice();
+          reject(new Error('ui.err.script'));
+        };
         doc.body.appendChild(node);
       });
     }
     return scripts[src];
   }
 
+  /* A file of this tab's version could not be fetched.
+
+     After a deploy that is the EXPECTED answer for a tab opened before it: only the current
+     asset version is deployed, so the path this tab knows is gone, and it falls through to
+     the shell as text/html, which `nosniff` refuses to run. That is deliberate — the other
+     choice is loading the new file into the old page, which fails in ways nobody sees. It is
+     also what a dropped connection looks like, and the remedy is the same for both, so it is
+     said once, persistently, with the button that performs it. The caller still reports its
+     own failure in place (the map's list, the dashboard's message). */
+  function reloadNotice() {
+    if (qs('.reload-notice')) return;
+    var say = global.I18N ? global.I18N.t : function (key) { return key; };
+    doc.body.appendChild(el('div.reload-notice', { role: 'alert' }, [
+      el('span.reload-notice__text', { text: say('app.reloadNotice') }),
+      el('button.reload-notice__button', {
+        type: 'button',
+        text: say('app.reload'),
+        onclick: function () { global.location.reload(); }
+      })
+    ]));
+  }
+
   /* The map, in dependency order — and the order is load-bearing: map.js reads PMTILES and
      MVT off `window` when its IIFE runs, so a parallel load that finished out of order
      would leave it holding undefined. */
   function loadMap() {
-    return loadScript('/assets/js/pmtiles.js')
-      .then(function () { return loadScript('/assets/js/mvt.js'); })
-      .then(function () { return loadScript('/assets/js/map.js'); });
+    return loadScript(ASSET_BASE + 'pmtiles.js')
+      .then(function () { return loadScript(ASSET_BASE + 'mvt.js'); })
+      .then(function () { return loadScript(ASSET_BASE + 'map.js'); });
   }
 
   /** Traps Tab inside an open dialog and restores focus when it closes. */
@@ -428,6 +462,8 @@
     toast: toast,
     trapFocus: trapFocus,
     loadScript: loadScript,
-    loadMap: loadMap
+    loadMap: loadMap,
+    reloadNotice: reloadNotice,
+    assetBase: ASSET_BASE
   };
 })(window);

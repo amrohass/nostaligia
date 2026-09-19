@@ -2334,3 +2334,35 @@ html[lang="en"] .authpage__back { font: 400 12px var(--font-en); }
   .masthead__signout { font-size: 12px; padding-inline: 0; }
   .kind-row { flex-direction: column; }
 }
+
+/* --------------------------- A newer version is out ---------------------------
+
+   UI.reloadNotice(): a file of this page's asset version could not be fetched. Pinned to
+   the bottom edge, full width within the gutter, and it stays: it is the one message on the
+   page whose remedy is to leave it. Logical properties throughout (section 9). */
+.reload-notice {
+  position: fixed;
+  inset-block-end: 16px;
+  inset-inline: 16px;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: var(--r-md);
+  box-shadow: var(--sh-float);
+  font: 500 13px var(--font-ar);
+}
+html[lang="en"] .reload-notice { font: 500 12.5px var(--font-en); }
+.reload-notice__button {
+  padding: 6px 14px;
+  border-radius: var(--r-md);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+}

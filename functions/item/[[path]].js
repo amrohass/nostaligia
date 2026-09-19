@@ -23,6 +23,15 @@ const SECURITY = {
    falls through to the SPA, which is what every /item URL did before this existed. */
 const ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+/* The front-end version THIS deployment serves. The prerendered pages in R2 name LOGICAL
+   paths — /assets/js/public.js — because the publisher runs on its own schedule and must
+   not have to know which front end is live; those paths no longer exist on the site. This
+   function deploys WITH the versioned assets, so it is the one place that can point a page
+   at them without the two ever drifting. Only src/href of <script> and <link> are touched:
+   a post's own text is escaped by the publisher, so "/assets/js/" in a caption stays prose. */
+const ASSET_VERSION = "94b2e4a4e087";
+const ASSET_REF = /(<(?:script|link)\b[^>]*?\s(?:src|href)=")\/assets\/(js|css)\//g;
+
 export async function onRequest(context) {
   const { request, next } = context;
 
@@ -68,8 +77,7 @@ export async function onRequest(context) {
   const cache = upstream.headers.get('Cache-Control');
   if (cache) headers.set('Cache-Control', cache);
 
-  return new Response(request.method === 'HEAD' ? null : upstream.body, {
-    status: 200,
-    headers,
-  });
+  if (request.method === 'HEAD') return new Response(null, { status: 200, headers });
+  const html = (await upstream.text()).replace(ASSET_REF, '$1/assets/v/' + ASSET_VERSION + '/$2/');
+  return new Response(html, { status: 200, headers });
 }

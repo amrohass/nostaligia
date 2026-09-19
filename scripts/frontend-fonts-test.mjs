@@ -33,7 +33,7 @@ function ok(cond, name) {
   else { failed++; console.log(`not ok ${passed + failed} - ${name}`); }
 }
 
-const CSS_PATH = 'site/assets/css/fonts.css';
+const CSS_PATH = 'web/css/fonts.css';
 const css = read(CSS_PATH);
 
 /* ── 1 · the faces, parsed out of the generated stylesheet ─────────────────── */
@@ -204,7 +204,7 @@ const covered = [];
 for (const f of faces) covered.push(...expand(f.range));
 const isCovered = (cp) => covered.some(([lo, hi]) => cp >= lo && cp <= hi);
 
-const i18n = read('site/assets/js/i18n.js');
+const i18n = read('web/js/i18n.js');
 const strings = [...i18n.matchAll(/(?:ar|en)\s*:\s*'((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]);
 ok(strings.length > 400, `CONTROL: ${strings.length} interface strings read out of i18n.js`);
 

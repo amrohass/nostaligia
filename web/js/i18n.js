@@ -649,6 +649,11 @@
     'admin.err.signedOut': { ar: 'انتهت جلستك. سجّل الدخول من جديد.', en: 'Your session ended. Sign in again.' },
     'admin.err.offline': { ar: 'لا يوجد اتصال بقاعدة البيانات.', en: 'No connection to the database.' },
     'admin.err.loadFailed': { ar: 'تعذّر تحميل اللوحة.', en: 'The dashboard failed to load.' },
+    // UI.reloadNotice: a file of this page's version could not be fetched — after a deploy,
+    // the expected answer for a tab opened before it; also what a dropped connection says.
+    'app.reloadNotice': { ar: 'تعذّر تحميل جزء من الموقع — قد تكون صدرت نسخة أحدث.',
+                          en: 'Part of the site failed to load — a newer version may be out.' },
+    'app.reload':       { ar: 'أعد تحميل الصفحة', en: 'Reload the page' },
     'admin.err.generic': { ar: 'تعذّر إتمام الطلب.', en: 'That request did not go through.' },
 
     // ── Admin: published archive ────────────────────────────

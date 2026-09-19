@@ -50,7 +50,7 @@ export function corsHeaders(req: Request): Record<string, string> {
  *
  * Two rules for anything added here:
  *   - it must be a header the front end actually sends — scripts/frontend-cors-test.mjs
- *     compares this list against what site/assets/js really puts on a functions/v1 fetch,
+ *     compares this list against what web/js really puts on a functions/v1 fetch,
  *     in both directions, so a header removed from the client must be removed here too;
  *   - allowing a header grants nothing. This list governs what a browser may SEND, not
  *     what the function trusts. `apikey` carries the anon key, which §6 states plainly is

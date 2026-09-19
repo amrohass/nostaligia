@@ -1,0 +1,4579 @@
+/* The public Atlas — archive, immersive viewer, located items, events, profiles, the info
+   page, and the gate that stands between a signed-out visitor and any control that writes.
+
+   ── Where the content comes from ─────────────────────────────
+
+   ARCHIVE, and nothing else. §2: "Static sharded JSON releases on CDN. Zero database reads
+   for public visitors." A signed-out reader can browse the whole archive without a single
+   request to PostgREST — no token, no anon key in flight, no query log to correlate (§7).
+
+   What still talks to the database, and only for someone already signed in: ENGAGE (their
+   own likes, saves and pending comments) and profile_view() on their own profile. Both are
+   engagement, which §1 gates behind sign-in anyway.
+
+   store.js is gone. It kept memories, comments, users and page copy in localStorage and let
+   any view write to them — README listed that as "client-authoritative unmoderated writes",
+   and §5 is unambiguous that unapproved content must be unreadable at the POLICY level
+   rather than filtered by a browser that has already been handed it.
+
+   ── Routes are paths ────────────────────────────────────────
+
+   §2: History API, not hash routing. Every one of these is a real URL a server sees, which
+   is the whole reason the prerendered item pages in the publisher can exist at all:
+
+     /                 the archive
+     /item/{id}        one memory, in the immersive viewer
+     /map              located memories, by decade
+     /events           events
+     /u/{handle}       somebody's profile
+     /me               your own
+     /page, /page/{s}  the info page, deep-linked to a section
+     /reset            where a password-reset link lands
+
+   site/_redirects serves index.html with a 200 for anything unmatched, so a refresh on
+   /item/{id} keeps the path rather than 404ing.
+
+   Old #/… links are translated once at boot. A diaspora archive spreads by people sending
+   each other links, and the ones already sent do not stop existing when the routing does. */
+
+(function (global) {
+  'use strict';
+
+  var el = UI.el, qs = UI.qs, mount = UI.mount, toneStyle = UI.toneStyle, ICONS = UI.ICONS;
+  var bdi = UI.bdi, labelFor = UI.labelFor;
+  var t = function (k, v) { return I18N.t(k, v); };
+  var pick = I18N.pick, gloss = I18N.gloss, num = I18N.num;
+
+  /* ── State ───────────────────────────────────────────────── */
+
+  var state = {
+    error: null,          // an i18n key, when the archive could not be read
+
+    /* ── The grid's four data sources (M6 addendum) ──────────
+       One grid, four sources — not four grids. `all` is feed/page-N.json and the other
+       three are category/{cat}/page-N.json: the same page size, the same order, the same
+       card, the same cardGrid(). Each keeps its own paging cursor because each is scrolled
+       independently and a reader who has read six pages of Images and then switches to
+       Videos must not be handed page seven of anything.
+
+       `failed` is not redundant with `error`. render() asks for page 1 of whatever tab is
+       on screen, and render() runs again on every language change and every popstate — so
+       without a latch, a tab whose first page cannot be fetched would retry forever, once
+       per render, against a CDN that is already not answering. */
+    tab: 'all',
+    tabs: {
+      all:   { items: [], page: 0, pages: 1, total: 0, loading: false, failed: false, error: null },
+      image: { items: [], page: 0, pages: 1, total: 0, loading: false, failed: false, error: null },
+      video: { items: [], page: 0, pages: 1, total: 0, loading: false, failed: false, error: null },
+      voice: { items: [], page: 0, pages: 1, total: 0, loading: false, failed: false, error: null }
+    },
+
+    /* ── Live search (M6 addendum) ───────────────────────────
+       `query` is what is in the box. `results` is the last resolved match list, or null
+       when nothing has been searched yet — null and [] are different states and the screen
+       says different things about them ("type to search" versus "no memory matches"). */
+    query: '',
+    results: null,
+    searching: false,
+    searchFailed: false,
+
+    feed: null,           // the ALL tab's items, under the name this file has always used
+    /* A deep link may land on an item that is nine feed pages down. Rather than loading
+       nine pages to find it, it is fetched alone and shown FIRST in the viewer — and kept
+       here rather than pushed into state.feed, because the feed is also what the archive
+       grid renders and an item jumping to the front of the masonry because somebody
+       arrived from WhatsApp is a bug with a very confusing cause. */
+    lead: null,
+
+    items: {},            // id -> item shard, once fetched
+    liked: {},            // id -> true, from the member's own rows
+    saved: {},
+    /* Applied on top of the BAKED counts. §2's 20 Aug amendment: baked counters go live
+       with the next content change, so the published number can be days old — this is the
+       delta from what the member has done in this session, added rather than pretended. */
+    likeDelta: {},
+
+    signedIn: false,
+    account: null,        // { id, email, role } from AUTH
+
+    /* 0060. THREE values, and the third is not a bug: true, false, and null for "we have
+       not been told". Null must behave like true — a status request that failed must not
+       lock a member out of contributing, because the database is the boundary and will
+       refuse them if they really are unconfirmed. A client that guessed `false` here would
+       turn one failed request into an archive nobody can write to. */
+    confirmed: null,
+
+    /* Tokens from a confirmation link, between captureRecovery() and boot. Null on every
+       ordinary visit, like `recovery` below. */
+    mailedLink: null,
+
+    decade: 'all',
+    viewer: null,         // { index }
+    editOpen: false,
+    releaseTrap: null,
+
+    /* The path the viewer's own back button returns to — the last route that was not an
+       item. §9 asks the front end to return a reader where they were, and until 6 Sep 2026
+       this button was the literal string '/': a reader who opened a memory from /map, from
+       /events or from somebody's profile was put back at the top of the archive, having to
+       find their way to the view they had been reading. The browser's Back always worked,
+       which is exactly why nothing looked broken.
+       Not a stack. There is only ever one thing to go back TO from the viewer, because the
+       viewer is the only route that opens over another one; a stack would accumulate
+       entries the browser's own history already holds and does better. */
+    lastView: '/',
+
+    /* §9: "The sign-in gate always preserves intent — the pending action and its item
+       survive the auth round-trip and the user returns exactly where they were." */
+    pending: null,
+
+    /* Set once, at boot, by captureRecovery() — null on every ordinary visit.
+       { stage: 'set' | 'dead' | 'done', linkKind: 'recovery' | 'unknown', error: key } */
+    recovery: null
+  };
+
+  /* THE array, not a copy of it. `state.feed` is the All tab's items under the name the
+     rest of this file has used since M3 — /events filters it, the viewer indexes into it,
+     onSignedIn maps it — and nothing ever reassigns it, so one identity is enough to keep
+     both names true. Written here rather than in the literal above because an object
+     cannot refer to itself while it is being built. */
+  state.feed = state.tabs.all.items;
+
+  /* ── Tabs ────────────────────────────────────────────────── */
+
+  /* The tab order, and the vocabulary /c/{cat} is validated against. `all` leads because
+     it is the default and because §9 wants the archive to open on the whole archive.
+
+     The three that follow are the publisher's CATEGORIES, spelled the same way — the shard
+     path is built from this string, so a name that drifted here would 404 a tab rather
+     than mis-render it. */
+  var TABS = ['all', 'image', 'video', 'voice'];
+
+  /* Category → the `kind.*` string a badge shows. The two vocabularies are deliberately
+     not the same word: a category is what the file IS (the publisher's word, from the
+     master's mime) and a kind is what a reader is about to look at. They coincide for two
+     of the three and not for `image`, which reads as "Photo" on a card. */
+  var CATEGORY_KIND = { image: 'photo', video: 'video', voice: 'voice' };
+
+  /** The tab on screen, and the paging cursor that belongs to it. */
+  function tabState(name) { return state.tabs[name || state.tab] || state.tabs.all; }
+
+  /** What the grid is currently drawing from. */
+  function currentItems() { return tabState().items; }
+
+  /** Every id loaded in any tab — what an engagement refresh has to cover. */
+  function loadedIds() {
+    var seen = {};
+    TABS.forEach(function (name) {
+      state.tabs[name].items.forEach(function (row) { seen[row.id] = true; });
+    });
+    return Object.keys(seen);
+  }
+
+  function adoptAccount(account) {
+    state.account = account ? { id: account.id, email: account.email, role: account.role, handle: null } : null;
+    state.signedIn = account !== null;
+    /* Back to "not been told" rather than to false. The next account to sign in here is a
+       different person, and carrying the last one's answer would either lock them out or
+       let them through on somebody else's proof. */
+    state.confirmed = null;
+    if (!account) { state.liked = {}; state.saved = {}; state.likeDelta = {}; }
+  }
+
+  /** An editorial copy block, in the active language. §9: never a literal in a view. */
+  function copyText(id) { return pick(ARCHIVE.block(id)); }
+
+  /* ── Routing ─────────────────────────────────────────────── */
+
+  function path() {
+    var p = global.location.pathname || '/';
+    return p.length > 1 && p.charAt(p.length - 1) === '/' ? p.slice(0, -1) : p;
+  }
+
+  function segments() {
+    return path().split('/').filter(Boolean).map(decodeURIComponent);
+  }
+
+  function route() {
+    var seg = segments();
+    if (!seg.length) return 'archive';
+    if (seg[0] === 'item') return 'archive';   // the viewer opens OVER the archive
+    if (seg[0] === 'c') return 'archive';      // a tab is the archive with a filter on it
+    if (seg[0] === 'u' || seg[0] === 'me') return 'profile';
+    if (seg[0] === 'page') return 'page';
+    if (seg[0] === 'reset') return 'reset';
+    return ['map', 'events'].indexOf(seg[0]) > -1 ? seg[0] : 'archive';
+  }
+
+  /**
+   * Which tab the URL names. `/` is All; `/c/{cat}` is one of the three.
+   *
+   * The addendum asks for the active tab to be in the URL "via the existing History API
+   * router — no second router", so it is a PATH segment and not a query string. Two reasons
+   * beyond obedience: navigate() compares against path(), which drops a query entirely, so
+   * `?tab=video` would be a navigation this router could not see; and §2's whole argument
+   * for History API routing is that every view has a real URL a crawler can resolve, which
+   * a tab reached only by clicking would not have.
+   *
+   * An unknown category falls back to All rather than rendering an empty tab. `/c/audio`
+   * is a typo or a stale link, and the archive is the honest answer to both.
+   */
+  function routedTab() {
+    var seg = segments();
+    if (seg[0] !== 'c' || !seg[1]) return 'all';
+    return TABS.indexOf(seg[1]) > 0 ? seg[1] : 'all';
+  }
+
+  /** The URL for a tab. One place, so the links and the router cannot disagree. */
+  function tabPath(name) { return name === 'all' ? '/' : '/c/' + name; }
+
+  function routedItemId() {
+    var seg = segments();
+    return seg[0] === 'item' && seg[1] ? seg[1] : null;
+  }
+
+  /** /me is the signed-in member; /u/<handle> is anybody. */
+  function routedHandle() {
+    var seg = segments();
+    if (seg[0] === 'me') return null;
+    return seg[0] === 'u' && seg[1] ? seg[1] : null;
+  }
+
+  function isOwnProfileRoute() { return segments()[0] === 'me'; }
+
+  function routedPageSlug() {
+    var seg = segments();
+    return seg[0] === 'page' && seg[1] ? seg[1] : null;
+  }
+
+  /**
+   * Where the in-page back button goes, and what it says.
+   *
+   * `state.lastView` is written by render() on every route that is not an item, including
+   * the ones reached with the browser's own Back — popstate re-renders, so walking back
+   * into /map and opening a memory from there returns to /map and not to wherever the
+   * reader had been before that.
+   *
+   * A deep link from WhatsApp lands on /item/{id} having rendered no other view, and the
+   * default is then the archive: it is where that reader has not been, but it is the only
+   * place in this site they can be sent that is not a lie about where they came from.
+   */
+  function backTarget() { return state.lastView || '/'; }
+
+  /* Literal keys, one per destination, rather than one interpolated string. §9 wants every
+     string through I18N with both languages, and "back to {x}" is not one sentence in
+     Arabic and English — nor is it one sentence for a possessive ("my profile") and a
+     definite ("the map"). Literal keys also keep the view test's key sweep able to see
+     them, which a concatenated key would not be. */
+  function backLabel() {
+    var head = backTarget().split('/').filter(Boolean)[0] || '';
+    if (head === 'map') return t('viewer.backTo.map');
+    if (head === 'events') return t('viewer.backTo.events');
+    if (head === 'me') return t('viewer.backTo.mine');
+    if (head === 'u') return t('viewer.backTo.profile');
+    return t('viewer.back');
+  }
+
+  /**
+   * Go somewhere, and re-render.
+   *
+   * pushState rather than assigning location: the point of History API routing is that a
+   * navigation costs no request. `replace` is for the viewer's scroll position, which
+   * must not stack a history entry per slide — otherwise Back walks the reader up through
+   * every memory they scrolled past instead of leaving the viewer.
+   */
+  function navigate(to, replace) {
+    if (to === path()) return;
+    global.history[replace ? 'replaceState' : 'pushState'](null, '', to);
+    render();
+  }
+
+  /* One listener for every internal link, rather than an onclick on each.
+
+     Delegation is not a micro-optimisation here: cards, the footer, comment bylines and the
+     prerendered HTML the publisher emits all produce anchors, and the prerendered ones are
+     in the document BEFORE this file runs. A per-link handler would miss exactly those —
+     which are the links a visitor who arrived from WhatsApp sees first.
+
+     Modified clicks are left alone. Ctrl/Cmd-click, middle-click and shift-click mean "open
+     this elsewhere", and a router that swallows them breaks the one interaction people use
+     to keep their place in a feed. */
+  function onDocumentClick(event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+    var node = event.target;
+    while (node && node !== global.document.body && node.tagName !== 'A') node = node.parentNode;
+    if (!node || node.tagName !== 'A') return;
+
+    var href = node.getAttribute('href');
+    if (!href || href.charAt(0) !== '/' || node.hasAttribute('target') ||
+        node.hasAttribute('download')) return;
+
+    event.preventDefault();
+    navigate(href);
+  }
+
+  /* ── Password recovery ───────────────────────────────────────
+     Where a reset link actually lands, which is not obvious and is worth writing down.
+
+     The mail Supabase sends does NOT link here. It links to GoTrue's own /auth/v1/verify,
+     which consumes the one-time token server-side and then 302s to a redirect target with
+     the resulting session in the URL **fragment** — `#access_token=…&refresh_token=…&
+     type=recovery` — or, when the token is spent or stale, with `#error=…&error_code=…`.
+
+     Which target it 302s to is Amro's Auth configuration and not this repository's: it is
+     the `redirect_to` we asked for IF his allowlist admits it, and the project's Site URL
+     otherwise, silently. So both landings are handled. `/reset` is the one we ask for; the
+     site root is the one we get if the allowlist has not been widened, and a member whose
+     password reset dead-ends at a blank archive is exactly the failure §9 forbids.
+
+     The fragment is read once and then REPLACED out of the URL. A session in an address
+     bar survives into history, into a screenshot, and into whatever the next person to
+     open the tab scrolls back through. Referrer-Policy is already no-referrer, so the one
+     remaining exposure is the local one, and replaceState closes it. */
+
+  var RECOVERY_PATH = '/reset';
+
+  /** Where we ASK GoTrue to send the member back to. See requestPasswordReset in auth.js. */
+  function recoveryRedirect() { return global.location.origin + RECOVERY_PATH; }
+
+  function captureRecovery() {
+    var raw = (global.location.hash || '').replace(/^#/, '');
+    if (!raw || raw.indexOf('=') === -1) return false;
+
+    var q;
+    try { q = new global.URLSearchParams(raw); } catch (e) { return false; }
+
+    var token = q.get('access_token');
+    var kind = q.get('type');
+    var failed = q.get('error') || q.get('error_code');
+
+    if (token && kind === 'recovery') {
+      AUTH.beginRecovery({
+        access_token: token,
+        refresh_token: q.get('refresh_token'),
+        expires_in: Number(q.get('expires_in')) || 3600
+      });
+      state.recovery = { stage: 'set', linkKind: 'recovery', error: null };
+    } else if (token) {
+      /* 0060. Any OTHER mailed link carrying a session — signup, magiclink, invite. Held
+         for boot rather than adopted here, because adopting means a network round trip and
+         this function runs before the first paint; §1's "browsing is open" says nothing
+         waits on a session.
+
+         The fragment is still replaced out of the URL immediately, for the reason the
+         header above gives: a session in an address bar survives into history and into a
+         screenshot, and whether it arrived from a reset link or a confirmation link makes
+         no difference to that. */
+      state.mailedLink = {
+        access_token: token,
+        refresh_token: q.get('refresh_token'),
+        expires_in: Number(q.get('expires_in')) || 3600
+      };
+      /* NOT to /reset. This link is not a password reset and sending it there would put a
+         confirmed member on a screen asking them to type a new password. */
+      global.history.replaceState(null, '', path() === RECOVERY_PATH ? '/' : path());
+      return true;
+    } else if (failed) {
+      /* Every error GoTrue can put on a verify redirect — otp_expired, access_denied, a
+         server_error — has the same answer for the person reading it: that link is no good,
+         ask for another. So they share one message rather than being spelled out, and the
+         message is the actionable one rather than the accurate-and-useless one.
+
+         `linkKind` is the honesty. A fragment that names itself `type=recovery`, or that
+         landed on /reset because the allowlist admitted our redirect, IS a reset link and is
+         called one. A bare error fragment at the site root could just as easily be an expired
+         SIGNUP confirmation, so it is called "this link" — the screen under it offers the
+         same two ways out either way, and neither of them is a claim. */
+      state.recovery = {
+        stage: 'dead',
+        linkKind: (kind === 'recovery' || path() === RECOVERY_PATH) ? 'recovery' : 'unknown',
+        error: 'auth.err.linkExpired'
+      };
+    } else {
+      return false;
+    }
+
+    global.history.replaceState(null, '', RECOVERY_PATH);
+    return true;
+  }
+
+  /* Links shared before §2's routing changed. Translated once, with replaceState so the
+     old form does not sit in history waiting to be walked back into. */
+  function migrateHashRoute() {
+    var hash = global.location.hash.replace(/^#\/?/, '');
+    if (!hash) return false;
+    var to = null;
+    if (hash.slice(0, 2) === 'm/') to = '/item/' + encodeURIComponent(hash.slice(2));
+    else if (hash === 'me') to = '/me';
+    else if (hash.slice(0, 2) === 'u/') to = '/u/' + encodeURIComponent(hash.slice(2));
+    else if (hash === 'page') to = '/page';
+    else if (hash.slice(0, 5) === 'page/') to = '/page/' + encodeURIComponent(hash.slice(5));
+    else if (['archive', 'map', 'events'].indexOf(hash) > -1) to = hash === 'archive' ? '/' : '/' + hash;
+    if (!to) return false;
+    global.history.replaceState(null, '', to);
+    return true;
+  }
+
+  /* ── Masthead ────────────────────────────────────────────── */
+
+  var NAV = [['archive', '/'], ['map', '/map'], ['events', '/events']];
+
+  function renderMasthead() {
+    var current = route();
+
+    var nav = el('nav.masthead__nav', { 'aria-label': t('nav.archive') }, NAV.map(function (entry) {
+      return el('a.navlink', {
+        href: entry[1],
+        'aria-current': entry[0] === current ? 'page' : null,
+        text: t('nav.' + entry[0])
+      });
+    }));
+
+    var actions = [
+      el('button.lang-toggle', {
+        type: 'button',
+        title: t('lang.switchTo'),
+        onclick: function () { I18N.toggle(); },
+        text: t('lang.other')
+      })
+    ];
+
+    if (state.signedIn) {
+      actions.push(el('button.btn.btn--primary.btn--share', { type: 'button', onclick: openShareSheet }, [
+        el('span.plus', { text: '+' }),
+        t('action.share')
+      ]));
+      actions.push(el('a.avatar-btn', {
+        href: '/me',
+        title: t('profile.mine'),
+        'aria-label': t('profile.mine'),
+        'aria-current': isOwnProfileRoute() ? 'page' : null,
+        text: initialFor(state.account)
+      }));
+      actions.push(el('button.btn.btn--quiet.masthead__signout', {
+        type: 'button', onclick: signOut, text: t('action.signOut')
+      }));
+    } else {
+      actions.push(el('button.btn.btn--quiet', {
+        type: 'button', onclick: function () { openAuth('login'); }, text: t('action.signIn')
+      }));
+      actions.push(el('button.btn.btn--primary', {
+        type: 'button', onclick: function () { openAuth('signup'); }, text: t('action.createAcct')
+      }));
+    }
+
+    mount(qs('#masthead'), [
+      el('div.masthead__lead', null, [
+        el('a.wordmark', { href: '/' }, [
+          el('span.wordmark__primary', { text: t('brand.name') }),
+          el('span.wordmark__secondary', { dir: I18N.lang === 'ar' ? 'ltr' : 'rtl', text: t('brand.counterpart') })
+        ]),
+        nav
+      ]),
+      el('div.masthead__actions', null, actions)
+    ]);
+  }
+
+  /* §7: "avatar is mandatory but defaults to a generated avatar". The generated one is the
+     first character of the handle on a tone derived from it — no request, no upload, and
+     nothing about the person in it. A real avatar_path lands in M5 with the profile editor. */
+  function initialFor(who) {
+    var name = who && (who.handle || who.display_name);
+    if (!name) return I18N.lang === 'ar' ? 'ع' : 'M';
+    return String(name).trim().charAt(0).toUpperCase();
+  }
+
+  function avatarTone(handle) {
+    var sum = 0;
+    String(handle || '').split('').forEach(function (c) { sum += c.charCodeAt(0); });
+    var tones = DATA.TONE_NAMES;
+    return tones[sum % tones.length];
+  }
+
+  /* ── Footer ──────────────────────────────────────────────── */
+
+  function renderFooter() {
+    var sections = ARCHIVE.pages();
+
+    mount(qs('#site-footer'), [
+      el('div.site-footer__top', null, [
+        el('div.site-footer__about', null, [
+          el('div.site-footer__mark', { text: t('brand.name') }),
+          el('div.site-footer__mark-sub', { dir: I18N.lang === 'ar' ? 'ltr' : 'rtl', text: t('brand.counterpart') }),
+          el('p.site-footer__blurb', { text: copyText('footer.blurb') })
+        ]),
+        el('nav.site-footer__links', { 'aria-label': t('footer.project') }, [
+          el('div.site-footer__heading', { text: t('footer.project') })
+        ].concat(sections.map(function (section) {
+          return el('a', { href: '/page/' + encodeURIComponent(section.slug), text: pick(section.title) });
+        }))),
+        el('div.donate', null, [
+          el('div.donate__title', { text: copyText('donate.title') }),
+          el('p.donate__blurb', { text: copyText('donate.blurb') }),
+          el('a.btn', { href: '/page/donate', text: t('donate.cta') })
+        ])
+      ]),
+      el('div.site-footer__legal', null, [
+        el('span', { text: t('footer.legal') }),
+        el('span', { dir: I18N.lang === 'ar' ? 'ltr' : 'rtl', text: t('footer.tag') })
+      ])
+    ]);
+  }
+
+  /* ── The feed ────────────────────────────────────────────── */
+
+  /* How many columns the masonry runs at this width — the whole of the grid's responsive
+     behaviour, in one place, for every surface that uses cardGrid().
+
+     The tiers above 1040 were added 6 Sep 2026. Four was the last stop at any width, so a
+     card on a 1920 or 2560 screen grew to two or three times the size it has at 1040 and
+     the archive read as a page that had stopped scaling — which is what §9's "mobile is a
+     faithful echo of desktop" rules out in the other direction too. The tiers keep the card
+     roughly the width it has always had and add columns instead. */
+  function columnCount() {
+    var width = global.innerWidth;
+    if (width < 700) return 2;
+    if (width < 1040) return 3;
+    if (width < 1440) return 4;
+    if (width < 1900) return 5;
+    return 6;
+  }
+
+  /**
+   * One more page of the feed.
+   *
+   * Additive: state.feed accumulates, so the masonry does not reflow what is already read
+   * and the viewer's index stays valid across a load. Guarded by `loadingPage` because the
+   * scroll handler and a deep link can both ask at once.
+   */
+  function loadNextPage(name) {
+    name = name || state.tab;
+    var b = tabState(name);
+    if (b.loading || b.page >= b.pages) return Promise.resolve();
+    b.loading = true;
+    var want = b.page + 1;
+    /* The one line where the four sources differ. Everything after it — the accumulation,
+       the de-duplication, the engagement refresh — is identical, which is the addendum's
+       "no fork of the grid component" applied to the loader as well as to the renderer. */
+    var request = name === 'all' ? ARCHIVE.feedPage(want) : ARCHIVE.categoryPage(name, want);
+    return request.then(function (body) {
+      b.page = body.page;
+      b.pages = body.pages;
+      b.total = body.total;
+      var known = {};
+      b.items.forEach(function (row) { known[row.id] = true; });
+      body.items.forEach(function (row) { if (!known[row.id]) b.items.push(row); });
+      b.loading = false;
+      b.failed = false;
+      return refreshEngagement(body.items.map(function (r) { return r.id; }));
+    }, function (err) {
+      b.loading = false;
+      // Only the FIRST page failing is a broken archive. A later page failing leaves what
+      // is already on screen intact, which is what a reader mid-scroll needs.
+      if (want === 1) {
+        b.failed = true;
+        // state.error blanks the whole screen, so only the ALL feed may set it: that one
+        // failing means the archive is unreadable. A category page failing means one tab is
+        // unreadable, and the reader can still use the other three — so it is reported
+        // inside the grid, where the tab that failed is.
+        if (name === 'all') state.error = err && err.key ? err.key : 'archive.err.generic';
+        else b.error = err && err.key ? err.key : 'archive.err.generic';
+      }
+      throw err;
+    });
+  }
+
+  /**
+   * Page 1 of a tab, once.
+   *
+   * render() calls this for whatever tab is on screen, and render() runs on every language
+   * change and every popstate — so the three guards are what stop a tab whose first page
+   * 404s from re-requesting it on every one of those. `failed` latches; nothing clears it
+   * short of a reload, which is the right answer for a CDN that is not answering.
+   */
+  function ensureFirstPage(name) {
+    var b = tabState(name);
+    if (b.page > 0 || b.loading || b.failed) return;
+    loadNextPage(name).then(function () {
+      if (route() === 'archive' || route() === 'events') render();
+    }, function () {
+      if (route() === 'archive' || route() === 'events') render();
+    });
+  }
+
+  /** The member's own like/save rows for a set of ids. No-op when signed out. */
+  function refreshEngagement(ids) {
+    if (!state.signedIn || !ids || !ids.length) return Promise.resolve();
+    return Promise.all([ENGAGE.likedMap(ids), ENGAGE.savedMap(ids)]).then(function (both) {
+      Object.keys(both[0]).forEach(function (id) { state.liked[id] = true; });
+      Object.keys(both[1]).forEach(function (id) { state.saved[id] = true; });
+    });
+  }
+
+  function badgeFor(entry) {
+    var kind = displayKind(entry);
+    var map = { photo: 'badge--photo', voice: 'badge--voice', video: 'badge--video', event: 'badge--voice' };
+    return el('span.badge ' + map[kind], { text: t('kind.' + kind) });
+  }
+
+  /* The shard carries the schema's `kind` (media|voice|event). What a reader cares about is
+     what they are about to look at, which for `media` depends on the file — the same
+     distinction the moderation queue makes for the same reason.
+
+     Until the M6 addendum this asked the entry for `entry.video`, a key no shard has ever
+     emitted, so every video in the archive wore a photograph's badge and had no play mark
+     on its plate. Nothing on a feed card could have answered the question: the mime that
+     settles it lives on the master asset, and §6 keeps `originals` rows out of every shard.
+     `category` is that answer, derived once at publish time (shards.ts, categoryOf).
+
+     The fallback is deliberately today's behaviour rather than a guess: a card from a
+     release built before the addendum has no `category`, and it reads as a photograph
+     exactly as it did before — wrong for videos, and no more wrong than it already was. */
+  function displayKind(entry) {
+    if (entry.kind === 'event') return 'event';
+    if (entry.kind === 'voice') return 'voice';
+    if (entry.category === 'video') return 'video';
+    return 'photo';
+  }
+
+  function titlePair(row) {
+    return { ar: row.title_ar || row.title_en || '', en: row.title_en || row.title_ar || '' };
+  }
+
+  function decadeLabel(decade) {
+    if (!decade) return '';
+    var key = 'decade.' + decade;
+    var label = t(key);
+    return label === key ? String(decade) : label;
+  }
+
+  /**
+   * A card.
+   *
+   * The whole card is one anchor to /item/{id} — a real URL, so it can be copied, opened in
+   * a new tab, and crawled. That is §2's History API requirement doing work rather than
+   * being satisfied on paper: under hash routing this href was `#/m/<id>`, which no crawler
+   * and no preview fetcher has ever been able to resolve.
+   */
+  function memoryCard(entry) {
+    var title = titlePair(entry);
+    var parts = [];
+
+    var thumb = entry.thumb ? ARCHIVE.mediaUrl(entry.thumb) : null;
+
+    if (displayKind(entry) === 'voice' && !thumb) {
+      parts.push(el('div.memory__voice-head', null, [
+        el('div.memory__voice-avatar', { style: toneStyle(avatarTone(entry.id)) }),
+        el('div.memory__voice-title', null, bdi(pick(title)))
+      ]));
+      parts.push(el('div.waveform', null, [
+        el('span.waveform__play', { 'aria-hidden': 'true', text: '▶' }),
+        ICONS.waveform(130, 24, 7)
+      ]));
+    } else if (thumb) {
+      /* width/height ATTRIBUTES, not CSS. With `width: 100%; height: auto` in the
+         stylesheet, these two do not set the rendered size -- the browser divides them to
+         get an aspect ratio and reserves the right box before a single byte of the image
+         has arrived. Without them a card is zero-height until its thumb decodes and then
+         snaps to full height, which measured as CLS 0.57 on the feed over 3G and dragged
+         the footer up and down four times per load.
+
+         `thumb_w`/`thumb_h` come from the shard (M6). An older shard, or an asset whose
+         dimensions the worker never recorded, has neither -- and then no attribute is set
+         at all and .memory__img's CSS fallback ratio takes over. Setting a guessed number
+         here would reserve the WRONG box, which shifts as badly as reserving none. */
+      var img = el('img.memory__img', {
+        src: thumb,
+        alt: pick(title),
+        loading: 'lazy',
+        decoding: 'async'
+      });
+      if (entry.thumb_w > 0 && entry.thumb_h > 0) {
+        img.setAttribute('width', String(entry.thumb_w));
+        img.setAttribute('height', String(entry.thumb_h));
+      }
+      parts.push(el('div.memory__plate', null, [
+        img,
+        displayKind(entry) === 'video' ? el('span.memory__duration', { text: '▶' }) : null
+      ]));
+    } else {
+      /* No derivative to show. The hatched plate rather than a broken image: an item can be
+         approved with its thumb missing (a takedown that removed the bytes and has not
+         reached this cached release yet), and a broken <img> would read as a site fault.
+
+         0063 splits the caption, because since then the two cases are genuinely different.
+         A photograph with no thumb IS something missing. An event listing without one is
+         complete — §1 lets an event carry no media at all — and captioning it "no preview"
+         would report a fault that does not exist, on the majority of event cards. */
+      parts.push(el('div.memory__plate.plate', {
+        style: toneStyle(avatarTone(entry.id), 'height:220px')
+      }, el('span.mono', {
+        text: t(displayKind(entry) === 'event' ? 'feed.eventNoImage' : 'feed.noPreview')
+      })));
+    }
+
+    var body = [];
+    if (displayKind(entry) !== 'voice' || thumb) {
+      body.push(el('h3.memory__title', null, bdi(pick(title))));
+    }
+    if (gloss(title)) body.push(el('div.memory__gloss.gloss-line', null, bdi(gloss(title))));
+    body.push(el('div.memory__meta', null, [
+      badgeFor(entry),
+      entry.decade ? el('span.era', { text: decadeLabel(entry.decade) }) : null
+    ]));
+    parts.push(el('div.memory__body', null, body));
+
+    return el('a.memory', {
+      href: '/item/' + encodeURIComponent(entry.id),
+      'aria-label': pick(title)
+    }, parts);
+  }
+
+  /**
+   * THE grid. §1 calls for "the same grid language" on all three public surfaces, and the
+   * way that stopped being true was not a redesign: /map built `.grid` with a single
+   * `.grid__col` inside it, which is a one-column flexbox — a plain list wearing the grid's
+   * class names, at every viewport width, while the archive beside it ran four columns.
+   *
+   * So the masonry is one function now rather than a shape each caller reproduces. Columns
+   * come from columnCount(), which is the whole of the responsive behaviour (§9's "mobile
+   * is a faithful echo of desktop", in both directions), and `decorate` is the one thing
+   * the located list adds — a precision line under each card.
+   */
+  function cardGrid(entries, decorate) {
+    var count = columnCount();
+    var columns = [];
+    for (var c = 0; c < count; c++) columns.push([]);
+    entries.forEach(function (entry, i) {
+      var card = memoryCard(entry);
+      if (decorate) decorate(card, entry);
+      columns[i % count].push(card);
+    });
+    return el('div.grid', { dataset: { cols: String(count) } }, columns.map(function (cards) {
+      return el('div.grid__col', null, cards);
+    }));
+  }
+
+  /* ── Tabs and search (M6 addendum) ───────────────────────────
+   *
+   * The nodes the search updates IN PLACE, and the reason they are held rather than
+   * re-rendered: a full render() on every keystroke would rebuild the <input> under the
+   * finger typing into it, losing focus, losing the composition an Arabic keyboard is
+   * mid-way through, and losing the selection. Exactly the argument applyDecade() makes
+   * about rebuilding the slider under a dragging finger, and exactly the reason §10's
+   * mid-range Android is the exit criterion rather than a desktop.
+   *
+   * Cleared by renderArchive() on every mount so a stale node from a previous view can
+   * never be written into after it has left the document.
+   */
+  var archiveNodes = { grid: null, note: null, counts: {} };
+
+  /**
+   * How many of the current matches fall in each tab.
+   *
+   * The one thing that makes within-tab search legible rather than mysterious. Search is
+   * scoped to the active tab (the addendum's §6 decision), so a reader on Videos who
+   * searches for a title that is a photograph gets nothing — and without this they have no
+   * way to know the archive HAS it. With it, "Images ٣" is sitting next to the empty
+   * result, one click away.
+   *
+   * One pass over an array already in memory, so it costs nothing to be honest.
+   */
+  function matchCounts() {
+    var counts = { all: 0, image: 0, video: 0, voice: 0 };
+    (state.results || []).forEach(function (row) {
+      counts.all++;
+      if (row.category && counts[row.category] !== undefined) counts[row.category]++;
+    });
+    return counts;
+  }
+
+  function tabBar() {
+    var searching = Boolean(state.query) && state.results !== null;
+    var counts = searching ? matchCounts() : null;
+    archiveNodes.counts = {};
+
+    return el('nav.tabs', { 'aria-label': t('tabs.label') }, TABS.map(function (name) {
+      var active = name === state.tab;
+      var count = el('span.tab__count', {
+        text: counts ? num(counts[name]) : '',
+        'aria-hidden': 'true'
+      });
+      archiveNodes.counts[name] = count;
+
+      /* An anchor, not a button. The tab is a URL (§2's History API routing), so it can be
+         middle-clicked into a new tab, copied, bookmarked and crawled — and the document's
+         one delegated click handler navigates it like every other internal link.
+
+         `aria-current="page"` rather than the tablist/tab/tabpanel pattern: these do not
+         switch panels within a document, they change the document. Announcing them as tabs
+         would promise a reader arrow-key navigation between panels that do not exist. */
+      return el('a.tab', {
+        href: tabPath(name),
+        'aria-current': active ? 'page' : null,
+        dataset: { tab: name }
+      }, [
+        el('span.tab__label', { text: t('tabs.' + name) }),
+        count
+      ]);
+    }));
+  }
+
+  /* The debounce. One timer for the whole page, cleared on every keystroke, so a reader
+     typing a nine-character Arabic place name filters once rather than nine times. 180ms
+     sits inside the addendum's 150–200 window; below about 120 a fast typist triggers a
+     pass per character and above about 250 the box starts to feel unresponsive. */
+  var SEARCH_DEBOUNCE_MS = 180;
+  var searchTimer = null;
+
+  function scheduleSearch() {
+    global.clearTimeout(searchTimer);
+    searchTimer = global.setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
+  }
+
+  /**
+   * Resolve the current query and repaint the grid — without re-rendering the view.
+   *
+   * `pending` guards against an out-of-order resolution: the index is fetched on the first
+   * keystroke and resolves instantly on every one after it, but the first is a network
+   * request and a reader can type three more characters while it is in flight. Comparing
+   * the query the request was issued for against the one in the box now is what stops the
+   * older, longer-running answer landing on top of the newer one.
+   */
+  function runSearch() {
+    var pending = state.query;
+    if (!pending) {
+      state.results = null;
+      state.searching = false;
+      state.searchFailed = false;
+      paintGrid();
+      return;
+    }
+    state.searching = true;
+    state.searchFailed = false;
+    paintGrid();
+
+    ARCHIVE.search(pending).then(function (rows) {
+      if (state.query !== pending) return;
+      state.results = rows;
+      state.searching = false;
+      paintGrid();
+    }, function () {
+      if (state.query !== pending) return;
+      state.results = [];
+      state.searching = false;
+      state.searchFailed = true;
+      paintGrid();
+    });
+  }
+
+  /** The grid, the note above it and the tab counts, updated in place. Never the input. */
+  function paintGrid() {
+    if (!archiveNodes.grid) return;
+    mount(archiveNodes.grid, archiveBody());
+    if (archiveNodes.note) mount(archiveNodes.note, searchNote());
+
+    var searching = Boolean(state.query) && state.results !== null;
+    var counts = searching ? matchCounts() : null;
+    TABS.forEach(function (name) {
+      var node = archiveNodes.counts[name];
+      if (node) node.textContent = counts ? num(counts[name]) : '';
+    });
+  }
+
+  /* How many result rows are drawn at once.
+
+     A one-character query matches most of the archive, and a few thousand anchors built
+     synchronously is a locked main thread on the device §10 names. The cap is a rendering
+     limit and says so on screen — it never silently narrows what MATCHED, which is the
+     number the note above reports. */
+  var RESULT_LIMIT = 60;
+
+  /**
+   * One search result.
+   *
+   * A row rather than a card, and the reason is in the shard: search-index.json carries
+   * five fields and no thumbnail, deliberately, because that is what lets it be one
+   * unpaginated file fetched on a keystroke (see searchIndexFile in shards.ts). Drawing
+   * cards would mean a thumb per result, which means either a fatter index everybody
+   * downloads or an item shard per match. Uniform rows also mean a result looks the same
+   * whether or not the reader happens to have scrolled far enough to have that card loaded.
+   *
+   * §6: the title is a user string, so it goes through bdi() and textContent like every
+   * other one. Nothing here concatenates the query into markup — the match is computed in
+   * archive.js and never rendered.
+   */
+  function resultRow(row) {
+    var title = titlePair(row);
+    var kind = row.category ? CATEGORY_KIND[row.category] : null;
+
+    return el('a.result', {
+      href: '/item/' + encodeURIComponent(row.id),
+      'aria-label': pick(title)
+    }, [
+      el('span.result__text', null, [
+        el('span.result__title', null, bdi(pick(title))),
+        gloss(title) ? el('span.result__gloss.gloss-line', null, bdi(gloss(title))) : null
+      ]),
+      el('span.result__meta', null, [
+        kind ? el('span.badge badge--' + kind, { text: t('kind.' + kind) }) : null,
+        row.decade ? el('span.era', { text: decadeLabel(row.decade) }) : null
+      ])
+    ]);
+  }
+
+  /** The matches for the ACTIVE tab. See tabBar()'s note on why the scope is the tab. */
+  function scopedResults() {
+    var rows = state.results || [];
+    if (state.tab === 'all') return rows;
+    return rows.filter(function (row) { return row.category === state.tab; });
+  }
+
+  /** The line above the grid: how many matched, and anything the reader should know. */
+  function searchNote() {
+    if (!state.query) return null;
+    if (state.searching && state.results === null) {
+      return el('p.search__note', { role: 'status', text: t('search.working') });
+    }
+    if (state.searchFailed) {
+      return el('p.search__note.search__note--warn', { role: 'status', text: t('search.err') });
+    }
+    var rows = scopedResults();
+    if (!rows.length) return el('p.search__note', { role: 'status', text: t('search.none') });
+    if (rows.length > RESULT_LIMIT) {
+      return el('p.search__note', {
+        role: 'status',
+        text: t('search.capped', { n: num(RESULT_LIMIT), total: num(rows.length) })
+      });
+    }
+    return el('p.search__note', { role: 'status', text: t('search.count', { n: num(rows.length) }) });
+  }
+
+  /**
+   * What sits under the tabs: the results while a query is live, the grid otherwise.
+   *
+   * Search REPLACES the grid rather than filtering it in place, because the two answer
+   * different questions. The grid is everything in this tab, in publication order, paged;
+   * the results are the subset of the whole archive that matches, which is not a prefix of
+   * the grid and mostly is not in it at all.
+   */
+  function archiveBody() {
+    if (state.query) {
+      if (state.searching && state.results === null) return null;
+      var rows = scopedResults().slice(0, RESULT_LIMIT);
+      if (!rows.length) return null;   // searchNote() above already says so
+      return el('div.results', null, rows.map(resultRow));
+    }
+
+    var items = currentItems();
+    if (items.length) return cardGrid(items);
+
+    var b = tabState();
+    var why = state.error || b.error;
+    return el('p.profile__empty', {
+      text: why ? t(why) : t(state.tab === 'all' ? 'feed.empty' : 'tabs.empty')
+    });
+  }
+
+  function searchField() {
+    var input = el('input.input.search__input', {
+      type: 'search',
+      /* `search` gets the clear affordance and the right keyboard; enterkeyhint stops a
+         phone offering "Go" for a box that submits nothing. */
+      enterkeyhint: 'search',
+      autocomplete: 'off',
+      spellcheck: 'false',
+      placeholder: t('search.placeholder'),
+      oninput: function () {
+        state.query = input.value;
+        scheduleSearch();
+      },
+      /* The index is fetched on the FIRST interaction and never on page load (§9's budget
+         counts first paint; this file is not in it). Focus is the earliest honest moment:
+         a reader who has put the cursor in the box is about to type, and a request started
+         now is usually finished before the debounce above fires — so the first keystroke
+         feels instant without anybody who never searches paying for it.
+
+         The error is swallowed: this is a prefetch, and runSearch() is what reports a
+         failure to somebody who has actually asked a question. */
+      onfocus: function () { ARCHIVE.searchIndex().catch(function () {}); },
+      onkeydown: function (event) {
+        // Escape clears the box and returns the grid. The browser's own clear button on a
+        // type=search input fires `input`, so that path needs nothing.
+        if (event.key !== 'Escape' || !input.value) return;
+        input.value = '';
+        state.query = '';
+        runSearch();
+      }
+    });
+    // A property, not the attribute: on an input the attribute is the DEFAULT value, and a
+    // form reset would be the only thing that ever read it. Same reason the decade slider
+    // sets its value this way.
+    input.value = state.query;
+
+    return el('div.search', null, [
+      labelFor(t('search.label'), input),
+      input
+    ]);
+  }
+
+  function renderArchive() {
+    var b = tabState();
+    var more = !state.query && b.page < b.pages;
+
+    // Dropped before the new ones are built. A node from the previous mount is detached the
+    // moment #view is replaced, and writing into one is a repaint nobody sees.
+    archiveNodes = { grid: null, note: null, counts: {} };
+
+    var head = el('section.hero', null, [
+      el('h1.hero__line', { text: copyText('hero.line') }),
+      el('p.hero__blurb', { text: copyText('hero.blurb') }),
+      el('ul.hero__stats', null, [
+        // The tab's own total, not the archive's: the number under the Images tab has to
+        // be the number of images, or it is a figure that contradicts what is beneath it.
+        el('li', { text: t('hero.memories', { n: num(b.total) }) }),
+        el('li', { text: t('hero.decades') })
+      ])
+    ]);
+
+    var controls = el('div.archive-controls', null, [tabBar(), searchField()]);
+
+    archiveNodes.note = el('div.search__note-slot', null, searchNote());
+    archiveNodes.grid = el('div.archive-body', null, archiveBody());
+
+    return el('div', null, [
+      head,
+      controls,
+      archiveNodes.note,
+      archiveNodes.grid,
+      more
+        ? el('div.feed-end', null, [
+            el('span.dot'), el('span.dot'), el('span.dot'),
+            el('span', { text: t('feed.more') })
+          ])
+        : null
+    ]);
+  }
+
+  /* ── Immersive viewer ────────────────────────────────────── */
+
+  /**
+   * The media element for one item shard.
+   *
+   * §6's ladder rule is enforced here on the viewport half: "default to 1080p on desktop,
+   * 720p on mobile … Never auto-serve the top rung to a phone." ARCHIVE.rendition() picks
+   * and, importantly, steps DOWN when the wanted rung is missing rather than up. The
+   * connection half — stepping down on a slow link — is M6's, alongside the performance
+   * pass that can actually measure it.
+   *
+   * The master is never here. §6: originals are not CDN-fronted and are reached only
+   * through the explicit, sign-in-gated, rate-limited download — and shards.ts drops the
+   * `originals` rows before they are written, so there is nothing in this data to reach.
+   */
+  function mediaNode(item) {
+    var wide = global.innerWidth >= 900;
+    var poster = ARCHIVE.role(item.media, 'poster') || ARCHIVE.role(item.media, 'thumb');
+    var posterUrl = poster ? ARCHIVE.mediaUrl(poster.path) : null;
+    var rendition = ARCHIVE.rendition(item.media, wide);
+    var title = pick(titlePair(item));
+
+    if (rendition && rendition.mime && rendition.mime.indexOf('video/') === 0) {
+      return el('video.viewer__media', {
+        src: ARCHIVE.mediaUrl(rendition.path),
+        poster: posterUrl,
+        controls: true,
+        preload: 'none',
+        playsinline: true,
+        'aria-label': title
+      });
+    }
+    if (rendition && rendition.mime && rendition.mime.indexOf('audio/') === 0) {
+      return el('div.viewer__audio', null, [
+        posterUrl ? el('img.viewer__audio-art', { src: posterUrl, alt: title }) : ICONS.waveform(240, 40, 7),
+        el('audio.viewer__media', {
+          src: ARCHIVE.mediaUrl(rendition.path),
+          controls: true, preload: 'none', 'aria-label': title
+        })
+      ]);
+    }
+    if (rendition) {
+      return el('img.viewer__media', {
+        src: ARCHIVE.mediaUrl(rendition.path),
+        alt: title, decoding: 'async'
+      });
+    }
+    if (posterUrl) return el('img.viewer__media', { src: posterUrl, alt: title, decoding: 'async' });
+    return el('div.viewer__plate.plate--deep', { style: toneStyle(avatarTone(item.id)) },
+      el('span.mono', { text: t('feed.noPreview') }));
+  }
+
+  function viewerSlide(entry) {
+    var title = titlePair(entry);
+    var slide = el('div.viewer__slide', { dataset: { id: entry.id } }, [
+      el('div.viewer__media-wrap', null,
+        entry.thumb
+          ? el('img.viewer__media', { src: ARCHIVE.mediaUrl(entry.thumb), alt: pick(title), decoding: 'async' })
+          : el('div.viewer__plate.plate--deep', { style: toneStyle(avatarTone(entry.id)) },
+              el('span.mono', { text: t('feed.noPreview') }))),
+      el('div.viewer__caption', null, [
+        el('h2.viewer__title', null, bdi(pick(title))),
+        gloss(title) ? el('div.viewer__gloss.gloss-line', null, bdi(gloss(title))) : null,
+        el('div.viewer__meta', null, [
+          el('span.badge', { text: t('kind.' + displayKind(entry)) }),
+          entry.decade ? el('span.era', { text: decadeLabel(entry.decade) }) : null,
+          el('span.viewer__place')
+        ]),
+        /* Empty until the item shard lands (upgradeSlide). §9's prerendered page has
+           carried body_ar/body_en since M3 and this view never did, so a reader arriving
+           from a shared link watched the description DISAPPEAR as the SPA hydrated over
+           the page they had just read. The description is the archival metadata §9 makes
+           a required field on upload; the surface that shows a memory has to show it. */
+        el('div.viewer__body')
+      ])
+    ]);
+    return slide;
+  }
+
+  /** Replaces a slide's thumbnail with the real media once the item shard is in. */
+  function upgradeSlide(item) {
+    var slide = qs('.viewer__slide[data-id="' + cssEscape(item.id) + '"]');
+    if (!slide) return;
+    mount(qs('.viewer__media-wrap', slide), mediaNode(item));
+    var place = qs('.viewer__place', slide);
+    if (place) {
+      place.textContent = pick({ ar: item.place_ar || '', en: item.place_en || '' });
+    }
+
+    /* The description, in the reader's language with the other side as the fallback — the
+       same pick/titlePair rule the title uses, because a contributor writes in one language
+       and an empty panel is worse than one in the language they had.
+
+       Split on blank lines into paragraphs, exactly as prerender.ts does, so the shared
+       page and the hydrated view break the text in the same places. bdi() and textContent
+       throughout (§6): this is user prose, the longest user string in the system, and the
+       one most likely to contain something that looks like markup. */
+    var body = qs('.viewer__body', slide);
+    if (body) {
+      var prose = pick({
+        ar: item.body_ar || item.body_en || '',
+        en: item.body_en || item.body_ar || ''
+      });
+      mount(body, prose
+        ? String(prose).split(/\n\s*\n/).map(function (para) {
+            return el('p.viewer__para', null, bdi(para));
+          })
+        : null);
+    }
+  }
+
+  /* CSS.escape is not in every browser this has to run on, and the only values passed here
+     are post uuids — but a selector built from data is a selector built from data, and the
+     day one of these is a slug rather than a uuid this is what stops it being an injection
+     into querySelector. */
+  function cssEscape(value) {
+    return String(value).replace(/["\\]/g, '\\$&');
+  }
+
+  function railAction(glyph, label, description, onActivate, pressed) {
+    var locked = !state.signedIn;
+    return el('button.rail-action', {
+      type: 'button',
+      onclick: onActivate,
+      'aria-pressed': pressed == null ? null : (pressed ? 'true' : 'false'),
+      'aria-label': locked ? description + ' — ' + t('action.signIn') : description
+    }, [
+      el('span.rail-action__glyph', null, [
+        glyph,
+        locked ? el('span.padlock', null, ICONS.lock('#26281F')) : null
+      ]),
+      el('span.rail-action__label', { text: label })
+    ]);
+  }
+
+  /** The published like count plus this session's own delta. See state.likeDelta. */
+  function likeCount(entry) {
+    var baked = (entry && (entry.likes != null ? entry.likes : 0)) || 0;
+    return baked + (state.likeDelta[entry.id] || 0);
+  }
+
+  function viewerRail(entry) {
+    var liked = Boolean(state.liked[entry.id]);
+    var saved = Boolean(state.saved[entry.id]);
+    return [
+      railAction(el('span', { text: liked ? '♥' : '♡' }), num(likeCount(entry)), t('viewer.like'),
+        contribute(function () { toggleLike(entry); }), liked),
+      railAction(el('span', { text: saved ? '★' : '✩' }), t('viewer.save'), t('viewer.save'),
+        contribute(function () { toggleSave(entry); }), saved),
+      railAction(el('span', { text: '⚑' }), t('viewer.report'), t('viewer.report'),
+        guard(function () { openReport('post', entry.id); }))
+    ];
+  }
+
+  /* What the viewer scrolls through: the deep-linked item, if it is not already in the
+     feed, followed by the feed itself. One function so the scroller, the chrome and the
+     index arithmetic cannot disagree about the list they are indexing into. */
+  function viewerList() {
+    /* The ACTIVE tab's items, not the whole feed. A reader who opened a memory from the
+       Videos tab scrolls on through videos — the viewer continues the list they were
+       reading rather than silently widening it back to the archive, which would be the same
+       surprise as a tab that stops applying once you click something in it. */
+    var list = currentItems();
+    if (!state.lead) return list;
+    return [state.lead].concat(list.filter(function (r) { return r.id !== state.lead.id; }));
+  }
+
+  function renderViewerChrome(index) {
+    var list = viewerList();
+    var entry = list[index];
+    var overlay = qs('#viewer');
+    if (!overlay || !entry) return;
+
+    qs('.viewer__position', overlay).textContent =
+      num(index + 1) + ' / ' + num(list.length);
+
+    mount(qs('.viewer__rail', overlay), viewerRail(entry));
+    mount(qs('.viewer__comments', overlay), commentsPanel(entry));
+  }
+
+  /* ── Comments ────────────────────────────────────────────── */
+
+  function commentRow(comment) {
+    var who = comment.author || {};
+    var name = who.display_name || who.handle || '';
+    var avatar = el('span.comment__avatar', {
+      style: toneStyle(avatarTone(who.handle || comment.id)),
+      text: initialFor(who)
+    });
+
+    return el('li.comment', null, [
+      who.handle
+        ? el('a.profile-link', { href: '/u/' + encodeURIComponent(who.handle), tabindex: '-1' }, avatar)
+        : avatar,
+      el('div', null, [
+        el('div.comment__head', null, [
+          who.handle
+            ? el('a.profile-link', { href: '/u/' + encodeURIComponent(who.handle) },
+                el('span.comment__name', null, bdi(name)))
+            : el('span.comment__name', null, bdi(name || t('comments.someone'))),
+          el('span.comment__when', { text: I18N.day(comment.day) }),
+          comment.justPosted ? el('span.privacy-flag', { text: t('comments.justPosted') }) : null
+        ]),
+        el('p.comment__body', null, bdi(comment.body))
+      ])
+    ]);
+  }
+
+  /**
+   * The thread.
+   *
+   * Published comments come from the item shard, so a signed-out visitor reads them with no
+   * database at all (§2). A signed-in member additionally sees their own comments that the
+   * shard does not carry YET — because a comment that vanished on submit reads as a comment
+   * that was lost.
+   *
+   * That gap changed shape in 0054 and the filter had to change with it. It used to be
+   * "status is not published", which was the same set as "not in the shard" while a comment
+   * waited for a moderator. A comment is published on insert now, so that test selects
+   * nothing at all, and the member's own remark would disappear from the thread for as long
+   * as it takes the next release to reach the CDN.
+   *
+   * The honest test is the one the sentence above actually says: not present in the shard,
+   * by id. It closes on its own when the release lands, it does not double-render a comment
+   * that IS in the shard, and it deliberately keeps hidden and removed ones out — a
+   * moderator's decision must not be undone for the author by a local merge.
+   */
+  function commentsPanel(entry) {
+    var item = state.items[entry.id];
+    var rows = (item && item.comments) || [];
+    var mine = (item && item._mine) || [];
+
+    var inShard = {};
+    rows.forEach(function (r) { if (r && r.id) inShard[r.id] = true; });
+
+    var all = rows.concat(mine.filter(function (m) {
+      return m.status === 'published' && !inShard[m.id];
+    }).map(function (m) {
+      return {
+        id: m.id, body: m.body, day: m.created_on,
+        author: { handle: null, display_name: t('comments.you') },
+        justPosted: true
+      };
+    }));
+
+    var list = all.length
+      ? el('ul.comments__list', null, all.map(commentRow))
+      : el('div.comments__list', null, el('p.comments__empty', { text: t('comments.empty') }));
+
+    return [
+      el('div.comments__head', null, [
+        el('div.comments__count', null, [
+          t('comments.title') + ' ',
+          el('b', { text: num(item ? item.comment_count : (entry.comments || 0)) })
+        ]),
+        el('div.comments__subject', null, bdi(pick(titlePair(entry))))
+      ]),
+      list,
+      !state.signedIn
+        ? lockedPrompt(t('comments.locked'), function () { openGate(); })
+        /* 0060. The prompt rather than a disabled box: a member typing a remark and then
+           being refused has spent the effort before learning the rule, and the refusal
+           they would get is a bare RLS 403 with nothing in it about email. */
+        : !confirmedEnough()
+        ? lockedPrompt(t('confirm.locked'), function () { openConfirmDialog(null); })
+        : commentForm(entry)
+    ];
+  }
+
+  function commentForm(entry) {
+    var input = el('textarea.input.comment-form__input', {
+      rows: '2',
+      placeholder: t('comments.placeholder'),
+      'aria-label': t('comments.title')
+    });
+    var note = el('p.form-error', { role: 'alert', hidden: true });
+    var button = el('button.btn.btn--primary', { type: 'submit', text: t('comments.send') });
+
+    return el('form.comment-form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        note.hidden = true;
+        button.disabled = true;
+        ENGAGE.comment(entry.id, input.value, I18N.lang).then(function () {
+          input.value = '';
+          button.disabled = false;
+          UI.toast(t('comments.sent'));
+          // Re-read the member's own comments so the pending one appears where they left it.
+          return loadOwnComments(entry.id).then(function () {
+            if (state.viewer) renderViewerChrome(state.viewer.index);
+          });
+        }).catch(function (err) {
+          button.disabled = false;
+          note.textContent = t(err && err.key ? err.key : 'admin.err.generic');
+          note.hidden = false;
+        });
+      }
+    }, [input, note, el('div.comment-form__actions', null, [
+      el('span.review-note', { text: t('comments.reviewNote') }),
+      button
+    ])]);
+  }
+
+  function loadOwnComments(id) {
+    if (!state.signedIn) return Promise.resolve();
+    return ENGAGE.myComments(id).then(function (rows) {
+      if (!state.items[id]) return;
+      state.items[id]._mine = rows;
+    });
+  }
+
+  /* ── Viewer plumbing ─────────────────────────────────────── */
+
+  function openViewer(index) {
+    /* Never two. `qs('#overlays').appendChild` below stacks rather than replaces, and
+       openViewerFor() can reach here twice for one landing: render() runs once before the
+       feed page has loaded and again after it, and on a deep link BOTH passes miss the feed
+       and start their own shard fetch, so both continuations opened an overlay. Measured
+       13 Sep on a direct /item/{id} load — six slides for a three-item archive, the second
+       set never upgraded, so whichever one the reader ended up on carried no media, no
+       comments and NO DESCRIPTION, and the address bar named a different memory than the
+       one on the screen. Racy, so it reproduced on some loads and not others. */
+    closeViewer();
+    state.viewer = { index: index };
+
+    var scroller = el('div.viewer__scroller', { onscroll: onViewerScroll },
+      viewerList().map(viewerSlide));
+
+    var overlay = el('div.viewer', {
+      id: 'viewer', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('nav.archive')
+    }, [
+      el('div.viewer__stage', null, [
+        scroller,
+        el('div.viewer__topbar', null, [
+          el('a.viewer__close', { href: backTarget(), text: backLabel() }),
+          el('span.viewer__position')
+        ]),
+        el('div.viewer__rail'),
+        el('div.viewer__hint', null, el('span', { text: t('viewer.next') }))
+      ]),
+      el('aside.viewer__comments')
+    ]);
+
+    qs('#overlays').appendChild(overlay);
+    global.document.body.style.setProperty('overflow', 'hidden');
+    renderViewerChrome(index);
+    focusItem(index);
+
+    scroller.scrollTop = slideOffset(scroller, index);
+
+    state.releaseTrap = UI.trapFocus(overlay, leaveViewer);
+    global.addEventListener('keydown', onViewerKey);
+  }
+
+  /* Escape and the back button do the same thing, and until 6 Sep 2026 they did not:
+     Escape called closeViewer() directly, which removes the overlay and leaves the address
+     bar on /item/{id}. The reader was then looking at the archive at a URL naming a memory
+     — so a refresh reopened the viewer they had just dismissed, and the link they would
+     have copied was not the page in front of them. */
+  function leaveViewer() {
+    var to = backTarget();
+    if (to === path()) { closeViewer(); return; }
+    navigate(to);
+  }
+
+  /** Fetches the item shard for the focused slide and upgrades it in place. */
+  function focusItem(index) {
+    var entry = viewerList()[index];
+    if (!entry) return;
+    if (state.items[entry.id]) {
+      upgradeSlide(state.items[entry.id]);
+      renderViewerChrome(index);
+      return;
+    }
+    ARCHIVE.item(entry.id).then(function (item) {
+      if (!item) return;
+      state.items[entry.id] = item;
+      return loadOwnComments(entry.id).then(function () {
+        // The reader may have scrolled on while this was in flight.
+        if (!state.viewer || viewerList()[state.viewer.index] !== entry) return;
+        upgradeSlide(item);
+        renderViewerChrome(index);
+      });
+    }, function () { /* a slide that could not load its shard keeps its thumbnail */ });
+  }
+
+  /* ── Where a slide starts, and which one the reader is on ──
+   *
+   * Both were `index * scroller.clientHeight`, exact only while every slide is one
+   * scrollport tall — true on a desktop and, since 13 Sep 2026, false on a phone, where a
+   * slide is `min-block-size: 100%` with `block-size: auto` because the photograph, the
+   * caption and the comments do not fit one screenful of a 375px device. With variable
+   * heights that arithmetic addresses the wrong slide: a shared link opened the memory
+   * BEFORE the one it named, which reads as a loading bug.
+   *
+   * The scroller's children are exactly the slides, and it is `position: absolute`, so it is
+   * their offsetParent and `offsetTop` is already relative to it.
+   */
+  function slideOffset(scroller, index) {
+    var slide = scroller.children[index];
+    return slide ? slide.offsetTop : 0;
+  }
+
+  /* The slide the TOP EDGE of the scrollport is inside — not the nearest slide start. On a
+     phone a slide can be taller than the scrollport, and a reader half way down one is
+     still reading it; nearest-start would hand them the next item's id while the thing they
+     are looking at has not moved. */
+  function viewerIndexAt(scroller) {
+    var slides = scroller.children;
+    for (var i = slides.length - 1; i >= 0; i--) {
+      if (slides[i].offsetTop <= scroller.scrollTop + 1) return i;
+    }
+    return 0;
+  }
+
+  var scrollSettle = null;
+  function onViewerScroll(event) {
+    global.clearTimeout(scrollSettle);
+    var scroller = event.currentTarget;
+    scrollSettle = global.setTimeout(function () {
+      /* The scroller this event came from may no longer be the one on the screen: render()
+         closes and reopens the viewer on every pass over /item/{id}, and the 90ms settle
+         below outlives the overlay. A DETACHED element reports offsetTop 0 for every child
+         and clientHeight 0 for itself, so the stale event resolved to the LAST slide —
+         which is how a deep link ended up announcing "3 / 3" and replaceState-ing a
+         different memory's id into the address bar while the reader was on the first. */
+      if (!state.viewer || scroller !== qs('.viewer__scroller')) return;
+      var list = viewerList();
+      var index = Math.max(0, Math.min(list.length - 1, viewerIndexAt(scroller)));
+      if (index === state.viewer.index) return;
+      state.viewer.index = index;
+      renderViewerChrome(index);
+      focusItem(index);
+      // replaceState: scrolling is not navigation, and a history entry per slide would make
+      // Back walk the reader up through the feed instead of out of the viewer.
+      navigateReplaceItem(list[index].id);
+      // Near the end, pull the next page in so the scroller keeps going.
+      if (index >= list.length - 3) loadMoreIntoViewer();
+    }, 90);
+  }
+
+  function navigateReplaceItem(id) {
+    global.history.replaceState(null, '', '/item/' + encodeURIComponent(id));
+  }
+
+  function loadMoreIntoViewer() {
+    var b = tabState();
+    if (b.page >= b.pages) return;
+    var before = viewerList().length;
+    loadNextPage().then(function () {
+      var scroller = qs('.viewer__scroller');
+      if (!scroller) return;
+      viewerList().slice(before).forEach(function (entry) {
+        scroller.appendChild(viewerSlide(entry));
+      });
+      if (state.viewer) renderViewerChrome(state.viewer.index);
+    }).catch(function () { /* the reader keeps what is already loaded */ });
+  }
+
+  function onViewerKey(event) {
+    if (!state.viewer) return;
+    var scroller = qs('.viewer__scroller');
+    if (!scroller) return;
+    if (event.key === 'ArrowDown' || event.key === 'PageDown') {
+      event.preventDefault();
+      scroller.scrollBy({ top: scroller.clientHeight, behavior: 'smooth' });
+    } else if (event.key === 'ArrowUp' || event.key === 'PageUp') {
+      event.preventDefault();
+      scroller.scrollBy({ top: -scroller.clientHeight, behavior: 'smooth' });
+    }
+  }
+
+  function closeViewer() {
+    /* Captured before state.viewer is cleared: §9 asks for focus restore, and "restore"
+       means the card this viewer was opened on, not merely something focusable. */
+    var open = state.viewer ? viewerList()[state.viewer.index] : null;
+
+    var overlay = qs('#viewer');
+    if (overlay) overlay.remove();
+    global.removeEventListener('keydown', onViewerKey);
+    global.document.body.style.removeProperty('overflow');
+    state.viewer = null;
+    if (state.releaseTrap) {
+      /* Resolved at release time rather than passed as a node, because the archive
+         re-renders on the way in and out of /item/{id} and every card is a different
+         element by now. UI.trapFocus prefers the original opener when it is still
+         connected and falls back to this only when it is not — which, for the viewer,
+         is every time. */
+      state.releaseTrap(function () {
+        if (open) {
+          var card = qs('a.memory[href="/item/' + encodeURIComponent(open.id) + '"]');
+          if (card) return card;
+        }
+        /* No card — a deep link the feed does not contain, or an empty archive. Any other
+           card, then the wordmark, both of which are real links. Deliberately NOT #view:
+           it is a plain <div>, focus() on it is a no-op, and the result would be <body>
+           again with a comment claiming otherwise. */
+        return qs('.memory') || qs('.wordmark');
+      });
+      state.releaseTrap = null;
+    }
+  }
+
+  /* ── Engagement ──────────────────────────────────────────── */
+
+  function toggleLike(entry) {
+    var on = !state.liked[entry.id];
+    state.liked[entry.id] = on;
+    state.likeDelta[entry.id] = (state.likeDelta[entry.id] || 0) + (on ? 1 : -1);
+    if (state.viewer) renderViewerChrome(state.viewer.index);
+
+    ENGAGE.setLike(entry.id, on).catch(function (err) {
+      // Put it back. An optimistic update that survives a refusal is a client telling a
+      // member their like was recorded when the database said no (§5).
+      state.liked[entry.id] = !on;
+      state.likeDelta[entry.id] = (state.likeDelta[entry.id] || 0) + (on ? -1 : 1);
+      if (state.viewer) renderViewerChrome(state.viewer.index);
+      UI.toast(t(err && err.key ? err.key : 'admin.err.generic'));
+    });
+  }
+
+  function toggleSave(entry) {
+    var on = !state.saved[entry.id];
+    state.saved[entry.id] = on;
+    if (state.viewer) renderViewerChrome(state.viewer.index);
+    ENGAGE.setSave(entry.id, on).catch(function (err) {
+      state.saved[entry.id] = !on;
+      if (state.viewer) renderViewerChrome(state.viewer.index);
+      UI.toast(t(err && err.key ? err.key : 'admin.err.generic'));
+    });
+  }
+
+  /* §4 gives moderators "review reports"; until M3 nothing could create one.
+     M5 adds the second kind beside it (migration 0053): a removal request.
+
+     The same dialog rather than a second one, because to the person opening it these are
+     one question — "this should not be here" — and the difference is which obligation it
+     creates on the other side, not which form they fill in. It is a chooser rather than
+     two entry points for the same reason §7 gives about who asks: the person with the
+     strongest claim over a photograph is often not its uploader, and they will not go
+     looking for a specially-named control. */
+  function openReport(targetType, targetId) {
+    var scrim;
+    function close() { closeOverlay(scrim); }
+
+    var kindSelect = el('select.input', null,
+      ['abuse', 'removal'].map(function (id) {
+        return el('option', { value: id, selected: id === 'abuse' ? true : null,
+                              text: t('rp.kind.' + id) });
+      }));
+    var kindNote = el('p.field__hint', { text: t('report.kindNote.abuse') });
+    kindSelect.addEventListener('change', function () {
+      kindNote.textContent = t('report.kindNote.' + kindSelect.value);
+    });
+
+    var reason = el('textarea.input', {
+      rows: '3', required: true, placeholder: t('report.placeholder'), 'aria-label': t('report.reason')
+    });
+    var note = el('p.form-error', { role: 'alert', hidden: true });
+
+    var form = el('form.dialog.dialog--form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        note.hidden = true;
+        ENGAGE.report(targetType, targetId, reason.value, kindSelect.value).then(function () {
+          close();
+          UI.toast(t('report.sent'));
+        }).catch(function (err) {
+          note.textContent = t(err && err.key ? err.key : 'admin.err.generic');
+          note.hidden = false;
+        });
+      }
+    }, [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: t('report.title') }),
+          el('p.dialog__blurb', { text: t('report.blurb') })
+        ]),
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
+      ]),
+      el('div.field', null, [
+        labelFor(t('report.kind'), kindSelect),
+        kindSelect,
+        kindNote
+      ]),
+      reason,
+      note,
+      el('div.dialog__actions', null, [
+        el('button.btn.btn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
+        el('button.btn.btn--primary', { type: 'submit', text: t('report.submit') })
+      ])
+    ]);
+
+    scrim = overlayShell('scrim', [form], close);
+  }
+
+  /** Wraps a member-only action so a signed-out visitor gets the gate instead (§9). */
+  function guard(action) {
+    return function () {
+      if (!state.signedIn) { openGate(action); return; }
+      action();
+    };
+  }
+
+  /* ── 0060 · a confirmed address ──────────────────────────────
+
+     What is gated and what is NOT, because the line matters more than the mechanism.
+
+     Gated: share, comment, like, save — the four writes migration 0060 gates in the
+     database, and this is the client half that explains the refusal instead of producing
+     it. Step B, answered 5 Sep 2026.
+
+     NOT gated: reporting. §4 gives moderators "review reports" and §7 makes the removal
+     request the control a person IN a photograph reaches for — often somebody who has just
+     made an account for that one purpose. Gating a report behind a mail round trip would
+     silence exactly the person the control exists for. `guard()` above stays sign-in-only
+     and openReport keeps using it.
+
+     This is not the boundary either way. The boundary is 0060's policies and the trigger on
+     posts; a browser that skipped all of this would be refused by Postgres. §5: the sign-in
+     gate and the admin UI are UX only, never a guard, and so is this. */
+
+  /** False ONLY when we have been told so. See state.confirmed on why null passes. */
+  function confirmedEnough() { return state.confirmed !== false; }
+
+  /** Sign-in, then a confirmed address, then the action (§9 preserves the intent through both). */
+  function contribute(action) {
+    return function () {
+      if (!state.signedIn) { openGate(contribute(action)); return; }
+      if (!confirmedEnough()) { openConfirmDialog(action); return; }
+      action();
+    };
+  }
+
+  /**
+   * Ask the database whether this account has confirmed, and remember the answer.
+   *
+   * Not from the JWT, and there must never be a claim for it — §4's argument about role
+   * applies unchanged: a token is a snapshot, and a member who confirms in another tab
+   * would otherwise wait an hour for a refresh before the archive believed them.
+   *
+   * A failure leaves `confirmed` null, which passes. Stated at the state field and again
+   * here because the two halves are in different places and only one of them looks wrong.
+   */
+  function loadConfirmation() {
+    if (!state.signedIn) return Promise.resolve(null);
+    var id = state.account && state.account.id;
+    return DB.rpc('email_confirmation_status', {}).then(function (row) {
+      if (!state.account || state.account.id !== id) return null;   // signed out mid-flight
+      state.confirmed = row && typeof row.confirmed === 'boolean' ? row.confirmed : null;
+      return state.confirmed;
+    }, function () { return null; });
+  }
+
+  /* The Edge Function. Same shape as upload.js's post(): the anon key as apikey, the
+     member's own token as the bearer, and the refusal read from the body rather than the
+     status — resend-confirmation names its own. */
+  var CONFIRM_REFUSALS = {
+    too_soon: 'confirm.err.tooSoon',
+    already_confirmed: 'confirm.err.already',
+    over_email_send_rate_limit: 'confirm.err.mailLimit',
+    no_address: 'confirm.err.noAddress',
+    captcha_failed: 'confirm.err.captcha',
+    unauthenticated: 'auth.err.signedOut'
+  };
+
+  function sendConfirmation(captcha) {
+    return AUTH.accessToken().then(function (token) {
+      return global.fetch(
+        global.CONFIG.origins.supabase + '/functions/v1/resend-confirmation',
+        {
+          method: 'POST',
+          headers: {
+            apikey: global.CONFIG.supabase.anonKey,
+            Authorization: 'Bearer ' + token,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ turnstile_token: captcha })
+        }
+      );
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) {
+        if (res.ok) return body;
+        var e = new Error('confirm');
+        e.key = CONFIRM_REFUSALS[body && body.error] || 'confirm.err.generic';
+        throw e;
+      });
+    }, function () {
+      var e = new Error('confirm');
+      e.key = 'auth.err.offline';
+      throw e;
+    });
+  }
+
+  /**
+   * The screen a member meets instead of the thing they pressed.
+   *
+   * §9 says the gate preserves intent, and this is a second gate in front of the same
+   * actions — so it carries the pending action the same way openGate does, and runs it once
+   * the address is confirmed. A member who pressed Share and then confirmed lands back on
+   * the share sheet rather than on the archive wondering where it went.
+   *
+   * The resend is IN the dialog rather than described in it. A screen that says "check your
+   * email" and offers no way to be sent another one is a dead end for the exact member who
+   * needs it — the one whose link never arrived.
+   */
+  function openConfirmDialog(intent) {
+    var scrim;
+    var widget = null;
+    var busy = false;
+
+    function close() { closeOverlay(scrim); if (widget) widget.remove(); }
+
+    function resume() {
+      close();
+      if (typeof intent === 'function') {
+        try { intent(); } catch (e) { /* a stale intent must not break the confirmation */ }
+      }
+    }
+
+    var note = el('p.form-status', { role: 'status', hidden: true });
+    var error = el('p.form-error', { role: 'alert', hidden: true });
+    var captchaSlot = el('div.captcha');
+
+    function say(node, key) {
+      note.hidden = true; error.hidden = true;
+      node.textContent = t(key);
+      node.hidden = false;
+    }
+
+    var sendButton = el('button.btn.btn--primary.btn--block', {
+      type: 'button',
+      onclick: function () {
+        if (busy) return;
+        busy = true;
+        sendButton.disabled = true;
+        sendButton.textContent = t('auth.working');
+        widget.token().then(sendConfirmation).then(function () {
+          say(note, 'confirm.sent');
+        }).catch(function (err) {
+          say(error, (err && err.key) || 'confirm.err.generic');
+        }).then(function () {
+          busy = false;
+          sendButton.disabled = false;
+          sendButton.textContent = t('confirm.send');
+          /* Single-use, and just spent — whether it succeeded or not. Same reasoning as
+             openAuth: without the reset, a second press sends a token Cloudflare has
+             already judged and the member is told the human check failed. */
+          if (widget) widget.reset();
+        });
+      },
+      text: t('confirm.send')
+    });
+
+    var recheckButton = el('button.btn.btn--ghost.btn--block', {
+      type: 'button',
+      onclick: function () {
+        recheckButton.disabled = true;
+        loadConfirmation().then(function (ok) {
+          recheckButton.disabled = false;
+          if (ok === true) { UI.toast(t('confirm.done')); render(); resume(); return; }
+          say(error, 'confirm.stillNo');
+        });
+      },
+      text: t('confirm.recheck')
+    });
+
+    scrim = overlayShell('scrim', [
+      el('div.dialog.dialog--gate', null, [
+        el('div.dialog__lock', null, ICONS.lockLarge('#A67B24')),
+        el('h2.dialog__title', { text: t('confirm.title') }),
+        el('p.dialog__blurb', null, [
+          t('confirm.blurb') + ' ',
+          /* §9's bidi rule. An address is user content on a right-to-left line and an
+             unwrapped one reorders the moment it meets Arabic punctuation. */
+          el('bdi', { text: (state.account && state.account.email) || '' })
+        ]),
+        el('p.dialog__foot', { text: t('confirm.hint') }),
+        captchaSlot,
+        note,
+        error,
+        sendButton,
+        recheckButton,
+        el('button.dialog__opt-out', {
+          type: 'button', onclick: close, text: t('gate.keep')
+        })
+      ])
+    ], close);
+
+    widget = TURNSTILE.mount(captchaSlot);
+    return scrim;
+  }
+
+  /**
+   * A signed-out or unconfirmed reader's view of a control they cannot use yet.
+   *
+   * One shape for both, because to the person reading it they are one thing — "not yet" —
+   * and the difference is which screen opens next. It was the signed-out comment box's
+   * markup; 0060 gave it a second caller rather than a second copy.
+   */
+  function lockedPrompt(label, onClick) {
+    return el('button.locked-prompt', { type: 'button', onclick: onClick }, [
+      el('span.locked-prompt__lock', null, ICONS.lock('#26281F')),
+      el('span', { text: label })
+    ]);
+  }
+
+  /* ── Gate & auth ─────────────────────────────────────────── */
+
+  function overlayShell(className, contents, onDismiss) {
+    var scrim = el('div.' + className, { role: 'dialog', 'aria-modal': 'true' }, contents);
+    scrim.addEventListener('mousedown', function (event) {
+      if (event.target === scrim && onDismiss) onDismiss();
+    });
+    qs('#overlays').appendChild(scrim);
+    scrim._release = UI.trapFocus(scrim, onDismiss);
+    return scrim;
+  }
+
+  function closeOverlay(node) {
+    if (!node) return;
+    if (node._release) node._release();
+    node.remove();
+  }
+
+  function openGate(intent) {
+    state.pending = typeof intent === 'function' ? { run: intent } : null;
+    var scrim = overlayShell('scrim', [
+      el('div.dialog.dialog--gate', null, [
+        el('div.dialog__lock', null, ICONS.lockLarge('#A67B24')),
+        el('h2.dialog__title', { text: t('gate.title') }),
+        el('p.dialog__blurb', { text: t('gate.blurb') }),
+        el('button.btn.btn--primary.btn--block', {
+          type: 'button',
+          onclick: function () { closeOverlay(scrim); openAuth('signup'); },
+          text: t('gate.create')
+        }),
+        el('button.btn.btn--ghost.btn--block', {
+          type: 'button',
+          onclick: function () { closeOverlay(scrim); openAuth('login'); },
+          text: t('action.signIn')
+        }),
+        el('button.dialog__opt-out', {
+          type: 'button', onclick: function () { closeOverlay(scrim); }, text: t('gate.keep')
+        })
+      ])
+    ], function () { closeOverlay(scrim); });
+    return scrim;
+  }
+
+  /* socialRow() lived here. CLAUDE.md §2 is unambiguous — "Auth | Supabase Auth, email +
+     password only" — and the Google and Apple buttons were prototype decoration wired to a
+     toast. Removed rather than hidden: a disabled social button is a promise, and this
+     archive is not going to hand a third-party identity provider the list of who
+     contributes to it (§7). */
+
+  function field(labelText, inputProps, extras) {
+    inputProps = inputProps || {};
+    inputProps['class'] = 'input' + (inputProps.email ? ' input--email' : '');
+    delete inputProps.email;
+    var control = el(inputProps.multiline ? 'textarea' : 'input', stripMultiline(inputProps));
+    var label = labelFor(labelText, control);
+    return el('div.field', null, [
+      extras ? el('div.field__row', null, [label, extras]) : label,
+      control
+    ]);
+  }
+
+  function stripMultiline(props) {
+    var copy = {};
+    Object.keys(props).forEach(function (key) { if (key !== 'multiline') copy[key] = props[key]; });
+    return copy;
+  }
+
+  /* Three modes, one dialog. `reset` joined signup and login on 3 Sep 2026 rather than
+     opening a fourth overlay of its own: it needs the same shell, the same Turnstile mount,
+     the same single-use-token reset after a failure and the same "the panel replaces the
+     form" ending, and a second copy of all four is a second copy to get wrong.
+
+     `opts.email` prefills the address. Used by the account panel on /me, where the member
+     is signed in and we already know which address the link has to go to — asking them to
+     type it again would be asking a question we know the answer to. */
+  var AUTH_COPY = {
+    signup: { title: 'signup.title', blurb: 'signup.blurb', submit: 'signup.submit' },
+    login:  { title: 'login.title',  blurb: 'login.blurb',  submit: 'login.submit' },
+    reset:  { title: 'reset.title',  blurb: 'reset.blurb',  submit: 'reset.submit' }
+  };
+
+  function openAuth(mode, opts) {
+    var scrim;
+    var copy = AUTH_COPY[mode] || AUTH_COPY.login;
+    opts = opts || {};
+    function close() { closeOverlay(scrim); if (widget) widget.remove(); }
+
+    /* §6: Turnstile on signup. It is mounted for sign-in too — credential stuffing against
+       a password endpoint is the same bot problem, and the widget is invisible when the
+       visitor is unremarkable. */
+    var captchaSlot = el('div.captcha');
+    var widget = null;
+
+    var errorNote = el('p.form-error', { role: 'alert', hidden: true });
+    function showError(key, vars) {
+      /* One remap, and it earns its place: auth.err.mailLimit says "confirmation email",
+         which is the wrong noun on a screen where the member is waiting for a RESET link
+         and would reasonably read it as having been sent somewhere else. Same 429, same
+         honesty about the limit being ours, different word for the thing that did not
+         arrive. */
+      if (mode === 'reset' && key === 'auth.err.mailLimit') key = 'reset.err.mailLimit';
+      /* textContent, never markup — §6. These strings are ours, but the habit is the
+         defence: the day one of them interpolates a server value, this is already safe. */
+      errorNote.textContent = t(key, vars);
+      errorNote.hidden = false;
+    }
+    function clearError() { errorNote.hidden = true; errorNote.textContent = ''; }
+
+    var body = [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: t(copy.title) }),
+          el('p.dialog__blurb', { text: t(copy.blurb) })
+        ]),
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
+      ])
+    ];
+
+    if (mode === 'reset') {
+      body.push(field(t('field.email'),
+        { type: 'email', placeholder: 'name@example.com', email: true, autocomplete: 'email',
+          required: true, value: opts.email || null }));
+      body.push(el('button.btn.btn--primary.btn--block', { type: 'submit', text: t('reset.submit') }));
+    } else if (mode === 'signup') {
+      /* §3: "handle is user-chosen, NOT a legal name." The field that used to sit here
+         asked for a full name, which for a politically sensitive archive (§7) is the
+         opposite of what onboarding should collect. */
+      body.push(field(t('field.handle'), { type: 'text', placeholder: t('field.handlePh'), autocomplete: 'username' },
+        el('span.field__hint', { text: t('field.handleNote') })));
+      /* The rules, on the screen. Enforced by two CHECK constraints and nowhere in the
+         interface until 13 Sep 2026 — which is how every member came to be member_<hex>. */
+      body.push(el('p.field__rules', { text: t('field.handleRules') }));
+      body.push(field(t('field.email'), { type: 'email', placeholder: 'name@example.com', email: true, autocomplete: 'email' }));
+      body.push(field(t('field.password'), { type: 'password', placeholder: '••••••••', autocomplete: 'new-password' }));
+      body.push(el('div.pact', null, [
+        el('span.pact__tick', { 'aria-hidden': 'true', text: '✓' }),
+        el('span', { text: t('auth.pact') })
+      ]));
+      body.push(el('button.btn.btn--primary.btn--block', { type: 'submit', text: t('signup.submit') }));
+    } else {
+      body.push(field(t('field.email'), { type: 'email', placeholder: 'name@example.com', email: true, autocomplete: 'email' }));
+      body.push(field(t('field.password'), { type: 'password', placeholder: '••••••••', autocomplete: 'current-password' },
+        el('button.field__hint.linklike', {
+          type: 'button',
+          /* Was a toast of its own label — the control existed, said its own name back and
+             did nothing else, from M1 until 3 Sep 2026. */
+          onclick: function () { close(); openAuth('reset'); },
+          text: t('login.forgot')
+        })));
+      body.push(el('button.btn.btn--olive.btn--block', { type: 'submit', text: t('login.submit') }));
+    }
+
+    body.push(captchaSlot);
+    body.push(errorNote);
+    body.push(el('div.dialog__foot', null, mode === 'signup'
+      ? [t('signup.haveAcct') + ' ', el('button.linklike', {
+          type: 'button', onclick: function () { close(); openAuth('login'); }, text: t('action.signIn')
+        })]
+      : mode === 'reset'
+      ? [t('reset.remembered') + ' ', el('button.linklike', {
+          type: 'button', onclick: function () { close(); openAuth('login'); }, text: t('action.signIn')
+        })]
+      : [t('login.newHere') + ' ', el('button.linklike', {
+          type: 'button', onclick: function () { close(); openAuth('signup'); }, text: t('login.createOne')
+        })]
+    ));
+
+    var busy = false;
+
+    var form = el('form.dialog.dialog--form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        if (busy) return;
+
+        var email = (UI.qs('input[type=email]', form) || {}).value || '';
+        var password = (UI.qs('input[type=password]', form) || {}).value || '';
+        var handleInput = UI.qs('input[autocomplete=username]', form);
+        /* Normalized on the way out of the field, so the validation, the PATCH and the
+           sessionStorage park across a confirmation round trip all see one value. */
+        var handle = handleInput ? normalizeHandle(handleInput.value) : '';
+        var submitButton = UI.qs('button[type=submit]', form);
+
+        clearError();
+        if (mode === 'signup') {
+          if (!handle) { showError('signup.err.handleRequired'); return; }
+          /* BEFORE the account exists. Afterwards the dialog is the success panel and the
+             refusal is a toast — a message with nothing the member can do about it. */
+          var handleProblemKey = handleProblem(handle);
+          if (handleProblemKey) {
+            showError(handleProblemKey);
+            if (handleInput) handleInput.focus();
+            return;
+          }
+          /* Echo the normalized form back: a member who typed "Masar" is getting `masar`,
+             and §7 makes the handle public enough that they should see it first. */
+          if (handleInput && handleInput.value !== handle) handleInput.value = handle;
+        }
+
+        busy = true;
+        if (submitButton) { submitButton.disabled = true; submitButton.textContent = t('auth.working'); }
+
+        function finish() {
+          busy = false;
+          if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent = t(copy.submit);
+          }
+          /* A Turnstile token is single-use and was just spent. Without this reset the
+             member's second attempt sends a token the server has already seen and is told
+             they are a robot for pressing the button twice. */
+          if (widget) widget.reset();
+        }
+
+        widget.token().then(function (captcha) {
+          if (mode === 'reset') {
+            return AUTH.requestPasswordReset(email, captcha, recoveryRedirect())
+              .then(function () { return { resetSent: true }; });
+          }
+          return mode === 'signup'
+            ? AUTH.signUp(email, password, captcha).then(function (result) {
+              /* No session yet, so there is no token to write the profile with. The name
+                 is held for the sign-in that follows the confirmation link rather than
+                 discarded — which is what happened here until 6 Sep 2026, and which turns
+                 on the moment "Confirm email" is switched on with the custom SMTP. */
+              if (result.confirmationRequired) { rememberHandle(handle); return { signedUp: true, account: null }; }
+              return claimHandle(handle).then(function () {
+                return { signedUp: true, account: result.user };
+              });
+            })
+            : AUTH.signIn(email, password, captcha).then(function (account) {
+              return { signedUp: false, account: account };
+            });
+        }).then(function (outcome) {
+          if (outcome.resetSent) { showResetSent(email); return; }
+          /* A signup ENDS on a screen, not on a closed dialog. Until 1 Sep 2026 the
+             confirmation-required branch closed the dialog and fired a 3.2-second toast,
+             which is what a new member experienced as "I pressed the button and nothing
+             happened" — the one moment in the whole flow where they have to be told to go
+             somewhere else and do something. The signed-in branch gets a panel too: which
+             of the two happened depends on a project setting the visitor cannot see, and
+             an outcome that varies with configuration should not vary in whether it is
+             announced. */
+          if (outcome.signedUp) { showSignedUp(email, outcome.account); return; }
+          close();
+          onSignedIn(outcome.account);
+        }).catch(function (err) {
+          showError(err && err.key ? err.key : 'auth.err.generic');
+          finish();
+        });
+      }
+    }, body);
+
+    /**
+     * What the dialog becomes once the link is on its way.
+     *
+     * The same shape as showSignedUp below, deliberately: it replaces the form in place so
+     * the scrim and the focus trap stay correct, it stays on the screen until it is
+     * dismissed rather than being a toast that outruns the reading of it, and it echoes the
+     * address back in a <bdi> because a typo in it is the commonest reason a message never
+     * arrives and it is the one thing the member cannot re-check afterwards.
+     *
+     * **The wording does not depend on whether the address has an account**, and that is a
+     * §7 constraint rather than a simplification: GoTrue answers 200 either way, and a
+     * screen that said "no such member" would turn a public form into a way of asking the
+     * archive who contributes to it.
+     */
+    function showResetSent(address) {
+      if (widget) { widget.remove(); widget = null; }
+
+      var button = el('button.btn.btn--primary.btn--block', {
+        type: 'button', onclick: close, text: t('reset.sent.gotIt')
+      });
+
+      scrim.replaceChildren(el('div.dialog.dialog--gate', null, [
+        el('h2.dialog__title', { text: t('reset.sent.title') }),
+        el('p.dialog__blurb', null, [t('reset.sent.body') + ' ', el('bdi', { text: address })]),
+        el('p.dialog__blurb', { text: t('reset.sent.hint') }),
+        button
+      ]));
+      button.focus();
+    }
+
+    /**
+     * What the dialog becomes once the account exists.
+     *
+     * Replaces the form in place rather than closing: the focus trap and the scrim are
+     * already correct, and the member's attention is already here.
+     *
+     * `account` is null when the project requires an email confirmation — the ordinary
+     * case on this deployment — and non-null when signup returned a session outright.
+     * §9's rule that the gate preserves intent survives either way: the pending action
+     * runs from the button below, so a member who was part-way through a like or an
+     * upload still lands back on it.
+     */
+    function showSignedUp(address, account) {
+      /* The challenge is over and its token is spent. Left mounted, its iframe and timers
+         outlive the form it belonged to. */
+      if (widget) { widget.remove(); widget = null; }
+
+      var button = el('button.btn.btn--primary.btn--block', {
+        type: 'button',
+        onclick: function () {
+          close();
+          if (account) onSignedIn(account);
+        },
+        text: t(account ? 'signup.done.continue' : 'signup.done.gotIt')
+      });
+
+      var lines = [
+        el('h2.dialog__title', { text: t(account ? 'signup.done.readyTitle' : 'signup.done.checkTitle') }),
+        /* The address is echoed back because the commonest reason a confirmation never
+           arrives is a typo in it, and it is the one thing the member cannot re-check
+           after the dialog closes. In a <bdi> per §6: it is a string the visitor typed,
+           and an RTL sentence with an unisolated Latin address in it renders wrong even
+           without anyone being hostile. */
+        el('p.dialog__blurb', null, [
+          t(account ? 'signup.done.readyBody' : 'signup.done.checkBody') + ' ',
+          el('bdi', { text: address })
+        ])
+      ];
+      if (!account) lines.push(el('p.dialog__blurb', { text: t('signup.done.checkHint') }));
+      lines.push(button);
+
+      scrim.replaceChildren(el('div.dialog.dialog--gate', null, lines));
+      button.focus();
+    }
+
+    scrim = overlayShell('scrim', [form], close);
+    widget = TURNSTILE.mount(captchaSlot);
+  }
+
+  /* ── The handle rules, mirrored from the database ─────────
+   *
+   * The 7 Sep INSERT→PATCH fix was correct and deployed, and the handle still never
+   * persisted. Measured 13 Sep against the live database: all 22 profiles still hold 0057's
+   * `member_<12 hex>` placeholder, and `updated_at` equals `created_at` on every row — so no
+   * UPDATE has ever reached one. The PATCH was not the problem. Two CHECK constraints were:
+   *
+   *   profiles_handle_is_normalized  CHECK (handle = normalized_handle(handle))
+   *   profiles_handle_allowed        CHECK (is_allowed_handle(handle))
+   *
+   * Between them: 3–30 characters; a-z, Arabic letters, digits and `_` and nothing else; at
+   * least one letter; one script; no leading, trailing or doubled underscore; and already
+   * lower-cased. So `Masar`, `abu ammar`, `m.janim.07` and any Arabic name with a space
+   * raise 23514 → 400 → a TOAST saying "pick another from your profile", fired while the
+   * dialog had already become the success panel. Nothing on the screen had ever named a
+   * rule, so a member typing their own name was refused by a message they could not act on.
+   *
+   * A capital is NORMALIZED rather than refused, because `normalized_handle()` lower-cases
+   * and the CHECK then requires the stored value to equal it. A space or a dot has no
+   * normalization and is refused BEFORE the account exists, while the field is still there.
+   *
+   * Not a guard (§5): the database refuses a bad handle. This is what stops a member ever
+   * sending one by accident, or learning the rule from a toast.
+   */
+
+  /* U+0640 tatweel and the combining marks `public.normalized_handle` translates away. */
+  var HANDLE_MARKS = /[\u0640\u064B-\u065F\u0670]/g;
+
+  function normalizeHandle(raw) {
+    var value = String(raw == null ? '' : raw).trim();
+    if (value.normalize) value = value.normalize('NFKC');
+    return value.replace(HANDLE_MARKS, '').toLowerCase();
+  }
+
+  /**
+   * The i18n key for why this handle would be refused, or null if it would not.
+   *
+   * Mirrors `public.is_allowed_handle` term for term, code-point ranges included, so the two
+   * read side by side. Iterated by CODE POINT, because Postgres `char_length` counts
+   * characters and `String.length` does not. Uniqueness and the reserved list are not here:
+   * a browser cannot know them, and claimHandle's 409/400 split already reports them.
+   */
+  function handleProblem(handle) {
+    var chars = Array.from(handle);
+    if (chars.length < 3 || chars.length > 30) return 'signup.err.handleLength';
+
+    var latin = 0;
+    var arabic = 0;
+    for (var i = 0; i < chars.length; i++) {
+      var cp = chars[i].codePointAt(0);
+      if (cp >= 97 && cp <= 122) latin++;
+      else if ((cp >= 1569 && cp <= 1594) || (cp >= 1601 && cp <= 1610)) arabic++;
+      else if (!((cp >= 48 && cp <= 57) || cp === 95)) return 'signup.err.handleChars';
+    }
+    if (!latin && !arabic) return 'signup.err.handleChars';
+    /* One script. A handle that mixes them is unreadable in both and is the shape a
+       homograph impersonation takes. */
+    if (latin && arabic) return 'signup.err.handleScript';
+    if (/^_|_$|__/.test(handle)) return 'signup.err.handleUnderscore';
+    return null;
+  }
+
+  /**
+   * WHICH refusal the database just gave, as an i18n key.
+   *
+   * There are three ways a handle can be turned away and they need three different things
+   * from the member: fix the spelling, pick a different name, pick a different name. Until
+   * 13 Sep 2026 the last two shared one sentence — "that handle is not allowed, pick
+   * another from your profile" — which is true of all three and actionable for none, and
+   * which was reached by an `else` rather than by a decision.
+   *
+   * MEASURED against the deployed PostgREST rather than assumed, because the discrimination
+   * lives in a response body nothing else in this repository reads:
+   *
+   *   taken     409  23505  duplicate key value violates unique constraint
+   *                         "profiles_handle_normalized_key"
+   *   format    400  23514  new row for relation "profiles" violates check constraint
+   *                         "profiles_handle_allowed"
+   *   reserved  400  23514  handle "رام_الله" is reserved
+   *
+   * Both 400s carry the same SQLSTATE, so the code alone cannot separate them. The
+   * constraint name can: PostgreSQL's own wording for a CHECK violation names the
+   * constraint, and the two reserved-handle triggers (0004's list and 0051's tombstones)
+   * RAISE with a message of ours that does not. Positive tests for both, and null when
+   * neither matches — a refusal this cannot identify must not be dressed as one it can.
+   *
+   * The format branch should be unreachable now that the form validates first, and it is
+   * kept honest rather than removed: it re-runs handleProblem() so the member is told which
+   * rule, and only if that also comes back empty does the caller fall through to a message
+   * that claims nothing.
+   */
+  function handleRefusalKey(err, handle) {
+    if (!err) return null;
+    if (err.status === 409) return 'signup.err.handleTaken';
+    if (err.status !== 400) return null;
+    var message = (err.detail && err.detail.message) || '';
+    if (/violates check constraint/.test(message)) {
+      return handleProblem(normalizeHandle(handle)) || null;
+    }
+    return 'signup.err.handleReserved';
+  }
+
+  /**
+   * The chosen handle, written onto the profile the account already has.
+   *
+   * ── The defect this replaces, because it is worth not repeating ──
+   *
+   * This was an INSERT, and it had been correct: 0004 says in so many words that there is
+   * "deliberately NO trigger creating a profile on signup", so the browser wrote the row.
+   * On 31 Aug 2026 migration 0057 found `public.profiles` empty against eleven accounts —
+   * this INSERT had never once succeeded on the deployed site — and fixed it the other way
+   * round, with an `after insert on auth.users` trigger that provisions a row carrying a
+   * placeholder `member_<12 hex>` handle.
+   *
+   * Both changes were right and together they were the bug. By the time this ran the row
+   * existed, so the INSERT was a PRIMARY KEY conflict on `id` — nothing to do with handles
+   * at all — PostgREST answered 409, and the catch-all below reported it as "that handle is
+   * taken". Every member since has been told their chosen name was unavailable and left
+   * wearing `member_5f4d89d9f9bd`, which is exactly what §7 means by an identity that
+   * "exists, is unique and is theirs" being a placeholder rather than a name.
+   *
+   * So it is an UPDATE. 0004 grants `update (handle, display_name, …)` to `authenticated`
+   * and 0017's profiles_update restricts it to `id = auth.uid()`, so the member renames
+   * their own row and nobody else's — the same policy M5's editor will use for the same
+   * column. `select=handle` because DB.patch requires one (0015 revoked table-level SELECT);
+   * it also gives us an empty array when the filter matched no row, which is the one
+   * outcome a status code cannot distinguish from success.
+   *
+   * A refusal is reported and the sign-up is NOT rolled back: the account exists, the
+   * session works, and a name that is taken or not allowed is something the member fixes on
+   * their own profile rather than a reason to make them sign up again. What changed is that
+   * they are now told WHICH of those it was.
+   */
+  function claimHandle(handle) {
+    var account = AUTH.user();
+    if (!account) return Promise.resolve();
+    return DB.patch('profiles', 'id=eq.' + encodeURIComponent(account.id) + '&select=handle',
+      { handle: handle, display_name: handle })
+      .then(function (rows) {
+        /* 0057 provisions a row for every account, so no match means the profile is gone
+           or the policy refused — not that the handle was unavailable. Saying "taken" here
+           is what hid the original defect for a week. */
+        if (!rows || !rows.length) { UI.toast(t('signup.err.handleKept')); return; }
+        if (state.account) {
+          state.account.handle = rows[0].handle;
+          state.account.display_name = handle;
+        }
+        renderMasthead();
+      }, function (err) {
+        /* Three refusals, three messages — see handleRefusalKey. `handleKept` when it
+           cannot tell: that one promises only a temporary name the member can change,
+           which is true whatever went wrong, and claims nothing about the name itself. */
+        UI.toast(t(handleRefusalKey(err, handle) || 'signup.err.handleKept'));
+      });
+  }
+
+  /**
+   * The chosen handle, across the confirmation round trip.
+   *
+   * A signup that returns no session has nothing to write the profile with, so the name is
+   * parked until a session exists. sessionStorage rather than localStorage: this is a tab's
+   * worth of state, not a preference, and it must not outlive the browser for the next
+   * person on a shared machine (§7). It is not a credential — auth.js's rule about the
+   * access token is untouched.
+   *
+   * It is a BEST EFFORT and is bounded by what a browser can know: a member who opens the
+   * confirmation link on their phone while they signed up on a laptop arrives in a session
+   * that never saw this, and keeps the placeholder handle until they rename themselves. The
+   * alternative is sending the chosen name to the server before the address is proved,
+   * which would let anyone reserve any handle by typing an address they do not hold.
+   */
+  var PENDING_HANDLE_KEY = 'rma.pending_handle';
+
+  function rememberHandle(handle) {
+    try { global.sessionStorage.setItem(PENDING_HANDLE_KEY, handle); } catch (e) { /* private mode */ }
+  }
+
+  function claimRememberedHandle() {
+    var handle = null;
+    try {
+      handle = global.sessionStorage.getItem(PENDING_HANDLE_KEY);
+      if (handle) global.sessionStorage.removeItem(PENDING_HANDLE_KEY);
+    } catch (e) { handle = null; }
+    return handle ? claimHandle(handle) : Promise.resolve();
+  }
+
+  function onSignedIn(account) {
+    adoptAccount(account);
+    renderMasthead();
+    /* The parked handle first: loadOwnHandle would otherwise read the placeholder and put
+       its initial in the masthead a moment before the real name replaces it. */
+    claimRememberedHandle().then(function () { return loadOwnHandle(); });
+    /* Every tab that has been loaded, not only the All feed. A member signing in while
+       reading the Videos tab must get their own likes and saves back on the cards in front
+       of them, and those cards are not in state.feed. */
+    refreshEngagement(loadedIds()).then(function () {
+      if (state.viewer) renderViewerChrome(state.viewer.index);
+    });
+
+    /* NOTHING ELSE waits on this. Every gate reads state.confirmed and null passes, so the
+       archive is fully usable while it is in flight — the database is what refuses an
+       unconfirmed write in the window before it lands.
+       The one exception is the pending intent below, and the reason is worth stating: it is
+       the ONE action that runs without the member pressing anything, so it is the one where
+       a null read would open the share sheet to somebody who is about to be refused. They
+       have just been through a sign-in round trip; one more request before they land is
+       invisible, and it is the difference between meeting the confirmation screen now and
+       meeting it after writing an archival description. */
+    var ready = loadConfirmation().then(function () {
+      /* Only what the answer can change. A full render() here would rebuild the feed under
+           a reader who has not moved, which is what onSignedIn deliberately avoids. */
+      if (route() === 'profile') render();
+      else if (state.viewer) renderViewerChrome(state.viewer.index);
+    });
+
+    /* §9. The action that hit the gate runs now, and the member ends up where they were
+       rather than being returned to the archive to find their own way back. */
+    var pending = state.pending;
+    state.pending = null;
+    if (pending && pending.run) {
+      ready.then(function () {
+        try { pending.run(); } catch (e) { /* a stale intent must not break the sign-in */ }
+      });
+    } else {
+      UI.toast(t('login.title'));
+    }
+    return ready;
+  }
+
+  /**
+   * The member's own handle.
+   *
+   * Not in the JWT: §7 makes the handle a user-chosen public identifier stored in
+   * `profiles`, and the token carries the auth user id and the role claim. /me needs it to
+   * ask for the right profile shard, and the masthead avatar uses its first character.
+   *
+   * A member with no profile row yet — signed up before the handle step, or whose
+   * claimHandle was refused — simply has none, and /me falls back to profile_view() by id
+   * returning nothing, which renderProfile shows as the onboarding-incomplete state.
+   */
+  function loadOwnHandle() {
+    if (!state.account) return Promise.resolve();
+    var id = state.account.id;
+    return DB.select('profiles', 'select=handle,display_name&id=eq.' + encodeURIComponent(id))
+      .then(function (rows) {
+        if (!state.account || state.account.id !== id) return;
+        var row = rows && rows[0];
+        if (!row) return;
+        state.account.handle = row.handle;
+        state.account.display_name = row.display_name;
+        renderMasthead();
+      }, function () { /* the avatar falls back to a language-appropriate initial */ });
+  }
+
+  function signOut() {
+    AUTH.signOut();
+    adoptAccount(null);
+    state.pending = null;
+    if (route() === 'profile') { navigate('/'); return; }
+    renderMasthead();
+    if (state.viewer) renderViewerChrome(state.viewer.index);
+  }
+
+  /* ── The reset landing ───────────────────────────────────────
+     /reset, which is a page rather than a dialog for one reason: the member arrives here
+     from their mail client on a fresh page load, with no dialog to have been opened over
+     and — because the fragment is replaced out of the URL the moment it is read — nothing
+     to reload back into. A screen that survives being the first thing the browser paints
+     is the only shape that works.
+
+     Four states, and none of them is a dead end (§9):
+
+       set   — a live recovery session is held; type a new password.
+       done  — the password is set and the session is now a real one.
+       dead  — the link was refused, or died between landing and submitting.
+       bare  — /reset with no link at all: typed, bookmarked, or reloaded.
+
+     It renders BEFORE the archive-error branch in render(), and that is deliberate: a
+     member locked out of their account must be able to get back in on a day the CDN is
+     having one. Nothing on this screen reads a shard. */
+
+  function authPage(children) {
+    return el('div.authpage', null, el('div.authpage__card', null, children));
+  }
+
+  /* field(), handing back the input as well.
+
+     field() builds the label/`for` pairing and returns only the wrapper, which is enough
+     when one querySelector can find the input again. It is not enough on a form with two
+     password boxes, and §9 asks for a real label rather than the aria-label that a
+     hand-built input would need. */
+  function labelledInput(labelText, props, extras) {
+    var wrap = field(labelText, props, extras);
+    return { wrap: wrap, input: UI.qs('input, textarea', wrap) };
+  }
+
+  function renderReset() {
+    var rec = state.recovery;
+
+    if (rec && rec.stage === 'done') {
+      /* Not a "now go and sign in" screen. completeRecovery() adopted the session, so
+         they already are — §9's "never a dead end", at the one moment a member is most
+         likely to give up on an archive. */
+      return authPage([
+        el('h1.authpage__title', { text: t('reset.done.title') }),
+        el('p.authpage__blurb', null, [
+          t('reset.done.body') + ' ',
+          el('bdi', { text: (state.account && state.account.email) || rec.email || '' })
+        ]),
+        el('a.btn.btn--primary.btn--block', { href: '/', text: t('reset.done.continue') })
+      ]);
+    }
+
+    if (rec && rec.stage === 'set' && AUTH.hasRecovery()) return resetForm();
+
+    var dead = Boolean(rec && rec.stage === 'dead');
+    return authPage([
+      el('h1.authpage__title', {
+        text: t(dead
+          ? (rec.linkKind === 'recovery' ? 'reset.dead.title' : 'reset.dead.titleAny')
+          : 'reset.bare.title')
+      }),
+      el('p.authpage__blurb', { text: t(dead ? 'reset.dead.body' : 'reset.bare.body') }),
+      el('button.btn.btn--primary.btn--block', {
+        type: 'button',
+        onclick: function () {
+          openAuth('reset', { email: state.account ? state.account.email : null });
+        },
+        text: t('reset.dead.again')
+      }),
+      state.signedIn ? null : el('button.btn.btn--ghost.btn--block', {
+        type: 'button', onclick: function () { openAuth('login'); }, text: t('action.signIn')
+      }),
+      el('a.authpage__back', { href: '/', text: t('reset.dead.back') })
+    ]);
+  }
+
+  function resetForm() {
+    var note = el('p.form-error', { role: 'alert', hidden: true });
+    function fail(key) { note.textContent = t(key); note.hidden = false; }
+
+    var pw = labelledInput(t('reset.set.password'),
+      { type: 'password', autocomplete: 'new-password', required: true, placeholder: '••••••••' },
+      el('span.field__hint', { text: t('reset.set.rule') }));
+    var again = labelledInput(t('reset.set.confirm'),
+      { type: 'password', autocomplete: 'new-password', required: true, placeholder: '••••••••' });
+
+    var busy = false;
+    var submit = el('button.btn.btn--primary.btn--block', { type: 'submit', text: t('reset.set.submit') });
+
+    var form = el('form.authpage__form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        if (busy) return;
+        note.hidden = true;
+
+        var value = pw.input.value;
+        /* Checked here as well as at GoTrue. §5 is unambiguous that the browser is not a
+           guard and the server still decides — its own refusal has its own message
+           (auth.err.weakPassword). This only saves the member a round-trip to be told
+           something they could have been told while typing. */
+        if (value.length < 8) { fail('reset.err.tooShort'); return; }
+        if (value !== again.input.value) { fail('reset.err.mismatch'); return; }
+
+        busy = true;
+        submit.disabled = true;
+        submit.textContent = t('auth.working');
+
+        AUTH.completeRecovery(value).then(function (account) {
+          state.recovery = {
+            stage: 'done', linkKind: 'recovery', error: null,
+            email: account ? account.email : null
+          };
+          onSignedIn(account);
+          render();
+        }, function (err) {
+          busy = false;
+          submit.disabled = false;
+          submit.textContent = t('reset.set.submit');
+
+          var key = err && err.key ? err.key : 'auth.err.generic';
+          /* A link that died BETWEEN landing and submitting is the same dead end as one
+             that arrived dead, and it gets the same screen — with the way to a new link on
+             it — rather than a red line above a form that can no longer do anything. */
+          if (key === 'auth.err.linkExpired') {
+            AUTH.discardRecovery();
+            state.recovery = { stage: 'dead', linkKind: 'recovery', error: key };
+            render();
+            return;
+          }
+          fail(key);
+        });
+      }
+    }, [pw.wrap, again.wrap, note, submit]);
+
+    return authPage([
+      el('h1.authpage__title', { text: t('reset.set.title') }),
+      el('p.authpage__blurb', { text: t('reset.set.blurb') }),
+      form
+    ]);
+  }
+
+  /* ── Share sheet ─────────────────────────────────────────── */
+
+  /* ── Where was this? ─────────────────────────────────────────
+     §10's M4, in the order it names: "place-name autocomplete → gazetteer resolution →
+     drag-to-confirm pin fallback".
+
+     The three steps are one control because they are one question, and because the ORDER is
+     the privacy design rather than a convenience. A contributor who types "المنارة" and
+     picks it out of the list attaches their photograph to a curated public landmark, and
+     migration 0049 publishes that coordinate unfuzzed — it is already public, in places.json,
+     one file over. Only when the gazetteer has no answer does the pin appear, and a pin is a
+     coordinate nobody curated, so it publishes snapped to roughly a block (§7).
+
+     Dropping a pin does not end there either: 0049's `places_near` is asked what named
+     places are within reach of it, and the contributor is offered them. Somebody who meant
+     Al-Manara and tapped thirty metres off should end up attached to Al-Manara rather than
+     filed at a coordinate that is nearly it.
+
+     Signed-in only, like everything else in this sheet. `places_search` is granted to
+     `authenticated` and to nobody else: §2's "zero database reads for public visitors" is
+     not softened by autocomplete being useful. */
+
+  function placePicker(onChange) {
+    var chosen = null;         // { id, name } from the gazetteer
+    var pin = null;            // { lat, lon } a contributor placed
+    var timer = null;
+    var sequence = 0;
+
+    var listId = 'place-results';
+    var results = el('ul.placepick__results', { id: listId, role: 'listbox', hidden: true });
+    var summary = el('p.placepick__chosen', { hidden: true });
+    var hint = el('p.field__hint', { text: t('share.fPlaceHint') });
+
+    var input = el('input.input.placepick__input', {
+      type: 'text',
+      role: 'combobox',
+      autocomplete: 'off',
+      'aria-expanded': 'false',
+      'aria-controls': listId,
+      placeholder: t('share.fPlacePh'),
+      oninput: function () { schedule(input.value); }
+    });
+
+    function clearResults() {
+      mount(results, []);
+      results.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    }
+
+    function describe() {
+      if (chosen) {
+        summary.hidden = false;
+        summary.textContent = t('share.fPlaceChosen', { name: chosen.name });
+      } else if (pin) {
+        summary.hidden = false;
+        summary.textContent = t('share.fPlacePinned');
+      } else {
+        summary.hidden = true;
+        summary.textContent = '';
+      }
+      /* The precision select's options depend on which of the three branches above is
+         live, and this is the single point all three pass through. */
+      if (onChange) onChange();
+    }
+
+    function choose(place) {
+      chosen = {
+        id: place.id,
+        name: I18N.lang === 'en'
+          ? (place.name_en || place.name_ar)
+          : (place.name_ar || place.name_en)
+      };
+      pin = null;
+      input.value = '';
+      clearResults();
+      describe();
+    }
+
+    function keepPin(where) {
+      pin = { lat: where.lat, lon: where.lon };
+      chosen = null;
+      describe();
+    }
+
+    function clear() {
+      chosen = null;
+      pin = null;
+      input.value = '';
+      clearResults();
+      describe();
+    }
+
+    /* Debounced, and the results are dropped when a later query has already been sent.
+       Without the sequence check a slow response for "ال" can land after a fast one for
+       "المنارة" and replace the right answers with stale ones — which reads as the
+       autocomplete ignoring what was typed. */
+    function schedule(term) {
+      global.clearTimeout(timer);
+      if (!term || term.trim().length < 2) { clearResults(); return; }
+      var mine = ++sequence;
+      timer = global.setTimeout(function () {
+        DB.rpc('places_search', { p_q: term.trim() }).then(function (rows) {
+          if (mine !== sequence) return;
+          show(rows || []);
+        }, function () {
+          // A failed lookup is not an error a contributor can act on, and the pin below is
+          // the answer either way. Silence here, and the button stays.
+          if (mine === sequence) clearResults();
+        });
+      }, 250);
+    }
+
+    function show(rows) {
+      if (!rows.length) {
+        mount(results, el('li.placepick__none', { text: t('share.fPlaceNone') }));
+        results.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+        return;
+      }
+      mount(results, rows.map(function (row) {
+        var name = I18N.lang === 'en'
+          ? (row.name_en || row.name_ar)
+          : (row.name_ar || row.name_en);
+        var other = I18N.lang === 'en'
+          ? (row.name_ar || '')
+          : (row.name_en || '');
+        return el('li.placepick__result', { role: 'option' },
+          el('button.placepick__hit', {
+            type: 'button',
+            onclick: function () { choose(row); }
+          }, [
+            bdi(name),
+            other ? el('span.placepick__gloss.gloss-line', null, bdi(other)) : null,
+            row.unconfirmed ? el('span.placepick__flag', { text: t('share.fPlaceUnconfirmed') }) : null
+          ]));
+      }));
+      results.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    var pinButton = el('button.btn.btn--ghost.btn--small', {
+      type: 'button',
+      onclick: function () { openPinPicker(pin, keepPin, choose); },
+      text: t('share.fPlacePin')
+    });
+
+    var clearButton = el('button.btn.btn--ghost.btn--small', {
+      type: 'button', onclick: clear, text: t('share.fPlaceClear')
+    });
+
+    return {
+      node: el('div.field.placepick', null, [
+        labelFor(t('share.fPlace'), input),
+        input,
+        results,
+        summary,
+        el('div.placepick__actions', null, [pinButton, clearButton]),
+        hint
+      ]),
+      /** The draft keys 0049 reads, and nothing when the question was skipped. */
+      read: function () {
+        if (chosen) return { place_id: chosen.id };
+        if (pin) return { lat: String(pin.lat.toFixed(6)), lon: String(pin.lon.toFixed(6)) };
+        return {};
+      },
+      /* The sharpest precision this location's SOURCE justifies — migration 0049's rule,
+         mirrored here so the sheet can offer only the values the server will accept.
+
+         It is a mirror and not the boundary. 0052's trigger is the boundary; this exists
+         so a contributor is never offered a choice that would be refused, which is a
+         different job from stopping one that would. */
+      justified: function () {
+        if (chosen) return 'exact';
+        if (pin) return 'street';
+        return 'hidden';
+      }
+    };
+  }
+
+  /* The pin, and the resolution step after it.
+
+     The map is the same module /map uses, in 'pick' mode — one draggable teardrop and no
+     markers. When the basemap is not provisioned or will not load there is deliberately NO
+     numeric fallback: a pair of coordinate boxes is not a control anybody can answer
+     honestly from memory, and a wrong pin published at block precision is worse than no
+     location at all. The dialog says so and offers the gazetteer instead. */
+  function openPinPicker(current, onPin, onPlace) {
+    var scrim = null;
+    var instance = null;
+    var pin = current || null;
+
+    function close() {
+      if (instance) instance.destroy();
+      instance = null;
+      closeOverlay(scrim);
+      scrim = null;
+    }
+
+    var canvasSlot = el('div.mapview.mapview--pick');
+    var nearby = el('div.pinpick__near');
+    var confirm = el('button.btn.btn--primary', {
+      type: 'button',
+      disabled: !pin,
+      onclick: function () { if (pin) { onPin(pin); close(); } },
+      text: t('share.pinConfirm')
+    });
+
+    /* The gazetteer, asked what is around the pin. This is M4's "gazetteer resolution": the
+       archive would rather hold "Al-Manara" than a coordinate near it, so the named places
+       within 400 m are offered before the bare point is accepted. */
+    function askNearby(where) {
+      DB.rpc('places_near', { p_lat: where.lat, p_lon: where.lon }).then(function (rows) {
+        if (!scrim) return;
+        if (!rows || !rows.length) { mount(nearby, []); return; }
+        mount(nearby, [
+          el('p.pinpick__near-title', { text: t('share.pinNear') })
+        ].concat(rows.map(function (row) {
+          var name = I18N.lang === 'en'
+            ? (row.name_en || row.name_ar)
+            : (row.name_ar || row.name_en);
+          return el('button.btn.btn--ghost.btn--small', {
+            type: 'button',
+            onclick: function () { onPlace(row); close(); }
+          }, [bdi(name), el('span.pinpick__distance', {
+            text: t('share.pinDistance', { n: num(Math.round(row.distance_m)) })
+          })]);
+        })));
+      }, function () { if (scrim) mount(nearby, []); });
+    }
+
+    function failed() {
+      mount(canvasSlot, el('p.mapview__note', { role: 'status', text: t('share.pinNoMap') }));
+      confirm.disabled = true;
+    }
+
+    var dialog = el('div.dialog.dialog--pin', null, [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: t('share.pinTitle') }),
+          el('p.dialog__blurb', { text: t('share.pinBlurb') })
+        ]),
+        el('button.dialog__close', {
+          type: 'button', 'aria-label': t('action.close'), onclick: close,
+          text: '× ' + t('action.close')
+        })
+      ]),
+      canvasSlot,
+      el('p.pinpick__privacy', { text: t('share.pinPrivacy') }),
+      nearby,
+      el('div.dialog__actions', null, [
+        el('button.btn.btn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
+        confirm
+      ])
+    ]);
+
+    scrim = overlayShell('scrim.scrim--heavy', [dialog], close);
+
+    if (!global.CONFIG.basemap.url) { failed(); return; }
+
+    loadMapModules().then(function () {
+      if (!scrim) return;
+      instance = global.MAP.create(canvasSlot, {
+        url: global.CONFIG.basemap.url,
+        mode: 'pick',
+        label: t('share.pinTitle'),
+        center: pin || { lat: 31.9038, lon: 35.2034 },
+        zoom: 15,
+        pin: pin,
+        onPin: function (where) {
+          pin = where;
+          confirm.disabled = false;
+          askNearby(where);
+        },
+        onFail: failed
+      });
+      instance.setPlaces(geoCache.places || []);
+      instance.ready.catch(function () { /* onFail has it */ });
+    }, failed);
+  }
+
+  function openShareSheet() {
+    /* §9's gate, with intent: a signed-out visitor who presses Share is returned to this
+       sheet after signing in, not to the archive. */
+    if (!state.signedIn) { openGate(openShareSheet); return; }
+    /* 0060, and BEFORE the sheet is built rather than at submit. Asking somebody to write
+       an archival description and choose a licence, and then refusing the upload, spends
+       their effort to tell them something we knew when they pressed the button. */
+    if (!confirmedEnough()) { openConfirmDialog(openShareSheet); return; }
+
+    var scrim;
+    var kind = 'photo';
+    function close() { closeOverlay(scrim); if (widget) widget.remove(); }
+
+    var captchaSlot = el('div.captcha');
+    var widget = null;
+    var fileInput = el('input', { type: 'file', 'class': 'sr-only', accept: 'image/*,video/*,audio/*' });
+
+    var statusNote = el('p.form-status', { role: 'status', hidden: true });
+    var errorNote = el('p.form-error', { role: 'alert', hidden: true });
+    var progressBar = el('div.progress__fill');
+    var progress = el('div.progress', { hidden: true, role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, progressBar);
+
+    function say(key) { statusNote.textContent = t(key); statusNote.hidden = false; }
+    function fail(key, vars) { errorNote.textContent = t(key, vars); errorNote.hidden = false; }
+    function clearNotes() {
+      errorNote.hidden = true; errorNote.textContent = '';
+      statusNote.hidden = true; statusNote.textContent = '';
+      progress.hidden = true;
+    }
+
+    var kinds = [
+      { id: 'photo', label: t('share.photo'), icon: ICONS.camera },
+      { id: 'voice', label: t('share.voice'), icon: ICONS.mic },
+      { id: 'event', label: t('share.event'), icon: ICONS.calendar }
+    ];
+
+    var kindRow = el('div.kind-row', { role: 'group', 'aria-label': t('share.title') }, kinds.map(function (option) {
+      var active = option.id === kind;
+      return el('button.kind', {
+        type: 'button',
+        'aria-pressed': active ? 'true' : 'false',
+        onclick: function () {
+          kind = option.id;
+          UI.qsa('.kind', kindRow).forEach(function (node, i) {
+            var on = kinds[i].id === kind;
+            node.setAttribute('aria-pressed', on ? 'true' : 'false');
+            // The icon is a NODE now, so it is replaced rather than assigned as markup
+            // (see ui.js on why there is no `html:` prop any more).
+            var slot = node.firstChild;
+            node.replaceChild(kinds[i].icon(on ? '#C05B3E' : '#3E4A2E'), slot);
+          });
+          /* 0062. The sheet is built ONCE and the kind row only repainted itself, so
+             until now choosing "event" changed three icons and nothing else — the form
+             underneath stayed the photograph's, which is why pressing it produced a post
+             the database refused. */
+          applyKind();
+        }
+      }, [
+        option.icon(active ? '#C05B3E' : '#3E4A2E'),
+        el('span', { text: option.label })
+      ]);
+    }));
+
+    /* §3's EDTF-lite decade. Sent, as of migration 0047 — before that this select existed,
+       defaulted to the 1960s, and was discarded, leaving every member upload with a null
+       decade for a moderator to guess at. */
+    var decadeSelect = el('select.input', null,
+      /* Every decade the archive could hold, not only the ones it already does — a
+         contributor with the earliest photograph in the collection must be able to say so.
+         DATA.DECADES rather than index.json here, for the one place where the two lists
+         mean different things. */
+      [el('option', { value: '', text: t('share.fDecadeUnknown') })].concat(
+        DATA.DECADES.map(function (d) {
+          return el('option', { value: String(d), text: decadeLabel(d) });
+        })));
+
+    /* §7's three, asked here because §7 says "captured at upload" — and because a licence
+       collected afterwards is a licence collected from someone who has already lost
+       interest. claim_upload_slot refuses the upload without them (migration 0032); the
+       `required` attributes below are a courtesy that saves a round-trip.
+
+       The vocabulary comes from UPLOAD.LICENSES rather than being written out here: the
+       list the sheet OFFERS and the list the database ACCEPTS drifting apart would show up
+       as an invalid_license refusal on a value the member was handed. */
+    var licenseSelect = el('select.input', { required: true },
+      UPLOAD.LICENSES.map(function (id, i) {
+        return el('option', { value: id, selected: i === 0 ? true : null, text: t('license.' + id) });
+      }));
+
+    var provenanceInput = el('input.input', {
+      type: 'text', required: true, placeholder: t('share.fProvenancePh')
+    });
+
+    var consentBox = el('input', { type: 'checkbox', required: true });
+
+    /* ── §7's precision control (M5, migration 0052) ──────────
+
+       One direction only: a contributor may publish something VAGUER than the coordinate's
+       source justifies, never sharper. 0049 fixes what the source justifies — a gazetteer
+       place is already public in places.json so it justifies 'exact'; a dropped pin is a
+       coordinate nobody curated and most plausibly a home, so it justifies 'street'.
+
+       The select therefore REBUILDS whenever the place changes, offering only the values
+       at or below what is now justified. It is not the boundary — 0052's trigger is, and
+       upload.js maps `precision_too_precise` for the window where the two disagree — but a
+       control that offered a choice the server refuses would be a privacy setting that
+       lies, which is worse than not offering it. */
+    var PRECISIONS = ['exact', 'street', 'area', 'hidden'];
+    var precisionSelect = el('select.input');
+    var precisionNote = el('p.field__hint', { text: t('share.fPrecisionNote') });
+
+    function rebuildPrecision() {
+      var floor = place.justified();
+      var allowed = PRECISIONS.slice(PRECISIONS.indexOf(floor));
+      /* Keep what they chose if it survives the new floor. Silently resetting a privacy
+         setting the contributor deliberately tightened would be the wrong default: when
+         the old choice is gone, fall back to the SAFEST remaining value rather than the
+         sharpest, which is `hidden` in every case. */
+      var previous = precisionSelect.value;
+      var keep = allowed.indexOf(previous) >= 0 ? previous : allowed[allowed.length - 1];
+      mount(precisionSelect, allowed.map(function (id) {
+        return el('option', { value: id, selected: id === keep ? true : null,
+                              text: t('share.precision.' + id) });
+      }));
+      precisionSelect.value = keep;
+    }
+
+    var place = placePicker(rebuildPrecision);
+    rebuildPrecision();
+
+    /* ── The event's own fields (0062) ────────────────────────
+
+       Amro's decision, 7 Sep 2026: an event gets its own field set. It stays kind='event'
+       in the one posts table — §3's "do not split by type" is untouched, and events keep
+       publishing into the same shards and the same grid.
+
+       What is NOT here is as deliberate as what is. No place picker and no precision
+       select: §7's fuzzing machinery exists because a coordinate on a family photograph is
+       most plausibly somebody's home, and a public event's venue is the thing the poster
+       was advertising. It is free text, and 0062 REFUSES a coordinate sent with an event
+       rather than dropping it. No licence, no provenance, no consent box: a listing that a
+       concert happened carries no third-party rights for a contributor to grant. */
+    var startInput = el('input.input', { type: 'datetime-local' });
+    var endInput = el('input.input', { type: 'datetime-local' });
+    var venueInput = el('input.input', { type: 'text', placeholder: t('share.fVenuePh') });
+    var organizersInput = el('input.input', { type: 'text', placeholder: t('share.fOrganizersPh') });
+
+    var eventFields = el('div.field-group', { hidden: true }, [
+      el('div.field-pair', null, [
+        el('div.field', null, [labelFor(t('share.fEventStart'), startInput), startInput]),
+        el('div.field', null, [labelFor(t('share.fEventEnd'), endInput), endInput])
+      ]),
+      el('div.field', null, [
+        labelFor(t('share.fVenue'), venueInput),
+        venueInput,
+        el('p.field__hint', { text: t('share.fVenueNote') })
+      ]),
+      el('div.field', null, [
+        labelFor(t('share.fOrganizers'), organizersInput),
+        organizersInput,
+        el('p.field__hint', { text: t('share.fOrganizersNote') })
+      ])
+    ]);
+
+    /* The fields an event is NOT asked. Grouped so one function hides them, rather than
+       four call sites that can drift apart. */
+    var placeField = el('div.field', null, [
+      labelFor(t('share.fPrecision'), precisionSelect),
+      precisionSelect,
+      precisionNote
+    ]);
+    var rightsFields = el('div.field-group', null, [
+      el('div.field-pair', null, [
+        el('div.field', null, [
+          labelFor(t('share.fLicense'), licenseSelect),
+          licenseSelect,
+          el('p.field__hint', { text: t('share.fLicenseNote') })
+        ]),
+        el('div.field', null, [
+          labelFor(t('share.fProvenance'), provenanceInput),
+          provenanceInput
+        ])
+      ]),
+      el('label.checkbox.checkbox--wrap', null, [
+        consentBox,
+        el('span', { text: t('share.consent') })
+      ])
+    ]);
+
+    var reviewNote = el('div.review-note', { text: t('share.review') });
+
+    /* 0063. Named rather than inline in the form array below, because applyKind() has to
+       repaint it: the same dropzone is a requirement for a photograph and an option for an
+       event, and a member who is told to choose a file for a listing that does not need one
+       will go and find one. */
+    var dropLabel = el('span', { text: t('share.drop') });
+    var dropNote = el('span.dropzone__note', { text: t('share.dropNote') });
+    var dropzone = el('label.dropzone', null, [
+      ICONS.upload(),
+      dropLabel,
+      dropNote,
+      fileInput
+    ]);
+
+    /**
+     * Show the fields this kind asks for, and — this is the load-bearing half — clear
+     * `required` from the ones it does not.
+     *
+     * A `required` input inside a hidden container is not skipped by the browser: it
+     * blocks the submit and reports "an invalid form control is not focusable", which is a
+     * form that cannot be sent and says nothing about why. So the attribute follows the
+     * visibility rather than sitting beside it.
+     */
+    function applyKind() {
+      var isEvent = kind === 'event';
+
+      eventFields.hidden = !isEvent;
+      place.node.hidden = isEvent;
+      placeField.hidden = isEvent;
+      rightsFields.hidden = isEvent;
+
+      startInput.required = isEvent;
+      licenseSelect.required = !isEvent;
+      provenanceInput.required = !isEvent;
+      consentBox.required = !isEvent;
+
+      /* 0063. The file is required for a photograph and optional for an event. Said on the
+         dropzone itself rather than only enforced at submit: a member who has been asked
+         for a poster they do not have will either invent one or give up, and the archive
+         wants the listing either way. */
+      dropLabel.textContent = t(isEvent ? 'share.dropEvent' : 'share.drop');
+      dropNote.textContent = t(isEvent ? 'share.dropEventNote' : 'share.dropNote');
+
+      // The promise is the same 48 hours either way; the noun is not.
+      reviewNote.textContent = t(isEvent ? 'share.eventReview' : 'share.review');
+    }
+
+    /* ── Part 3 · the upload says something happened ──────────
+     *
+     * The sheet had no positive signal anywhere. Choosing a file changed nothing on the
+     * screen — the input is `.sr-only` inside the dropzone label, so a member could not
+     * tell whether the picker had taken their choice — and a successful upload closed the
+     * dialog behind a toast. Everything in between was an absence of errors.
+     *
+     * This is that signal and deliberately not an upload-status subsystem: one chip, four
+     * states, driven by the stages UPLOAD.submit already emits. The state that matters is
+     * `done` — the bytes are in quarantine and complete-upload has accepted them, which is
+     * the moment the member's part is over and the archive's begins.
+     */
+    var fileName = el('span.filechip__name');
+    var fileMark = el('span.filechip__mark', { 'aria-hidden': 'true', text: '' });
+    var fileState = el('span.filechip__state');
+    var fileChip = el('div.filechip', { hidden: true, role: 'status' }, [
+      fileMark,
+      el('span.filechip__text', null, [fileName, fileState]),
+      el('button.filechip__clear', {
+        type: 'button',
+        'aria-label': t('share.fileRemove'),
+        text: '×',
+        onclick: function () {
+          fileInput.value = '';
+          setFileState(null);
+        }
+      })
+    ]);
+
+    /** null hides the chip; otherwise one of chosen | sending | done | failed. */
+    function setFileState(name) {
+      var file = fileInput.files && fileInput.files[0];
+      if (!name || !file) {
+        fileChip.hidden = true;
+        fileChip.className = 'filechip';
+        return;
+      }
+      fileChip.hidden = false;
+      fileChip.className = 'filechip filechip--' + name;
+      /* Through bdi(), which is §6's render rule rather than a flourish: a filename is a
+         string the member's own device supplied, and "رام الله 1967.jpg" in an RTL
+         paragraph puts its extension on the wrong side without one. It is a NODE, never
+         markup — §6 calls every innerHTML on user content a defect. */
+      mount(fileName, bdi(file.name));
+      fileState.textContent = t('share.file' + name.charAt(0).toUpperCase() + name.slice(1));
+      // A tick only once it is true. An icon that appeared on selection would say the file
+      // had arrived while it was still sitting on the member's phone.
+      fileMark.textContent = name === 'done' ? '✓' : '';
+    }
+
+    /* addEventListener rather than `.onchange =`, to match how el() binds every other
+       handler in this file — one mechanism, so a reader does not have to know which
+       nodes use which. */
+    fileInput.addEventListener('change', function () { setFileState('chosen'); });
+
+    var busy = false;
+
+    var form = el('form.dialog.dialog--sheet', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        if (busy) return;
+
+        var inputs = UI.qsa('.input', form);
+        var titleValue = (inputs[0] || {}).value || '';
+        var storyValue = (UI.qs('textarea.input', form) || {}).value || '';
+        var file = fileInput.files && fileInput.files[0];
+        var submitButton = UI.qs('button[type=submit]', form);
+
+        clearNotes();
+        /* 0063. A photograph without a file is nothing; an event without one is a listing,
+           which is the whole of Amro's 7 Sep decision. The check therefore follows the
+           kind rather than sitting in front of every submission. */
+        if (!file && kind !== 'event') { fail('up.err.noFile'); return; }
+
+        /* The archive is Arabic-first (§9) but a contributor writes in whichever language
+           they think in, and nothing here can tell which. Sending the text as `_ar` would
+           file an English caption under Arabic; the database only requires ONE of the pair
+           (posts_has_a_title), so the honest move is to fill the side matching the
+           interface they are using and leave the other for a moderator. */
+        var lang = I18N.lang === 'en' ? 'en' : 'ar';
+        var draft = { kind: kind === 'voice' ? 'voice' : kind === 'event' ? 'event' : 'media' };
+        draft['title_' + lang] = titleValue;
+        draft['body_' + lang] = storyValue;
+        if (decadeSelect.value) draft.decade = decadeSelect.value;
+
+        if (draft.kind === 'event') {
+          /* 0062. A datetime-local value carries NO zone — "2026-10-01T18:00" is what the
+             member read off a poster, in Ramallah. Sent as that string it would be cast
+             against the server's zone, which is UTC, and a 6pm concert would be stored as
+             8pm local and shown back to its own organiser as the wrong time. new Date()
+             parses a zone-less value as LOCAL, so toISOString() is the member's own
+             evening expressed as the instant it actually is.
+
+             Guarded rather than trusted: an empty or unparseable value gives an Invalid
+             Date whose toISOString() THROWS, which would take the whole submit down. It
+             is left out instead, and 0062 answers event_start_required — a refusal the
+             member can read. */
+          var iso = function (value) {
+            if (!value) return null;
+            var at = new Date(value);
+            return isFinite(at.getTime()) ? at.toISOString() : null;
+          };
+          var startsAt = iso(startInput.value);
+          var endsAt = iso(endInput.value);
+          if (startsAt) draft.event_starts_at = startsAt;
+          if (endsAt) draft.event_ends_at = endsAt;
+
+          var venue = venueInput.value.trim();
+          if (venue) draft['venue_' + lang] = venue;
+
+          /* Both commas: an Arabic-first archive whose organiser list only splits on U+002C
+             would file "بلدية رام الله، مركز خليل السكاكيني" as one organisation named
+             after both. Empty segments are dropped so a trailing comma is not a nameless
+             organiser, and 0062 refuses one anyway. */
+          var organizers = organizersInput.value.split(/[,،]/)
+            .map(function (name) { return name.trim(); })
+            .filter(function (name) { return name.length > 0; });
+          if (organizers.length) draft.organizers = organizers;
+
+          /* Nothing else. No place, no precision, no licence, no provenance, no consent —
+             0062 REFUSES a coordinate or a venue sent with the wrong kind rather than
+             dropping it, so sending a field this kind does not own is a refused upload
+             and not a silent discard. */
+        } else {
+          /* M4. Either a gazetteer id or a pin, never both — the picker returns one shape
+             or the other, and 0049 resolves the coordinate from the ROW rather than
+             trusting a pair of numbers that arrived beside an id. */
+          var where = place.read();
+          Object.keys(where).forEach(function (key) { draft[key] = where[key]; });
+          /* Sent always, including 'hidden'. Saying nothing would let 0049's source rule
+             decide, and the whole point of the control is that the contributor now has a
+             say — including the say that publishes no coordinate at all. */
+          draft.location_precision = precisionSelect.value;
+
+          /* §7. Only `granted` is sent — granted_at is stamped by the database, because a
+             timestamp evidencing that someone agreed at a moment is worthless if the
+             person being evidenced supplied it, and may_withdraw is a right §7 grants
+             rather than one the contributor elects. */
+          draft.license = licenseSelect.value;
+          draft.provenance = provenanceInput.value;
+          draft.consent = { granted: consentBox.checked };
+        }
+
+        busy = true;
+        if (submitButton) { submitButton.disabled = true; submitButton.textContent = t('auth.working'); }
+
+        function release() {
+          busy = false;
+          if (submitButton) { submitButton.disabled = false; submitButton.textContent = t('share.submit'); }
+          /* Single-use, and just spent. See openAuth for the failure this prevents. */
+          if (widget) widget.reset();
+        }
+
+        widget.token().then(function (captcha) {
+          /* 0063. An event with no file takes the listing path — one call, no PUT, no
+             progress bar, because there are no bytes to move. An event WITH a file still
+             goes the ordinary way: Amro's decision is that an event MAY skip media, not
+             that it must, and a poster image is a legitimate thing to contribute. */
+          if (!file) return UPLOAD.submitListing(draft, captcha, { onStage: function (name) { say('up.stage.' + name); } });
+          return UPLOAD.submit(file, draft, captcha, {
+            onStage: function (name) {
+              say('up.stage.' + name);
+              progress.hidden = name !== 'uploading';
+              /* The chip's own state, from the stages the upload already emits.
+                 `finishing` is the moment the bytes are in quarantine — the PUT has
+                 returned — and `done` is complete-upload accepting them. Both are past
+                 the point the member can affect, so both read as arrived. */
+              if (name === 'uploading') setFileState('sending');
+              else if (name === 'finishing' || name === 'done') setFileState('done');
+            },
+            onProgress: function (fraction) {
+              var pct = Math.round(fraction * 100);
+              progressBar.style.setProperty('inline-size', pct + '%');
+              progress.setAttribute('aria-valuenow', String(pct));
+            }
+          });
+        }).then(function () {
+          close();
+          UI.toast(t('share.sent'));
+        }).catch(function (err) {
+          var key = err && err.key ? err.key : 'up.err.generic';
+          /* The limits are in the message because "too big" without a number is a message
+             that cannot be acted on. */
+          fail(key, key === 'up.err.tooBig'
+            ? { n: Math.round(UPLOAD._limits.maxBytes / (1024 * 1024)) }
+            : key === 'up.err.tooLong'
+            ? { n: Math.round(UPLOAD._limits.maxDurationS / 60) }
+            : undefined);
+          /* The chip must not stay on "uploading" under an error message. The file is
+             still chosen and the sheet is still open, so this is a retryable state and
+             says so. */
+          setFileState('failed');
+          release();
+        });
+      }
+    }, [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: t('share.title') }),
+          el('p.dialog__blurb', { text: t('share.blurb') })
+        ]),
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '× ' + t('action.close') })
+      ]),
+      kindRow,
+      field(t('share.fTitle'), { type: 'text', placeholder: t('share.fTitlePh'), required: true }),
+      el('div.field', null, [
+        labelFor(t('share.fDecade'), decadeSelect),
+        decadeSelect
+      ]),
+      /* The place field was a datalist of seven hardcoded landmarks, deleted with data.js
+         in M3 because a free-text place that resolves to nothing is a question asked for no
+         reason. This is what M4 replaces it with: the gazetteer, then a pin. */
+      place.node,
+      placeField,
+      /* 0062. Hidden for a photograph, shown for an event, and the two sets are mutually
+         exclusive by construction — applyKind() is the only thing that decides. */
+      eventFields,
+      /* §9: "Required description field on upload (frame it as archival metadata)."
+         `required` was missing until 2 Sep 2026 — the field existed, was framed exactly as
+         §9 asks ("what do you remember of this moment"), and could be left empty, which
+         produces an archive entry with a picture and no account of what it is. The
+         framing was the half that got done; the requirement is the half that makes it
+         archival. Native validation, matching the report form's `required` reason field:
+         the form is a real <form> with no novalidate, so the browser blocks the submit
+         before onsubmit runs. */
+      field(t('share.fStory'), { multiline: true, required: true, placeholder: t('share.fStoryPh'), rows: '3' }),
+      dropzone,
+      fileChip,
+      rightsFields,
+      captchaSlot,
+      progress,
+      statusNote,
+      errorNote,
+      reviewNote,
+      el('div.dialog__actions', null, [
+        el('button.btn.btn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
+        el('button.btn.btn--primary', { type: 'submit', text: t('share.submit') })
+      ])
+    ]);
+
+    /* Once, before the sheet is shown, so the initial state is applyKind()'s and not a
+       set of literals on four separate nodes that have to agree with it. The sheet can be
+       opened on any kind — a pending intent carries one — so "photo is the default" is not
+       something to encode twice. */
+    applyKind();
+
+    scrim = overlayShell('scrim.scrim--heavy', [form], close);
+    widget = TURNSTILE.mount(captchaSlot);
+  }
+
+  /* ── Profile ─────────────────────────────────────────────────
+     §7: display name, avatar and role badge are never gated — attribution has to stay
+     legible or the archive stops crediting anyone. Everything else is governed by the
+     owner's `visibility` map, applied at PUBLISH time (0044) so the shard a stranger reads
+     simply does not contain what was hidden. The owner's own view comes from
+     profile_view(), with their own token, and is the only place the private side exists. */
+
+  var profileCache = { key: null, loaded: false, data: null, own: null, mine: null, rejections: null };
+
+  function renderProfile() {
+    var own = isOwnProfileRoute();
+
+    if (own && !state.signedIn) return null;   // handled by render(), which opens the gate
+
+    var data = profileCache.data;
+    if (!data) {
+      /* Three states again, and they are not interchangeable: nothing asked yet, asked and
+         still waiting, asked and there is no such profile. `key` is null before a request
+         starts — including while /me waits for its own handle — and `loaded` distinguishes
+         the last two. Showing "not found" during a fetch tells a member their profile does
+         not exist, which for their own profile is alarming and wrong. */
+      var pending = profileCache.key === null || !profileCache.loaded;
+      return el('div.page-head', null, [
+        el('h1.page-head__title', { text: t(pending ? 'q.loading' : 'profile.notFound') }),
+        el('p.page-head__blurb', null, el('a', { href: '/', text: t('viewer.back') }))
+      ]);
+    }
+
+    var isOwner = Boolean(profileCache.own && profileCache.own.is_own);
+    var displayName = data.display_name || data.handle;
+
+    var header = el('header.profile__header', null, [
+      el('span.profile__avatar', {
+        style: toneStyle(avatarTone(data.handle)),
+        'aria-hidden': 'true',
+        text: initialFor(data)
+      }),
+      el('div.profile__identity', null, [
+        el('h1.profile__name', null, bdi(displayName)),
+        el('div.profile__gloss.gloss-line', null, bdi('@' + data.handle)),
+        el('div.profile__badges', null, [
+          el('span.badge', { text: t('role.' + (data.label || 'member')) }),
+          isOwner ? el('span.badge.badge--voice', { text: t('profile.you') }) : null
+        ]),
+        data.member_since
+          ? el('div.profile__facts', null,
+              el('span.profile__fact', { text: t('profile.memberSince', { n: I18N.year(data.member_since) }) }))
+          : null
+      ])
+    ]);
+
+    /* The owner's row overrides the shard's, field by field, and only downward-visible
+       fields differ: profile_view() returns the bio whatever its visibility when the caller
+       owns the profile. A stranger's copy of this page simply does not contain it. */
+    var bioText = isOwner && profileCache.own ? profileCache.own.bio : data.bio;
+    var bio = bioText
+      ? el('div.profile__bio-wrap', null, [
+          el('p.profile__bio', null, bdi(bioText)),
+          isOwner && !isPublicField('bio') ? privateFlag() : null
+        ])
+      : null;
+
+    var contributions = data.contributions || [];
+    var contributionsBody = contributions.length
+      ? el('div.profile__grid', null, contributions.map(memoryCard))
+      : el('p.profile__empty', { text: t('profile.noContributions') });
+
+    var comments = data.comments || [];
+    var commentsBody = comments.length
+      ? el('ul.profile__comments', null, comments.map(function (c) {
+          var title = { ar: c.post_title_ar || c.post_title_en || '', en: c.post_title_en || c.post_title_ar || '' };
+          return el('li.profile__comment', null, [
+            el('p.comment__body', null, bdi(c.body)),
+            el('div.profile__comment-meta', null, [
+              el('a', { href: '/item/' + encodeURIComponent(c.post_id) }, [
+                t('profile.onMemory') + ' ', bdi(pick(title))
+              ]),
+              el('span.comment__when', { text: I18N.day(c.day) })
+            ])
+          ]);
+        }))
+      : el('p.profile__empty', { text: t('profile.noComments') });
+
+    return el('div.profile', null, [
+      isOwner && !own
+        ? el('div.profile__preview', null, [
+            el('span', { text: t('profile.previewNotice') }),
+            el('a', { href: '/me', text: t('profile.backToMine') })
+          ])
+        : null,
+      header,
+      bio,
+      isOwner && own ? editPanel() : null,
+      isOwner && own ? accountPanel() : null,
+      isOwner && own ? pendingPanel() : null,
+      profileSection('contributions', isOwner, t('profile.contributions'), contributions.length, contributionsBody),
+      profileSection('comments', isOwner, t('profile.comments'), comments.length, commentsBody)
+    ]);
+  }
+
+  function isPublicField(name) {
+    var vis = profileCache.own && profileCache.own.visibility;
+    return !vis || vis[name] !== 'private';
+  }
+
+  function privateFlag() {
+    return el('span.privacy-flag', { text: t('profile.ownerOnly') });
+  }
+
+  function profileSection(field, isOwner, title, count, body) {
+    var visible = isPublicField(field);
+    return el('section.profile__section', null, [
+      el('div.profile__section-head', null, [
+        el('h2.profile__section-title', { text: title }),
+        el('span.profile__section-count', { text: num(count) }),
+        isOwner && !visible ? privateFlag() : null
+      ]),
+      body
+    ]);
+  }
+
+  /**
+   * The member's own submissions, whatever state they are in.
+   *
+   * THE screen the ingest path has never had. A member whose upload the worker refused had
+   * no surface anywhere telling them so — the item simply never appeared, which is
+   * indistinguishable from a moderator having rejected it in silence. posts_full() returns
+   * the author's own rows including ingest_state and ingest_error (0009 grants the member
+   * their own error text specifically), so this is the first place the answer exists.
+   *
+   * What is deliberately NOT here is "expected by": CLAUDE.md §6 holds `expect_by` until a
+   * one-off timing probe against the deployed worker replaces the estimated factor in
+   * JOB_DEADLINE_MS, and §6 says that number ships once at the real figure rather than
+   * being published and corrected. So this screen says which state a submission is in and
+   * says nothing about when — which is true, and is more than the member had.
+   */
+  function pendingPanel() {
+    var rows = profileCache.mine || [];
+    /* A withdrawn submission leaves the list: withdrawing is the member saying they no
+       longer want to see it. The row itself stays in the database with its audit trail
+       (§3) — this is the member's view, not the record. */
+    var open = rows.filter(function (r) {
+      return r.status !== 'withdrawn' && (r.status !== 'approved' || r.ingest_state !== 'ready');
+    });
+    if (!open.length) return null;
+
+    return el('section.profile__section', null, [
+      el('div.profile__section-head', null, [
+        el('h2.profile__section-title', { text: t('mine.title') }),
+        el('span.profile__section-count', { text: num(open.length) })
+      ]),
+      el('p.profile__empty', { text: t('mine.blurb') }),
+      el('ul.mine', null, open.map(function (row) {
+        var title = { ar: row.title_ar || row.title_en || '', en: row.title_en || row.title_ar || '' };
+        var state = submissionState(row);
+        return el('li.mine__row', null, [
+          el('div.mine__title', null, bdi(pick(title))),
+          el('div.mine__meta', null, [
+            el('span.badge', { text: t('mine.state.' + state) }),
+            row.ingest_error
+              ? el('span.mine__error', { text: t('mine.err.' + row.ingest_error) })
+              : null,
+            canWithdraw(row, state) ? withdrawControl(row, title) : null
+          ]),
+          state === 'rejected' ? rejectionReason(row) : null
+        ]);
+      }))
+    ]);
+  }
+
+  /* The moderator's reason, from my_rejections() (0064): the note and the DAY, never who
+     wrote it. A rejection from before 0064 has no note, and says only when — which is
+     true, where inventing a reason would not be. */
+  function rejectionReason(row) {
+    var found = (profileCache.rejections || {})[row.id];
+    if (!found) return null;
+    return el('div.mine__reason', null, [
+      el('span.mine__reason-label', { text: t('mine.reviewedOn', { d: I18N.day(found.rejected_on) }) }),
+      found.note ? el('p.mine__reason-text', null, bdi(found.note)) : null
+    ]);
+  }
+
+  /* Withdraw is offered where the member's own label is "In review", "Not accepted" or
+     "Processing failed" — pending or rejected, and nothing in flight.
+
+     NOT on "Upload incomplete". Those rows are drafts whose bytes have not arrived:
+     request-upload creates the row before the PUT, and a failed PUT leaves it behind. The
+     repair is the pipeline's, not a remove button — 0065's reaper fails an unstarted upload
+     once its window closes (65 minutes for a member) and returns the day's slot, and the
+     row then reads "Processing failed", where withdraw IS offered.
+
+     NOT on "Processing" either: the worker holds that row, and pulling it mid-transcode
+     races the worker's own write.
+
+     The status test is explicit rather than implied by `state`, because `state` follows
+     ingest first: an approved post whose ingest failed would read "failed", and approved
+     items go through the removal request, not through this. */
+  function canWithdraw(row, state) {
+    if (row.takedown) return false;
+    if (row.status !== 'pending' && row.status !== 'rejected') return false;
+    return state === 'inReview' || state === 'rejected' || state === 'failed';
+  }
+
+  /* Two steps, in place. The first click asks; only the second writes. Swapped inside its
+     own node rather than through render(), so focus lands on the question instead of
+     falling back to the top of the page between the two clicks.
+
+     The write is 0018's own: `{status: 'withdrawn'}` and nothing else, which posts_update
+     already admits for the author (42_owner_withdraw pins it). An empty representation is
+     the policy refusing, and is reported as a failure rather than a success. */
+  function withdrawControl(row, title) {
+    var box = el('span.mine__actions');
+
+    function idle() {
+      mount(box, el('button.btn.btn--quiet.mine__action', {
+        type: 'button', text: t('mine.withdraw'), onclick: ask
+      }));
+    }
+
+    function ask() {
+      var yes = el('button.btn.btn--ghost.mine__action', {
+        type: 'button', text: t('mine.withdrawYes'), onclick: go
+      });
+      mount(box, [
+        el('span.mine__ask', { text: t('mine.withdrawAsk') }),
+        yes,
+        el('button.btn.btn--quiet.mine__action', {
+          type: 'button', text: t('action.cancel'), onclick: idle
+        })
+      ]);
+      yes.focus();
+    }
+
+    function go() {
+      mount(box, el('span.mine__ask', { role: 'status', text: t('auth.working') }));
+      DB.patch('posts', 'id=eq.' + encodeURIComponent(row.id) + '&select=id,status', { status: 'withdrawn' })
+        .then(function (rows) {
+          if (!rows || !rows.length || rows[0].status !== 'withdrawn') throw new Error('refused');
+          profileCache.mine = (profileCache.mine || []).filter(function (r) { return r.id !== row.id; });
+          render();
+          UI.toast(t('mine.withdrawDone', { t: pick(title) }));
+        })
+        .catch(function () {
+          idle();
+          UI.toast(t('mine.withdrawFailed'));
+        });
+    }
+
+    idle();
+    return box;
+  }
+
+  /* One label per state a member can actually be in, derived from two columns rather than
+     shown raw: `status` and `ingest_state` are independent, and the pair a member needs
+     explaining is (pending, failed) — approved-but-broken and never-reviewed look identical
+     otherwise, and only one of them is theirs to fix. */
+  function submissionState(row) {
+    if (row.ingest_state === 'failed') return 'failed';
+    if (row.ingest_state === 'awaiting_bytes') return 'incomplete';
+    if (row.ingest_state === 'processing') return 'processing';
+    if (row.status === 'rejected') return 'rejected';
+    if (row.status === 'withdrawn') return 'withdrawn';
+    return 'inReview';
+  }
+
+  function loadProfile() {
+    var own = isOwnProfileRoute();
+    var handle = own ? (state.account && state.account.handle) : routedHandle();
+
+    /* /me needs a handle to ask for, and the handle is not in the JWT — §7 keeps it in
+       `profiles`, so it arrives from a request that AUTH.restore() starts and that the
+       first paint does not wait for. Landing on /me directly therefore reaches here with
+       `handle` null.
+
+       Without this branch that produced a permanent wrong answer rather than a slow right
+       one: profile_view('') matches nobody, the page renders "profile not found", and
+       profileCache.key has already been written, so nothing ever asks again. The member
+       sees their own profile missing until they reload.
+
+       So: fetch the handle, re-render, and DO NOT cache anything in the meantime. */
+    if (own && !handle) {
+      loadOwnHandle().then(function () {
+        if (isOwnProfileRoute() && state.account && state.account.handle) render();
+      });
+      return Promise.resolve();
+    }
+
+    var key = own ? 'me:' + (state.account ? state.account.id : '') : 'u:' + handle;
+    if (profileCache.key === key) return Promise.resolve();
+
+    profileCache = { key: key, loaded: false, data: null, own: null, mine: null, rejections: null };
+
+    /* Two sources, and the split is §7's. The shard is the public projection everybody
+       gets; profile_view() is the owner's (and a moderator's) view of the private half. A
+       stranger's browser never receives the hidden fields at all — it is not asked to be
+       discreet about data it holds. */
+    var ownRow = (own || state.signedIn)
+      ? DB.rpc('profile_view', { p_handle: handle || '' }).then(function (rows) {
+          return (rows && rows[0]) || null;
+        }, function () { return null; })
+      : Promise.resolve(null);
+
+    return ownRow.then(function (row) {
+      profileCache.own = row;
+      /* `handle` is non-null by here — the /me branch above returned early without one —
+         so this only falls back for a /u/ route with no segment, which resolves to no
+         profile and renders "not found". */
+      if (!handle) return null;
+      return ARCHIVE.profile(handle);
+    }).then(function (shard) {
+      profileCache.data = shard || fallbackProfile(profileCache.own);
+      if (!own || !state.signedIn) return null;
+      // posts_full(): the member's own rows, in every state. See pendingPanel.
+      return DB.rpc('posts_full', {}).then(function (rows) {
+        profileCache.mine = (rows || []).filter(function (r) {
+          return state.account && r.created_by === state.account.id;
+        });
+        /* The reasons, only when there is a rejection to explain. A failure here costs the
+           reason and nothing else — the row still says "Not accepted", as it always has. */
+        var rejected = profileCache.mine.some(function (r) { return r.status === 'rejected'; });
+        if (!rejected) return null;
+        return DB.rpc('my_rejections', {}).then(function (found) {
+          profileCache.rejections = {};
+          (found || []).forEach(function (r) { profileCache.rejections[r.post_id] = r; });
+        }, function () { profileCache.rejections = {}; });
+      }, function () { profileCache.mine = []; });
+    }).then(function () {
+      profileCache.loaded = true;
+      render();
+    }, function () {
+      profileCache.loaded = true;
+      render();
+    });
+  }
+
+  /* A profile with nothing published has no shard — publishable_profiles() is bounded by
+     the archive (0044). Its owner still has a page, built from the row they can read. */
+  function fallbackProfile(own) {
+    if (!own) return null;
+    return {
+      handle: own.handle,
+      display_name: own.display_name,
+      avatar_path: own.avatar_path,
+      label: own.role_cache || 'member',
+      bio: own.bio,
+      member_since: own.member_since,
+      contributions: [],
+      comments: []
+    };
+  }
+
+  /* ── Edit profile & privacy (owner only) ─────────────────── */
+
+  /**
+   * The member's own account controls — not their profile, and kept apart from it.
+   *
+   * editPanel() above is about what OTHER people see (§7's visibility map). This is about
+   * the account itself, which nobody else sees at all, and the note says so: the two live
+   * on one page and the difference between them is the whole of what a privacy control
+   * means here.
+   *
+   * The reset goes through the same dialog a signed-out visitor uses, prefilled with the
+   * address we already know. Not a shortcut that skips the email round-trip: a signed-in
+   * session is not proof that the person at the keyboard owns the mailbox, and on §7's
+   * shared and borrowed devices that distinction is the entire point of sending a link.
+   */
+  function accountPanel() {
+    if (!state.account) return null;
+
+    return el('section.profile__section.account', null, [
+      el('div.profile__section-head', null, [
+        el('h2.profile__section-title', { text: t('account.title') })
+      ]),
+      el('p.privacy-list__note', { text: t('account.note') }),
+      el('div.account__rows', null, [
+        /* 0060's row, first. It is the one that decides whether the rest of the archive is
+           writable at all, and a member who cannot contribute needs to find out here rather
+           than by pressing Share. The state is shown even when it is fine: "confirmed" said
+           once is what makes "not confirmed" legible when it appears. */
+        el('div.account__row', null, [
+          el('div', null, [
+            el('div.privacy-row__name', { text: t('account.email') }),
+            /* THREE states, because state.confirmed has three and the other two places
+               that read it say so. Null is "we have not been told" — a status request that
+               failed, or a database that does not have 0060 yet — and collapsing it into
+               "confirmed" made this row assert something nothing had checked. It is the
+               one row on the page whose whole job is to report a fact. */
+            el('div.privacy-row__hint', {
+              text: state.confirmed === false ? t('account.emailNo')
+                  : state.confirmed === true ? t('account.emailOk')
+                  : t('account.emailUnknown')
+            })
+          ]),
+          /* No button when there is nothing to do. An action that reports success without
+             doing anything is worse than an absent one. */
+          state.confirmed === false
+            ? el('button.btn.btn--ghost', {
+                type: 'button',
+                onclick: function () { openConfirmDialog(null); },
+                text: t('account.emailConfirm')
+              })
+            : null
+        ]),
+        el('div.account__row', null, [
+          el('div', null, [
+            el('div.privacy-row__name', { text: t('account.password') }),
+            el('div.privacy-row__hint', { text: t('account.passwordHint') })
+          ]),
+          el('button.btn.btn--ghost', {
+            type: 'button',
+            onclick: function () { openAuth('reset', { email: state.account.email }); },
+            text: t('reset.submit')
+          })
+        ])
+      ])
+    ]);
+  }
+
+  function editPanel() {
+    var own = profileCache.own;
+    if (!own) return null;
+    if (!state.editOpen) {
+      return el('div.profile__edit', null, [
+        el('button.btn.btn--ghost.profile__edit-toggle', {
+          type: 'button',
+          'aria-expanded': 'false',
+          onclick: function () { state.editOpen = true; render(); },
+          text: t('profile.editTitle')
+        }),
+        el('a.profile__preview-link', { href: '/u/' + encodeURIComponent(own.handle), text: t('profile.previewLink') })
+      ]);
+    }
+
+    /* THE HANDLE, editable — added 7 Sep 2026, and it is the half of the handle defect
+       that the INSERT→PATCH fix could not reach.
+
+       That fix made claimHandle() work, but claimHandle only ever runs at signup. Every
+       account created before it — all of them, on the deployed database, including the
+       maintainer's — holds 0057's placeholder `member_<12 hex>` in the row, and nothing
+       could change it: this form wrote display_name, bio and visibility and never
+       `handle`. So the two refusal messages that say "change it from your page", and the
+       handleKept message that promises "a temporary name you can change from your page",
+       all named a control that did not exist.
+
+       No migration: 0004 grants `update (handle, display_name, …)` to `authenticated` and
+       0017's profiles_update restricts it to `id = auth.uid()`, both live since 11 Aug.
+       This is the same policy claimHandle() already uses on the same column. */
+    var handleInput = el('input.input', { type: 'text', autocomplete: 'username' });
+    handleInput.value = own.handle || '';
+
+    var displayInput = el('input.input', { type: 'text' });
+    displayInput.value = own.display_name || '';
+    var bioInput = el('textarea.input', { rows: '3' });
+    bioInput.value = own.bio || '';
+
+    var visibility = {};
+    ['bio', 'personalInfo', 'contributions', 'comments'].forEach(function (f) {
+      visibility[f] = (own.visibility && own.visibility[f]) === 'private' ? 'private' : 'public';
+    });
+
+    var toggles = Object.keys(visibility).map(function (fieldName) {
+      var row = el('div.privacy-row');
+      function paint() {
+        var on = visibility[fieldName] === 'public';
+        mount(row, [
+          el('div', null, [
+            el('div.privacy-row__name', { text: t('profile.field.' + fieldName) }),
+            el('div.privacy-row__hint', { text: t('profile.hint.' + fieldName) })
+          ]),
+          el('button.switch', {
+            type: 'button',
+            role: 'switch',
+            'aria-checked': on ? 'true' : 'false',
+            'aria-label': t('profile.field.' + fieldName) + ' — ' + (on ? t('profile.public') : t('profile.private')),
+            onclick: function () {
+              visibility[fieldName] = on ? 'private' : 'public';
+              paint();
+            }
+          }),
+          el('span.privacy-row__state', { text: on ? t('profile.public') : t('profile.private') })
+        ]);
+      }
+      paint();
+      return row;
+    });
+
+    var note = el('p.form-error', { role: 'alert', hidden: true });
+
+    var form = el('form.profile__edit-form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        note.hidden = true;
+        /* select= is REQUIRED and is not tidiness: `Prefer: return=representation` with no
+           select is a SELECT of `*`, and 0015 revoked table-level SELECT on profiles. See
+           db.js — this is the defect the lifecycle harness found on posts. */
+        var patch = {
+          display_name: displayInput.value.trim() || null,
+          bio: bioInput.value.trim() || null,
+          visibility: visibility
+        };
+
+        /* Sent ONLY when it changed. An unchanged handle re-sent is a write of the value
+           the row already holds — harmless against the unique index, but it puts the
+           reserved-handle trigger and both CHECK constraints in front of a save that was
+           about a bio, and a member editing their bio must not be refused over a name
+           they did not touch. */
+        var wantedHandle = normalizeHandle(handleInput.value);
+        var handleChanged = wantedHandle && wantedHandle !== (own.handle || '');
+        if (handleChanged) {
+          /* Same rules as the signup dialog: a 400 here becomes "not allowed", which does
+             not say which rule. Checked first so the member is told what to change. */
+          var handleProblemKey = handleProblem(wantedHandle);
+          if (handleProblemKey) {
+            note.textContent = t(handleProblemKey);
+            note.hidden = false;
+            handleInput.focus();
+            return;
+          }
+          if (handleInput.value !== wantedHandle) handleInput.value = wantedHandle;
+          patch.handle = wantedHandle;
+        }
+
+        DB.patch('profiles', 'id=eq.' + encodeURIComponent(state.account.id) + '&select=handle',
+          patch)
+          .then(function (rows) {
+            if (!rows || !rows.length) {
+              note.textContent = t('admin.err.denied');
+              note.hidden = false;
+              return;
+            }
+            /* The masthead carries the handle's initial, and the profile route is keyed by
+               it, so a rename that is not adopted here leaves the page addressing the old
+               name until a reload. */
+            if (handleChanged && state.account) {
+              state.account.handle = rows[0].handle;
+              renderMasthead();
+            }
+            UI.toast(t(handleChanged ? 'profile.handleSaved' : 'profile.saved'));
+            state.editOpen = false;
+            profileCache.key = null;
+            loadProfile();
+          })
+          .catch(function (err) {
+            /* Only when a handle was actually sent: a 409 from anywhere else on this form
+               is not a name collision and must not be reported as one. */
+            var refusal = handleChanged ? handleRefusalKey(err, wantedHandle) : null;
+            note.textContent = t(refusal || (err && err.key) || 'admin.err.generic');
+            note.hidden = false;
+          });
+      }
+    }, [
+      el('div.field', null, [
+        labelFor(t('field.handle'), handleInput),
+        handleInput,
+        el('p.privacy-row__hint', { text: t('profile.handleHint') }),
+        el('p.privacy-row__hint', { text: t('field.handleRules') })
+      ]),
+      el('div.field', null, [labelFor(t('profile.displayName'), displayInput), displayInput]),
+      el('div.field', null, [labelFor(t('profile.bio'), bioInput), bioInput]),
+      el('div.privacy-list', null, [
+        el('div.privacy-list__head', null, [
+          el('h3.profile__section-title', { text: t('profile.privacyTitle') }),
+          el('p.privacy-list__note', { text: t('profile.privacyNote') })
+        ])
+      ].concat(toggles)),
+      note,
+      el('div.dialog__actions', null, [
+        el('button.btn.btn--ghost', {
+          type: 'button', onclick: function () { state.editOpen = false; render(); }, text: t('action.cancel')
+        }),
+        el('button.btn.btn--primary', { type: 'submit', text: t('profile.save') })
+      ])
+    ]);
+
+    return el('div.profile__edit.profile__edit--open', null, [
+      el('button.btn.btn--ghost.profile__edit-toggle', {
+        type: 'button',
+        'aria-expanded': 'true',
+        onclick: function () { state.editOpen = false; render(); },
+        text: t('profile.editTitle')
+      }),
+      form
+    ]);
+  }
+
+  /* ── Info page ───────────────────────────────────────────── */
+
+  function renderInfoPage() {
+    var sections = ARCHIVE.pages();
+
+    return el('div.infopage', null, [
+      el('div.page-head', null, [
+        el('div', null, [
+          el('h1.page-head__title', { text: t('page.title') }),
+          el('p.page-head__blurb', { text: t('page.blurb') })
+        ])
+      ]),
+      el('nav.infopage__toc', { 'aria-label': t('page.title') }, sections.map(function (section) {
+        return el('a.infopage__toc-link', {
+          href: '/page/' + encodeURIComponent(section.slug),
+          'aria-current': routedPageSlug() === section.slug ? 'true' : null,
+          text: pick(section.title)
+        });
+      })),
+      el('div.infopage__body', null, sections.map(function (section) {
+        return el('section.infosection', { id: 'section-' + section.slug }, [
+          el('h2.infosection__title', { text: pick(section.title) }),
+          gloss(section.title) ? el('div.infosection__gloss.gloss-line', { text: gloss(section.title) }) : null
+        ].concat(
+          pick(section.body).split(/\n\s*\n/).map(function (para) {
+            return el('p.infosection__para', { text: para });
+          })
+        ).concat(
+          section.slug === 'donate' ? [donateContact()] : []
+        ));
+      }))
+    ]);
+  }
+
+  /* Email opens the mail client; the phone number opens WhatsApp. Both are content blocks
+     now (§9), so filling them in is a dashboard edit rather than a deploy. */
+  function donateContact() {
+    var email = pick(ARCHIVE.block('page.donate.email'));
+    var whatsapp = pick(ARCHIVE.block('page.donate.whatsapp'));
+    var waDigits = whatsapp.replace(/[^\d]/g, '');
+
+    var rows = [];
+    if (email && email.indexOf('PLACEHOLDER') === -1) {
+      rows.push(el('a.donate-contact__row', { href: 'mailto:' + email }, [
+        el('span.donate-contact__label', { text: t('page.email') }),
+        el('span.donate-contact__value.lat', { text: email })
+      ]));
+    }
+    if (waDigits) {
+      rows.push(el('a.donate-contact__row', {
+        href: 'https://wa.me/' + waDigits, target: '_blank', rel: 'noopener'
+      }, [
+        el('span.donate-contact__label', { text: t('page.whatsapp') }),
+        el('span.donate-contact__value.lat', { text: whatsapp })
+      ]));
+    }
+    // Nothing configured yet renders no link at all. A mailto: to PLACEHOLDER_EMAIL is a
+    // dead control that looks live, which is worse than an absent one.
+    if (!rows.length) return null;
+
+    return el('div.donate-contact', null, [
+      el('h3.donate-contact__title', { text: t('page.donateReach') }),
+      el('div.donate-contact__rows', null, rows),
+      el('p.donate-contact__note', { text: t('page.donateNote') })
+    ]);
+  }
+
+  /* ── Located memories ────────────────────────────────────────
+     M4. The map is a canvas over a PMTiles basemap on R2 (§2), the decade control is a
+     slider, and the list under it is not a lesser version of either — it is §10's stated
+     "tile-failure fallback to list view", the accessible equivalent of a canvas nothing can
+     read aloud, and what a visitor sees while the tiles are still arriving.
+
+     Three ways the map does not draw, and all three end in the same list:
+
+       · no extract provisioned — config/site.json's basemap.path is empty, which is the
+         state this repository ships in until somebody builds the Palestine extract. Not a
+         failure and not reported as one.
+       · the archive is unreadable — a 404, a range request an intermediary stripped, or a
+         compression the browser has no decoder for (see pmtiles.js).
+       · the module would not load at all.
+
+     Only the second and third say so on the screen. A map that was never configured has
+     nothing to apologise for. */
+
+  var geoCache = { items: null, places: [] };
+
+  var mapState = {
+    node: null,          // the container, kept across renders so the canvas survives them
+    instance: null,
+    loading: false,
+    failed: false,
+    listNode: null,      // updated in place while the slider is dragged
+    countNode: null,
+    valueNode: null,
+    input: null
+  };
+
+  /* map.js and its two dependencies, fetched the first time somebody opens /map or drops a
+     pin. UI.loadMap is the shared loader — admin.js reaches for the same three files from
+     the gazetteer screen, and two copies of a load-order dependency is one copy too many.
+     See ui.js for why these are script tags rather than import(). */
+  function loadMapModules() { return UI.loadMap(); }
+
+  function loadGeo() {
+    if (geoCache.items) return Promise.resolve(geoCache.items);
+    /* Which cells exist comes from the release's index.json, not from a constant. At
+       GEO_PRECISION 5 one cell is ~4.9 km and covers Ramallah — which is exactly why
+       shards.ts chose 5 — so this is one request in practice. Asking the index rather than
+       hardcoding that cell is what keeps it true for an item contributed from outside the
+       city, which would otherwise be published into a shard nothing ever fetched. */
+    return ARCHIVE.index().then(function (idx) {
+      var cells = idx.cells.length
+        ? Promise.all(idx.cells.map(function (cell) { return ARCHIVE.geo(cell); }))
+        : Promise.resolve([]);
+      // The gazetteer alongside, because the basemap carries no labels of its own and a map
+      // of a city with no place names on it is a diagram.
+      return Promise.all([cells, ARCHIVE.places()]).then(function (both) {
+        var all = [];
+        both[0].forEach(function (b) { all = all.concat(b.items); });
+        geoCache.items = all;
+        geoCache.places = both[1] || [];
+        return all;
+      });
+    }).catch(function () {
+      geoCache.items = [];
+      return geoCache.items;
+    });
+  }
+
+  /** The decades that actually hold items, from index.json; DATA.DECADES until it loads. */
+  function knownDecades() {
+    var idx = ARCHIVE.indexNow();
+    return idx && idx.decades.length ? idx.decades : DATA.DECADES;
+  }
+
+  /** The slider's stops: every decade the archive has, with "all" at one end. */
+  function decadeStops() {
+    return [{ id: 'all', label: t('map.all') }].concat(knownDecades().map(function (d) {
+      return { id: d, label: decadeLabel(d) };
+    }));
+  }
+
+  function visibleItems() {
+    var items = geoCache.items || [];
+    if (state.decade === 'all') return items;
+    return items.filter(function (row) { return row.decade === state.decade; });
+  }
+
+  function locatedCards(visible) {
+    if (!visible.length) return el('p.profile__empty', { text: t('map.empty') });
+    /* The archive's own masonry, not a hand-built copy of its class names — see cardGrid.
+       §1: the map's list is "the same grid language", which means the same columns at the
+       same widths, and the only difference is the precision line §7 asks for under each
+       card. */
+    return cardGrid(visible, function (card, row) {
+      card.appendChild(el('div.located__where', {
+        text: t('map.precision.' + (row.precision || 'area'))
+      }));
+    });
+  }
+
+  /* The slider moves, and the map and the list follow — without a re-render.
+
+     A full render() on every input event would rebuild the slider under the finger dragging
+     it, which loses focus, loses the drag on a touch screen, and makes the control feel
+     broken on exactly the mid-range device §10 names as the exit criterion. So the three
+     nodes that depend on the decade are updated in place. */
+  function applyDecade(id) {
+    state.decade = id;
+    var visible = visibleItems();
+
+    var stop = null;
+    decadeStops().forEach(function (option) { if (option.id === id) stop = option; });
+    if (mapState.valueNode && stop) mapState.valueNode.textContent = stop.label;
+    // A range input announces its numeric value, which here is an index into a list of
+    // decades and means nothing to anyone. aria-valuetext is what makes it say "the 1960s".
+    if (mapState.input && stop) mapState.input.setAttribute('aria-valuetext', stop.label);
+    if (mapState.countNode) {
+      mapState.countNode.textContent = t('map.inView', { n: num(visible.length) });
+    }
+    if (mapState.listNode) mount(mapState.listNode, locatedCards(visible));
+    if (mapState.instance) mapState.instance.setItems(visible);
+  }
+
+  function mapFailed() {
+    if (mapState.failed) return;
+    mapState.failed = true;
+    if (mapState.instance) { mapState.instance.destroy(); mapState.instance = null; }
+    mapState.node = null;
+    if (route() === 'map') render();
+  }
+
+  function ensureMap(visible) {
+    if (mapState.instance) { mapState.instance.setItems(visible); return; }
+    if (mapState.loading) return;
+    mapState.loading = true;
+
+    loadMapModules().then(function () {
+      if (mapState.failed || !mapState.node) return;
+      var instance = global.MAP.create(mapState.node, {
+        url: global.CONFIG.basemap.url,
+        label: t('map.canvasLabel'),
+        center: { lat: 31.9038, lon: 35.2034 },
+        onSelect: function (item) { navigate('/item/' + encodeURIComponent(item.id)); },
+        onFail: mapFailed
+      });
+      mapState.instance = instance;
+      instance.setPlaces(geoCache.places);
+      instance.setItems(visible);
+      // Opened on the archive it actually holds rather than on a hardcoded viewport: an
+      // item contributed from outside Ramallah is otherwise off-screen at every zoom.
+      instance.ready.then(function () {
+        if (visible.length) instance.fit(visible);
+      }, function () { /* onFail has it; this is only here so the rejection is handled */ });
+    }, mapFailed);
+  }
+
+  function renderLocated() {
+    if (!geoCache.items) return el('p.profile__empty', { text: t('q.loading') });
+
+    var visible = visibleItems();
+    var stops = decadeStops();
+    var index = 0;
+    stops.forEach(function (option, i) { if (option.id === state.decade) index = i; });
+
+    mapState.countNode = el('span.page-head__count', {
+      text: t('map.inView', { n: num(visible.length) })
+    });
+    mapState.valueNode = el('output.decade-slider__value', { text: stops[index].label });
+
+    var input = el('input.decade-slider__input', {
+      type: 'range',
+      min: '0',
+      max: String(stops.length - 1),
+      step: '1',
+      'aria-label': t('map.decade'),
+      'aria-valuetext': stops[index].label,
+      oninput: function () {
+        var chosen = stops[Math.min(stops.length - 1, Math.max(0, Number(input.value) || 0))];
+        applyDecade(chosen.id);
+      }
+    });
+    // Set as a property, not an attribute: on a range input the attribute is the DEFAULT
+    // value, and a form reset would be the only thing that ever read it.
+    input.value = String(index);
+    mapState.input = input;
+
+    mapState.listNode = el('div.located__list', null, locatedCards(visible));
+
+    var panel = null;
+    var note = null;
+    if (global.CONFIG.basemap.url && !mapState.failed) {
+      if (!mapState.node) {
+        mapState.node = el('div.mapview', null, [
+          // OpenStreetMap's licence requires the credit to be shown. It is a property of
+          // the extract, so it comes from config/site.json rather than from I18N.
+          el('p.mapview__credit', { text: global.CONFIG.basemap.attribution })
+        ]);
+      }
+      panel = mapState.node;
+      ensureMap(visible);
+    } else if (mapState.failed) {
+      // Said out loud, because a map that silently becomes a list looks like a design
+      // decision and this one is not. A basemap that was never configured says nothing.
+      note = el('p.mapview__note', { role: 'status', text: t('map.err.tiles') });
+    }
+
+    return el('div.located', null, [
+      el('div.page-head', null, [
+        el('div', null, [
+          el('h1.page-head__title', { text: t('map.title') }),
+          el('p.page-head__blurb', { text: t(panel ? 'map.blurb' : 'map.blurbList') })
+        ]),
+        mapState.countNode
+      ]),
+      el('div.decade-slider', null, [
+        el('span.decade-slider__label', { text: t('map.decade') }),
+        input,
+        mapState.valueNode
+      ]),
+      panel,
+      note,
+      mapState.listNode
+    ]);
+  }
+
+  /* ── Events ──────────────────────────────────────────────── */
+
+  function renderEvents() {
+    var events = state.feed.filter(function (row) { return row.kind === 'event'; });
+
+    return el('div', null, [
+      el('div.page-head', null, [
+        el('div', null, [
+          el('h1.page-head__title', { text: copyText('events.title') }),
+          el('p.page-head__blurb', { text: copyText('events.blurb') })
+        ]),
+        el('span.page-head__count', { text: t('events.count', { n: num(events.length) }) })
+      ]),
+      events.length
+        ? el('ul.events', null, events.map(function (entry) {
+            var title = titlePair(entry);
+            var thumb = entry.thumb ? ARCHIVE.mediaUrl(entry.thumb) : null;
+            return el('li.event', null, [
+              el('a.event__plate' + (thumb ? '' : '.plate'), {
+                href: '/item/' + encodeURIComponent(entry.id),
+                style: thumb ? null : toneStyle(avatarTone(entry.id)),
+                'aria-label': pick(title)
+              }, thumb
+                ? el('img.memory__img', { src: thumb, alt: pick(title), loading: 'lazy' })
+                : el('span.mono', { text: t('feed.noPreview') })),
+              el('div.event__body', null, [
+                el('h2.event__title', null,
+                  el('a', { href: '/item/' + encodeURIComponent(entry.id) }, bdi(pick(title)))),
+                gloss(title) ? el('div.event__gloss.gloss-line', null, bdi(gloss(title))) : null,
+                entry.decade ? el('div.event__where', { text: decadeLabel(entry.decade) }) : null
+              ])
+            ]);
+          }))
+        : el('p.profile__empty', { text: t('events.empty') })
+    ]);
+  }
+
+  /* ── Render ──────────────────────────────────────────────── */
+
+  function render() {
+    var name = route();
+
+    /* Before anything is mounted, and only when this is not an item: /item/{id} renders
+       the archive UNDER the viewer, so recording it here would make the back button point
+       at the memory the reader is trying to leave. */
+    if (!routedItemId()) state.lastView = path();
+
+    /* Same condition, and for a closely related reason. /item/{id} carries no tab, so
+       reading one out of it would reset a reader who opened a memory from Videos back to
+       All — and the viewer scrolls through the ACTIVE tab, so the list under them would
+       change the moment they arrived. The tab they came from survives in state; the URL
+       they came from survives in lastView, which is what the back button uses. */
+    if (!routedItemId()) state.tab = routedTab();
+
+    renderMasthead();
+    renderFooter();
+
+    var view = qs('#view');
+
+    /* Before the archive-error branch on purpose. A member who cannot sign in has to be
+       able to reset their password on a day the CDN is having one, and nothing on this
+       screen reads a shard. */
+    if (name === 'reset') {
+      mount(view, renderReset());
+      closeViewer();
+      global.scrollTo(0, 0);
+      return;
+    }
+
+    /* An unreadable archive, on every route EXCEPT the archive itself.
+     *
+     * The exclusion is M6's and it closes a trap the tabs introduce. This branch returns
+     * before renderArchive() and before ensureFirstPage(), so with `state.error` set — which
+     * only the ALL feed's page 1 can do — a reader clicking through to /c/image would get
+     * the blank error page and that tab would never be given the chance to load. The tabs
+     * read different shards; one of them failing is not all of them failing.
+     *
+     * Nothing is swallowed: renderArchive() puts the same message where the grid would be,
+     * with the masthead, the footer and the other three tabs still on the screen, which is
+     * strictly more than this page offered. */
+    if (state.error && !state.feed.length && name !== 'archive') {
+      mount(view, el('div.page-head', null, [
+        el('h1.page-head__title', { text: t('archive.err.title') }),
+        el('p.page-head__blurb', { text: t(state.error) })
+      ]));
+      closeViewer();
+      return;
+    }
+
+    if (name === 'profile') {
+      if (isOwnProfileRoute() && !state.signedIn) {
+        // Captured before the redirect, so signing in returns them to the profile they
+        // asked for rather than to the archive they were bounced to (§9).
+        navigate('/', true);
+        mount(view, renderArchive());
+        openGate(function () { navigate('/me'); });
+        closeViewer();
+        return;
+      }
+      loadProfile();
+      mount(view, renderProfile() || el('div'));
+    } else if (name === 'map') {
+      mount(view, renderLocated());
+      // renderLocated shows a loading state while items is null; the .then re-renders
+      // rather than mounting a second time from inside the first render, which would leave
+      // the two competing for #view whenever the shard was already cached.
+      if (geoCache.items === null) {
+        loadGeo().then(function () { if (route() === 'map') render(); });
+      }
+    } else if (name === 'page') {
+      mount(view, renderInfoPage());
+    } else if (name === 'events') {
+      mount(view, renderEvents());
+      // /events reads the ALL feed and filters it (§1 gives events their own surface, not
+      // their own shard), so it needs that tab's first page whatever the reader last chose.
+      ensureFirstPage('all');
+    } else {
+      mount(view, renderArchive());
+      // The tab on screen, which after a /c/{cat} navigation is one nothing has fetched
+      // yet. Guarded inside, so this is a no-op on every render after the first.
+      ensureFirstPage(state.tab);
+    }
+
+    /* The viewer is a route, not a mode: /item/{id} opens it over the archive. */
+    var itemId = routedItemId();
+    closeViewer();
+    if (itemId) openViewerFor(itemId);
+    else if (name === 'page' && routedPageSlug()) scrollToSection(routedPageSlug());
+    else global.scrollTo(0, 0);
+  }
+
+  /**
+   * Open the viewer on an id, whether or not it is in the loaded feed.
+   *
+   * A deep link from WhatsApp arrives on an item that may be on feed page nine. Rather than
+   * loading nine pages to find it, the item is fetched directly and put at the front of the
+   * feed — so the reader sees what they came for immediately and can then scroll on into
+   * the rest of the archive.
+   */
+  function openViewerFor(id) {
+    var inFeed = -1;
+    currentItems().forEach(function (row, i) { if (row.id === id) inFeed = i; });
+    if (inFeed > -1) { state.lead = null; openViewer(inFeed); return; }
+
+    ARCHIVE.item(id).then(function (item) {
+      if (!item) {
+        // Redacted, or never published. Either way the archive does not have it, and the
+        // reader is told rather than left on a blank overlay. This is also the takedown
+        // path a shared link lands on: the item shard is gone and redactions.json names it.
+        UI.toast(t('archive.err.missing'));
+        navigate('/', true);
+        return;
+      }
+      state.items[id] = item;
+      // The feed-entry shape, built from the item shard. feedEntry() in shards.ts is the
+      // authority on these keys; this is the one place the front end reconstructs one, and
+      // it does so from the item shard's own fields rather than inventing any.
+      state.lead = {
+        id: item.id,
+        kind: item.kind,
+        // The item shard carries it for exactly this reconstruction — without it the one
+        // card a reader arrives from WhatsApp on would be the only card in the archive
+        // with no category, and a shared video would wear a photograph's badge.
+        category: item.category,
+        title_ar: item.title_ar,
+        title_en: item.title_en,
+        decade: item.decade,
+        thumb: (ARCHIVE.role(item.media, 'thumb') || {}).path || null,
+        author: item.author,
+        likes: item.likes,
+        comments: item.comment_count,
+        day: item.day
+      };
+      return refreshEngagement([id]).then(function () {
+        // The reader may have navigated away while the shard was in flight.
+        if (routedItemId() !== id) return;
+        /* Or the other pass of the race may already have opened this very item. The guard
+           in openViewer() makes a second call safe; this makes it unnecessary, so a reader
+           who has started scrolling is not dropped back to the first slide. */
+        var showing = state.viewer && viewerList()[state.viewer.index];
+        if (showing && showing.id === id) return;
+        openViewer(0);
+      });
+    }, function () {
+      UI.toast(t('archive.err.offline'));
+    });
+  }
+
+  function scrollToSection(slug) {
+    var target = qs('#section-' + slug);
+    if (!target) { global.scrollTo(0, 0); return; }
+    var top = target.getBoundingClientRect().top + global.pageYOffset - 80;
+    global.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
+  }
+
+  /* ── Boot ────────────────────────────────────────────────── */
+
+  global.addEventListener('popstate', render);
+  global.document.addEventListener('click', onDocumentClick);
+  global.addEventListener('langchange', render);
+
+  /* Infinite scroll on the archive. Deliberately not IntersectionObserver on a sentinel:
+     the masonry is three columns of different heights, so the last card is not the lowest
+     point on the page and a sentinel after it fires early or late depending on which column
+     happens to be tallest. */
+  var scrollTimer = null;
+  global.addEventListener('scroll', function () {
+    if (route() !== 'archive' || state.viewer) return;
+    global.clearTimeout(scrollTimer);
+    scrollTimer = global.setTimeout(function () {
+      var remaining = global.document.body.scrollHeight - (global.pageYOffset + global.innerHeight);
+      if (remaining > 1200) return;
+      /* Not while a query is on screen: the results replace the grid, so another page of
+         cards would be appended behind something nobody is looking at, and the scroll that
+         triggered it was a reader moving down a result list. */
+      if (state.query) return;
+      var b = tabState();
+      var before = b.items.length;
+      loadNextPage().then(function () {
+        if (b.items.length !== before && route() === 'archive' && !state.viewer) {
+          mount(qs('#view'), renderArchive());
+        }
+      }).catch(function () { /* the reader keeps what is already loaded */ });
+    }, 120);
+  }, { passive: true });
+
+  var resizeTimer = null;
+  var lastColumns = columnCount();
+  global.addEventListener('resize', function () {
+    global.clearTimeout(resizeTimer);
+    resizeTimer = global.setTimeout(function () {
+      var next = columnCount();
+      if (next === lastColumns || state.viewer) return;
+      lastColumns = next;
+      if (route() === 'archive') mount(qs('#view'), renderArchive());
+      /* /map reflows too, and it is the list node alone rather than render(): a full
+         re-render on /map would rebuild the panel around a canvas the reader may have
+         panned and would scroll them back to the top. Same in-place update applyDecade
+         makes for the same reason. */
+      else if (route() === 'map' && mapState.listNode) {
+        mount(mapState.listNode, locatedCards(visibleItems()));
+      }
+    }, 150);
+  });
+
+  /* BEFORE migrateHashRoute(), and the order matters: a recovery fragment is not a route
+     and migrateHashRoute() would leave it sitting in the address bar with a session in it
+     while it looked for `#/m/…`. */
+  captureRecovery();
+  migrateHashRoute();
+
+  /* The archive paints before anything about a session is known. §1: "Browsing is open" —
+     so a failed restore, a slow refresh or no account at all must not delay a single card.
+
+     The order is manifest -> content -> first feed page, and it is sequential because each
+     depends on the last: the release path comes from the manifest and the shard paths come
+     from the release. §9's budget counts exactly this sequence. */
+  ARCHIVE.ready()
+    .then(function () { return ARCHIVE.content(); })
+    .then(function () {
+      /* render() reads the tab out of the URL and asks ensureFirstPage() for that tab's
+         page 1, re-rendering when it lands. Boot deliberately does not fetch a page itself
+         any more: with four possible sources (M6's tabs) "the first feed page" is whichever
+         one the URL names, and two places deciding that is how they come to disagree — the
+         reader who opens /c/voice would get the All feed's page 1 as well as their own.
+
+         search-index.json is NOT here and must not be. §9 budgets HTML + CSS + JS + the
+         first feed page; the search index is none of the four and is fetched on the first
+         interaction with the box. */
+      render();
+      /* Last, and not awaited by anything above it. index.json only refines lists that
+         already have a fallback (the decade bar, the geo cells, the tab page counts), so
+         making the first paint wait on it would spend a request from §9's budget on
+         something no first screen shows. */
+      return ARCHIVE.index().catch(function () { return null; });
+    })
+    .catch(function (err) {
+      state.error = err && err.key ? err.key : 'archive.err.generic';
+      render();
+    });
+
+  /* 0060. A confirmation link carries a full session and takes precedence over whatever
+     sessionStorage held: a member who opens the link is saying which account this tab is
+     for, and restoring a different one under them would confirm nothing and look like the
+     link failing. */
+  if (state.mailedLink) {
+    adoptMailedLink();
+  } else {
+    AUTH.restore().then(function (account) {
+      if (account) onSignedIn(account);
+    });
+  }
+
+  /**
+   * Adopt the session a confirmation link carried, then stamp the flag with it.
+   *
+   * The stamp is the ONLY thing that may confirm an account (0060), and it works because
+   * the session's `amr` says a link was clicked — a claim inside a signature that a browser
+   * can neither write nor edit. Nothing here asserts that the member is confirmed; it asks
+   * the database to look at the token it already holds.
+   *
+   * A dead link is not a dead end. The archive is open to a signed-out visitor, so the
+   * failure path says which link failed and then restores whatever session was already
+   * there — which for somebody re-opening an old mail on their own phone is their own.
+   */
+  function adoptMailedLink() {
+    var tokens = state.mailedLink;
+    state.mailedLink = null;
+
+    return AUTH.adoptMailedLink(tokens).then(function (account) {
+      onSignedIn(account);
+      return DB.rpc('confirm_email', {}).then(function (row) {
+        if (!row || row.confirmed !== true) return false;
+        state.confirmed = true;
+        UI.toast(t('confirm.done'));
+        render();
+        return true;
+      }, function () {
+        /* The session is real and the stamp did not land — a network blip, or a token with
+           no amr. loadConfirmation() has already run from onSignedIn, so the member is
+           signed in and sees the unconfirmed state with the resend in front of it. */
+        return false;
+      });
+    }, function (err) {
+      UI.toast(t((err && err.key) || 'auth.err.linkExpired'));
+      return AUTH.restore().then(function (account) {
+        if (account) onSignedIn(account);
+      });
+    });
+  }
+
+  /* The session can end without anyone pressing sign-out — a refresh token that has been
+     rotated away, or an expiry. AUTH says so; the masthead has to agree. */
+  AUTH.onChange(function (account) {
+    if (!account && state.signedIn) {
+      adoptAccount(null);
+      renderMasthead();
+      if (route() === 'profile') navigate('/');
+    }
+  });
+})(window);

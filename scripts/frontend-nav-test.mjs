@@ -139,7 +139,7 @@ const SHARDS = {
 };
 
 /** The shell's own script list, so a module added there is a module this test runs. */
-const SHELL = [...read('site/index.html').matchAll(/<script src="(\/assets\/js\/[^"]+)"/g)]
+const SHELL = [...read('site/index.html').matchAll(/<script src="(\/assets\/(?:v\/[0-9a-f]+\/)?js\/[^"]+)"/g)]
   .map((m) => `site${m[1]}`);
 
 /**

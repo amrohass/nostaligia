@@ -176,6 +176,37 @@ ok(!/ARCHIVE = ""/.test(source),
    'the archive origin is not empty — an empty one makes every /item/ link fall through silently');
 ok(!source.includes('unsafe-inline'), 'no forbidden CSP source reached the generated file');
 
+// ── The page's assets point at THIS deployment's version (19 Sep 2026) ──
+//
+// The pages in R2 name logical paths (/assets/js/public.js). The site no longer serves
+// those — only /assets/v/<hash>/… — so a page passed through untouched would render as bare
+// HTML with every script refused. The Function maps them, and it has to map EXACTLY the
+// version the shell names, or a shared link loads a different front end from the site.
+{
+  const shell = readFileSync(join(root, 'site/index.html'), 'utf8');
+  const shellVersion = (/\/assets\/v\/([0-9a-f]{12})\/js\//.exec(shell) ?? [])[1];
+  ok(Boolean(shellVersion), `CONTROL: the shell names an asset version (${shellVersion})`);
+
+  const page = '<!doctype html><link rel="stylesheet" href="/assets/css/atlas.css">' +
+    '<script src="/assets/js/public.js"></script>' +
+    '<p>A caption that says &lt;script src="/assets/js/x.js"&gt; and /assets/js/ in prose</p>' +
+    '<link rel="preload" href="/assets/fonts/plex-arabic-400-arabic.woff2" as="font">';
+  const { res, text } = await call(`/item/${ID}`, { body: page });
+  ok(res.status === 200 && text.includes(`<script src="/assets/v/${shellVersion}/js/public.js">`),
+     'a prerendered page\'s script is served from the version the shell loads', text.slice(0, 160));
+  ok(text.includes(`href="/assets/v/${shellVersion}/css/atlas.css"`),
+     '...and so is its stylesheet');
+  ok(!/<script src="\/assets\/js\//.test(text) && !/href="\/assets\/css\//.test(text),
+     '...leaving no logical asset path in any tag');
+  ok(text.includes('&lt;script src="/assets/js/x.js"&gt; and /assets/js/ in prose'),
+     'a post\'s own escaped text is NOT rewritten — only real <script>/<link> tags are');
+  ok(text.includes('href="/assets/fonts/plex-arabic-400-arabic.woff2"'),
+     'fonts keep their path — they are content-named already and not versioned');
+
+  const head = await call(`/item/${ID}`, { method: 'HEAD', body: page });
+  ok(head.res.status === 200 && head.text === '', 'HEAD still answers 200 with no body');
+}
+
 // ── Output ───────────────────────────────────────────────────
 
 console.log(results.join('\n'));

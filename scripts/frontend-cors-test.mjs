@@ -58,8 +58,8 @@ function balanced(src, open) {
 // ── What the front end sends to functions/v1 ────────────────────────────────
 const sends = new Map();   // header (lowercase) → files that send it
 
-for (const file of readdirSync(join(root, 'site/assets/js')).filter((f) => f.endsWith('.js'))) {
-  const src = readFileSync(join(root, 'site/assets/js', file), 'utf8');
+for (const file of readdirSync(join(root, 'web/js')).filter((f) => f.endsWith('.js'))) {
+  const src = readFileSync(join(root, 'web/js', file), 'utf8');
   if (!src.includes('functions/v1')) continue;
 
   // A functions/v1 URL is sometimes built into a variable first (admin.js does), so the
