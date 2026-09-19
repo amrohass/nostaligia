@@ -129,8 +129,16 @@ set local role authenticated;
 set local request.jwt.claims to
   '{"sub":"00000000-0000-0000-0000-0000000000e2","role":"authenticated"}';
 
-select is(
-  (select count(*)::integer from pg_temp.queue_ids()), 3,
+-- Scoped to this file's fixtures (cc01–cc06), and by identity rather than by count. It used
+-- to count the whole queue, which is 3 only on an empty database: on 19 Sep 2026 four real
+-- uploads sat in the deployed queue and this read 7. A set is also the stronger claim — a
+-- predicate admitting cc02 while dropping cc06 would still have counted 3.
+select set_eq(
+  $q$ select q::text from pg_temp.queue_ids() q
+       where q::text like '00000000-0000-0000-0000-00000000cc0%' $q$,
+  array['00000000-0000-0000-0000-00000000cc01',
+        '00000000-0000-0000-0000-00000000cc05',
+        '00000000-0000-0000-0000-00000000cc06'],
   'a moderator''s queue holds exactly the reviewable items');
 
 select is(
