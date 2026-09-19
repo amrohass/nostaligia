@@ -86,7 +86,7 @@ const SHELL = [...read('site/admin.html').matchAll(/<script src="(\/assets\/js\/
  * evaluates, so every global it reads has to be in place before it is loaded — which is
  * the same seam frontend-nav-test.mjs uses, at the same point.
  */
-async function boot({ rows = [row()], section = 'queue' } = {}) {
+async function boot({ rows = [row()], section = 'queue', rpc = null, patch = null } = {}) {
   const win = makeWindow({ pathname: '/admin.html', hash: '#/' + section });
 
   /* admin.html's own landmarks. dom-stub builds index.html's, and admin.js reaches for
@@ -108,9 +108,10 @@ async function boot({ rows = [row()], section = 'queue' } = {}) {
       return Promise.resolve([]);
     },
     insert: () => Promise.resolve(null),
-    patch: () => Promise.resolve([]),
+    patch: (...a) => (patch ? patch(...a) : Promise.resolve([])),
     del: () => Promise.resolve(null),
-    rpc: (name) => (name === 'authz_role' ? Promise.resolve('moderator') : Promise.resolve([])),
+    rpc: (name, args) => (name === 'authz_role' ? Promise.resolve('moderator')
+      : (rpc && rpc(name, args)) || Promise.resolve([])),
     // The REAL rule, not a stub that always answers: §3 forbids an `originals` row ever
     // acquiring a public URL, and db.js expresses that as null. A test that stubbed this
     // could not tell a correct pane from one showing the archival master.
@@ -248,6 +249,70 @@ console.log('# the other media kinds');
   const imgs = pane ? pane.querySelectorAll('img').map((n) => n.getAttribute('src') || '') : [];
   ok(imgs.every((s) => !/private\//.test(s)),
      'CONTROL: and it does not reach for the master to fill the gap');
+}
+
+/* ═══ 3 · a rejection carries a note (0064) ══════════════════════════════════
+ *
+ * The database refuses a transition into 'rejected' with no note, so the dangerous
+ * regression is not a silent rejection — it is a dashboard that still PATCHes status and
+ * is refused on every click. And the note is read by the contributor, so the dialog must
+ * say so and must not lose what the moderator wrote when the database says no. */
+
+console.log('# rejecting — a note, through reject_post, never a bare PATCH');
+
+{
+  const rpcCalls = [];
+  const patches = [];
+  let answer = { ok: false, reason: 'already_rejected' };
+  const { win } = await boot({
+    rpc: (name, args) => {
+      if (name !== 'reject_post') return null;
+      rpcCalls.push(args);
+      return Promise.resolve(answer);
+    },
+    patch: (table, filter, body) => { patches.push({ table, filter, body }); return Promise.resolve([]); },
+  });
+  const t = win.I18N.t;
+  const fire = (node, type) => (node.listeners[type] || []).slice()
+    .forEach((fn) => fn({ preventDefault() {}, target: node }));
+  const drain = async () => { for (let i = 0; i < 6; i++) await settle(); };
+
+  const rejectButton = main(win).querySelectorAll('button').find((b) => textOf(b) === t('q.reject'));
+  ok(rejectButton, 'CONTROL: the review pane has a reject button');
+  fire(rejectButton, 'click');
+
+  const dialog = win.document.body.querySelector('form.dialog--form');
+  ok(dialog, 'reject opens a dialog instead of writing');
+  ok(patches.length === 0,
+     `...and sends no status PATCH, which 0064 would refuse without a note (${patches.length} sent)`);
+  ok(dialog && textOf(dialog).includes(t('q.rejectBlurb')),
+     'the dialog says the contributor will read the note — the other textarea promises the opposite');
+
+  const note = dialog.querySelector('textarea');
+  const error = dialog.querySelector('.form-error');
+  note.value = '  \n ';
+  fire(dialog, 'submit');
+  await drain();
+  ok(rpcCalls.length === 0 && textOf(error) === t('q.rejectErr.note_required'),
+     'a blank note is refused in the dialog before anything is sent');
+
+  note.value = 'The sign in the photograph is unreadable at this size.';
+  fire(dialog, 'submit');
+  await drain();
+  ok(rpcCalls.length === 1 && rpcCalls[0].p_post_id === POST
+       && rpcCalls[0].p_note === 'The sign in the photograph is unreadable at this size.',
+     `the note goes to reject_post with the post id (${JSON.stringify(rpcCalls[0] || null)})`);
+  ok(win.document.body.querySelector('form.dialog--form') === dialog
+       && note.value === 'The sign in the photograph is unreadable at this size.'
+       && textOf(error) === t('q.rejectErr.already_rejected'),
+     'a refusal is named inside the dialog, which stays open with the note intact');
+
+  answer = { ok: true, post_id: POST, status: 'rejected' };
+  fire(dialog, 'submit');
+  await drain();
+  ok(!win.document.body.querySelector('.scrim'), 'on success the dialog closes');
+  ok(main(win).querySelector('.pane-detail') === null,
+     '...and the post leaves the queue only after the database said yes');
 }
 
 console.log(`\n1..${passed + failed}`);

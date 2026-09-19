@@ -381,6 +381,19 @@ and must never be trusted for authorization.
   nothing else. And `auth.users.email_confirmed_at` becomes a second flag that is a lie;
   the comment on the table says so.
 
+- **Amended 19 Sep 2026 — a rejection carries a reason, and an author's own status moves
+  stay open.** Migration 0064. A transition into `rejected` from a user session is refused
+  without a note (`posts_rejection_needs_note`); `reject_post()` is the one door that
+  supplies one, and the contributor reads it on `/me` through `my_rejections()` — the note
+  and the DAY, never the moderator. Deliberately not an RLS policy: members and moderators
+  share the `authenticated` role's column grants, so a policy admitting an author to their
+  own `moderation_actions` row admits them to its `actor` too.
+  **Decided by Amro the same day, recorded because each looked like a hole:** 0018's
+  `posts_update` lets an author withdraw their own post from ANY status, approved included,
+  and move a rejected or withdrawn one back to `pending`. Both stay. The first is §7's right
+  to withdraw without waiting on a moderator; the second re-enters the queue, where review
+  happens again. `42_owner_withdraw` pins both, so neither gets "fixed".
+
 Every moderator and admin action writes to `moderation_actions` AND `audit_log` with actor,
 target, timestamp, and before/after state. No privileged action may bypass this.
 

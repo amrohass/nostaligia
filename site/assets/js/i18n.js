@@ -607,6 +607,23 @@
     'q.published': { ar: 'نُشرت «{t}» في الأرشيف.', en: '"{t}" is published to the archive.' },
     'q.sentBack':  { ar: 'أُعيدت «{t}» إلى صاحبها مع ملاحظتك.', en: '"{t}" went back to its contributor with your note.' },
     'q.rejected':  { ar: 'رُفضت «{t}».', en: '"{t}" was rejected.' },
+    // 0064. A rejection carries a note, and the blurb says who reads it: the textarea above
+    // is headed "a note the contributor never sees", and this one is the opposite.
+    'q.rejectTitle':   { ar: 'رفض هذه المساهمة', en: 'Reject this contribution' },
+    'q.rejectBlurb':   { ar: 'يقرأ المساهم هذه الملاحظة في صفحته مع تاريخ القرار. لا يظهر له اسمك.',
+                         en: 'The contributor reads this note on their own page, with the date of the decision. Your name is not shown to them.' },
+    'q.rejectNote':    { ar: 'سبب الرفض', en: 'Reason for rejecting' },
+    'q.rejectNotePh':  { ar: 'ما يحتاج المساهم إلى معرفته…', en: 'What the contributor needs to know…' },
+    'q.rejectConfirm': { ar: 'رفض وإرسال الملاحظة', en: 'Reject and send the note' },
+    // One line per refusal reject_post can return — derived from the migration by
+    // frontend-view-test, so a reason added there without a line here fails the build.
+    'q.rejectErr.forbidden':            { ar: 'لا تملك صلاحية الرفض.', en: 'You do not have permission to reject.' },
+    'q.rejectErr.note_required':        { ar: 'اكتب سببًا يقرؤه المساهم.', en: 'Write a reason the contributor will read.' },
+    'q.rejectErr.note_too_long':        { ar: 'الملاحظة أطول من ٤٠٠٠ حرف.', en: 'The note is longer than 4,000 characters.' },
+    'q.rejectErr.unknown_post':         { ar: 'لم تعد هذه المساهمة موجودة.', en: 'This contribution no longer exists.' },
+    'q.rejectErr.already_rejected':     { ar: 'رُفضت هذه المساهمة من قبل.', en: 'This contribution was already rejected.' },
+    'q.rejectErr.not_found_or_refused': { ar: 'رفضت قاعدة البيانات هذا الإجراء.', en: 'The database refused that action.' },
+    'q.rejectErr.generic':              { ar: 'تعذّر الرفض الآن. حاول مرة أخرى.', en: 'Could not reject just now. Try again.' },
     'q.clear':     { ar: 'انتهت القائمة — لا شيء بانتظار القرار.', en: 'Queue clear — nothing awaiting a decision.' },
     'q.loading':   { ar: 'نجلب القائمة…', en: 'Loading the queue…' },
     // §7: nothing goes public without a recorded licence and provenance. The share sheet
@@ -838,6 +855,14 @@
                                     en: 'The file could not be opened. Try exporting it again.' },
     'mine.err.job_deadline':      { ar: 'المعالجة استغرقت وقتًا أطول من المسموح.',
                                     en: 'Processing ran longer than allowed.' },
+    // 0064. The day of the decision and, beneath it, the moderator's note — never their name.
+    'mine.reviewedOn':     { ar: 'رُوجعت بتاريخ {d}', en: 'Reviewed on {d}' },
+    // Withdrawing a pending or rejected submission. Two steps; only the second writes.
+    'mine.withdraw':       { ar: 'سحب', en: 'Withdraw' },
+    'mine.withdrawAsk':    { ar: 'تسحبها؟ لن تُراجَع ولن تُنشر.', en: 'Withdraw it? It won’t be reviewed or published.' },
+    'mine.withdrawYes':    { ar: 'نعم، اسحبها', en: 'Yes, withdraw' },
+    'mine.withdrawDone':   { ar: 'سُحبت «{t}».', en: '"{t}" was withdrawn.' },
+    'mine.withdrawFailed': { ar: 'تعذّر السحب الآن. حاول مرة أخرى.', en: 'Could not withdraw just now. Try again.' },
 
     // ── Share sheet (M3) ────────────────────────────────────
     'share.fDecadeUnknown': { ar: 'العقد غير معروف', en: 'Decade unknown' },

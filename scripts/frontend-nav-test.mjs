@@ -1314,6 +1314,130 @@ console.log('# M6 — the tabs, the search box, and the description on an item')
      `the tab labels are translated ("${Array.from(tabs).map(textOf).join(' / ')}")`);
 }
 
+/* ═══ · /me — your own submissions: the reason, and withdraw (0064, 18 Sep 2026) ══════
+   Two claims the database cannot make for the screen. The reason a moderator wrote has to
+   reach the row it belongs to, and the withdraw button has to be absent exactly where it
+   would be a workaround: "Upload incomplete" rows are orphaned drafts with no bytes behind
+   them (a pipeline defect with its own repair), and an APPROVED post whose ingest reads
+   failed is still approved, which goes through the removal request instead. */
+
+console.log('# /me — a rejection says why, and withdraw is offered only where it is honest');
+
+{
+  const account = { id: 'u-mine', email: 'mine@t.local', role: 'member' };
+  const post = (id, title_en, status, ingest_state, extra = {}) => ({
+    id, title_en, title_ar: null, status, ingest_state, ingest_error: null,
+    created_by: account.id, takedown: false, ...extra,
+  });
+  const ROWS = [
+    post('p-review', 'in review', 'pending', 'ready'),
+    post('p-rejected', 'turned down', 'rejected', 'ready'),
+    post('p-incomplete', 'never arrived', 'pending', 'awaiting_bytes'),
+    post('p-processing', 'being encoded', 'pending', 'processing'),
+    post('p-failed', 'would not decode', 'pending', 'failed', { ingest_error: 'decode_failed' }),
+    post('p-approved-failed', 'approved but broken', 'approved', 'failed'),
+    post('p-withdrawn', 'already withdrawn', 'withdrawn', 'ready'),
+    post('p-published', 'published', 'approved', 'ready'),
+  ];
+  const NOTE = 'The sign in the photograph is unreadable at this size.';
+  const rpcNames = [];
+  const patches = [];
+  const patchAnswers = [[], null];   // refused first, then accepted (null = echo the row)
+  const DB = {
+    // The handle /me asks for before anything else — without it the page never loads (see
+    // loadOwnHandle), and every "NOT offered" assertion below would pass over an empty list.
+    select: () => Promise.resolve([{ handle: 'mine_owner', display_name: 'mine_owner' }]),
+    insert: () => Promise.resolve(null),
+    patch: (table, filter, body) => {
+      patches.push({ table, filter, body });
+      const next = patchAnswers.shift();
+      const id = /id=eq\.([^&]+)/.exec(filter)[1];
+      return Promise.resolve(next === null ? [{ id, status: body.status }] : next);
+    },
+    del: () => Promise.resolve(null),
+    rpc: (name) => {
+      rpcNames.push(name);
+      if (name === 'profile_view') {
+        return Promise.resolve([{
+          id: account.id, handle: 'mine_owner', display_name: 'mine_owner', avatar_path: null,
+          role_cache: 'member', bio: null, visibility: {}, member_since: 2026,
+          is_own: true, is_deleted: false,
+        }]);
+      }
+      if (name === 'posts_full') return Promise.resolve(ROWS);
+      if (name === 'my_rejections') {
+        return Promise.resolve([{ post_id: 'p-rejected', note: NOTE, rejected_on: '2026-09-17' }]);
+      }
+      if (name === 'email_confirmation_status') return Promise.resolve({ confirmed: true });
+      return Promise.resolve([]);
+    },
+    mediaUrl: () => null,
+  };
+  const AUTH = {
+    user: () => account, accessToken: () => Promise.resolve('token'),
+    restore: () => Promise.resolve(account), onChange: () => {},
+    signOut: () => {}, signIn: () => Promise.resolve(account),
+    signUp: () => Promise.resolve({ confirmationRequired: false, user: account }),
+    requestPasswordReset: () => Promise.resolve(true),
+    beginRecovery: () => {}, adoptMailedLink: () => Promise.resolve(account),
+  };
+  const TURNSTILE = { mount: () => ({ token: () => Promise.resolve('c'), reset: () => {}, remove: () => {} }) };
+
+  const win = await boot({ pathname: '/me', overrides: { DB, AUTH, TURNSTILE } });
+  for (let i = 0; i < 16; i++) await settle();
+  const t = win.I18N.t;
+  const rows = () => view(win).querySelectorAll('li.mine__row');
+  const rowOf = (title) => rows().find((r) => textOf(r.querySelector('.mine__title')) === title);
+  const button = (row, key) => row && row.querySelectorAll('button').find((b) => textOf(b) === t(key));
+
+  ok(rows().length === 6,
+     `CONTROL: the list shows every open submission (${rows().map((r) => textOf(r.querySelector('.mine__title'))).join(' | ')})`);
+  ok(rowOf('already withdrawn') === undefined,
+     'a withdrawn submission has left the member\'s list');
+
+  const offered = rows().filter((r) => button(r, 'mine.withdraw'))
+    .map((r) => textOf(r.querySelector('.mine__title'))).sort();
+  ok(JSON.stringify(offered) === JSON.stringify(['in review', 'turned down', 'would not decode']),
+     `withdraw is offered on in-review, rejected and failed rows and nowhere else (${offered.join(', ')})`);
+  ok(!button(rowOf('never arrived'), 'mine.withdraw'),
+     'NOT on "Upload incomplete" — no remove button over a broken upload');
+  ok(!button(rowOf('approved but broken'), 'mine.withdraw'),
+     'NOT on an approved post whose ingest failed — approved items go through the removal request');
+
+  const reason = rowOf('turned down') && rowOf('turned down').querySelector('.mine__reason');
+  ok(rpcNames.includes('my_rejections') && reason && textOf(reason).includes(NOTE),
+     'the moderator\'s note is under the rejected row');
+  ok(reason && textOf(reason).includes(t('mine.reviewedOn', { d: win.I18N.day('2026-09-17') })),
+     '...with the day of the decision');
+  ok(!rowOf('in review').querySelector('.mine__reason'),
+     'CONTROL: and no reason block on a row that was not rejected');
+
+  // Two steps. The first click asks and moves focus to the answer; nothing is written.
+  button(rowOf('in review'), 'mine.withdraw').fire('click');
+  await settle();
+  const yes = button(rowOf('in review'), 'mine.withdrawYes');
+  ok(yes && patches.length === 0, 'the first click asks and writes nothing');
+  ok(yes && win.document.activeElement === yes, '...and focus lands on the answer, not the top of the page');
+
+  // Refused: an empty representation is RLS saying no. The row stays and the button returns.
+  yes.fire('click');
+  for (let i = 0; i < 6; i++) await settle();
+  ok(patches.length === 1 && patches[0].table === 'posts'
+       && JSON.stringify(Object.keys(patches[0].body)) === '["status"]'
+       && patches[0].body.status === 'withdrawn'
+       && /^id=eq\.p-review&select=id,status$/.test(patches[0].filter),
+     `the write is {status:'withdrawn'} and nothing else, by id (${JSON.stringify(patches[0])})`);
+  ok(rowOf('in review') && button(rowOf('in review'), 'mine.withdraw'),
+     'a refused withdraw leaves the row where it was, with its button back');
+
+  button(rowOf('in review'), 'mine.withdraw').fire('click');
+  await settle();
+  button(rowOf('in review'), 'mine.withdrawYes').fire('click');
+  for (let i = 0; i < 6; i++) await settle();
+  ok(patches.length === 2 && rowOf('in review') === undefined && rows().length === 5,
+     'an accepted withdraw removes the row from the list');
+}
+
 console.log(`\n1..${passed + failed}`);
 if (failed) {
   console.error(`\n${failed} assertion(s) failed.`);

@@ -803,7 +803,9 @@
    */
   var OUTCOME_STATUS = {
     published: 'approved',
-    rejected: 'rejected',
+    /* Rejected is NOT a status PATCH (0064). The database refuses a transition into
+       'rejected' that carries no note, so a rejection goes through confirmReject() and
+       reject_post — the one door that can hand the trigger a note. */
     /* "Send back" returns it to the contributor to fix. There is no post_status value for
        that — 'withdrawn' means the AUTHOR pulled it — so the button is disabled rather
        than mapped onto something that means something else. Adding a state is a schema
@@ -812,6 +814,7 @@
   };
 
   function decide(item, outcome) {
+    if (outcome === 'rejected') { confirmReject(item); return; }
     var status = OUTCOME_STATUS[outcome];
     if (!status) { UI.toast(t('q.err.sendBackUnsupported')); return; }
     if (work.queueBusy) return;
@@ -835,18 +838,112 @@
           render();
           return;
         }
-        work.queue = work.queue.filter(function (row) { return row.id !== item.id; });
-        var next = pendingQueue()[0];
-        work.queueSelected = next ? next.id : null;
-        work.queueError = null;
-        render();
-        UI.toast(t('q.' + outcome, { t: pick(item.title) }));
+        settled(item, outcome);
       })
       .catch(function (err) {
         work.queueBusy = null;
         work.queueError = err && err.key ? err.key : 'admin.err.generic';
         render();
       });
+  }
+
+  /* Both decisions end the same way once — and only once — the database has said yes. */
+  function settled(item, outcome) {
+    work.queue = work.queue.filter(function (row) { return row.id !== item.id; });
+    var next = pendingQueue()[0];
+    work.queueSelected = next ? next.id : null;
+    work.queueError = null;
+    render();
+    UI.toast(t('q.' + outcome, { t: pick(item.title) }));
+  }
+
+  /**
+   * A rejection, with the reason the contributor will read (0064).
+   *
+   * The note is REQUIRED here as a courtesy and in the database as the rule: a
+   * posts_rejection_needs_note trigger refuses a transition into 'rejected' with no note,
+   * whichever door it came through, so deleting this dialog would not make a silent
+   * rejection possible again — only a refused one.
+   *
+   * The blurb says who reads it, because the queue's other textarea is headed "a note the
+   * contributor never sees". A moderator who has just used that one must not assume this
+   * one is private too. What the contributor does NOT see is who wrote it: my_rejections()
+   * returns the note and the day, and never the actor.
+   *
+   * Refusals are shown inside the dialog, which stays open with the text intact — the same
+   * shape as openLocationFix. Closing it on a refusal would throw away what the moderator
+   * wrote in order to tell them it had not been saved.
+   */
+  function confirmReject(item) {
+    if (work.queueBusy) return;
+
+    var noteInput = el('textarea.input', {
+      rows: '3', required: true, maxlength: '4000',
+      placeholder: t('q.rejectNotePh'), 'aria-label': t('q.rejectNote')
+    });
+    var error = el('p.form-error', { role: 'alert', hidden: true });
+    var submit = el('button.abtn.abtn--primary', { type: 'submit', text: t('q.rejectConfirm') });
+    var scrim;
+    var sending = false;
+
+    function close() {
+      if (scrim && scrim._release) scrim._release();
+      if (scrim) scrim.remove();
+      scrim = null;
+    }
+
+    function refuse(key) {
+      sending = false;
+      submit.disabled = false;
+      submit.textContent = t('q.rejectConfirm');
+      error.textContent = t(key);
+      error.hidden = false;
+    }
+
+    var form = el('form.dialog.dialog--form', {
+      onsubmit: function (event) {
+        event.preventDefault();
+        if (sending) return;
+        var note = noteInput.value.trim();
+        if (!note) { refuse('q.rejectErr.note_required'); return; }
+
+        sending = true;
+        submit.disabled = true;
+        submit.textContent = t('auth.working');
+        error.hidden = true;
+
+        DB.rpc('reject_post', { p_post_id: item.id, p_note: note }).then(function (out) {
+          if (!out || out.ok !== true) {
+            refuse('q.rejectErr.' + ((out && out.reason) || 'generic'));
+            return;
+          }
+          close();
+          settled(item, 'rejected');
+        }, function (err) {
+          refuse(err && err.key ? err.key : 'q.rejectErr.generic');
+        });
+      }
+    }, [
+      el('div.dialog__head', null, [
+        el('div.dialog__head-text', null, [
+          el('h2.dialog__title', { text: t('q.rejectTitle') }),
+          el('p.dialog__blurb', { text: t('q.rejectBlurb') })
+        ]),
+        el('button.dialog__close', { type: 'button', 'aria-label': t('action.close'), onclick: close, text: '×' })
+      ]),
+      el('p.detail__story', null, bdi(pick(item.title))),
+      noteInput,
+      error,
+      el('div.dialog__actions', null, [
+        el('button.abtn.abtn--ghost', { type: 'button', onclick: close, text: t('action.cancel') }),
+        submit
+      ])
+    ]);
+
+    scrim = el('div.scrim', { role: 'dialog', 'aria-modal': 'true' }, [form]);
+    global.document.body.appendChild(scrim);
+    scrim._release = UI.trapFocus(scrim, close);
+    noteInput.focus();
   }
 
   /* ── 4c Published archive ────────────────────────────────── */

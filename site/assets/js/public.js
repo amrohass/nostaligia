@@ -3371,7 +3371,7 @@
      simply does not contain what was hidden. The owner's own view comes from
      profile_view(), with their own token, and is the only place the private side exists. */
 
-  var profileCache = { key: null, loaded: false, data: null, own: null, mine: null };
+  var profileCache = { key: null, loaded: false, data: null, own: null, mine: null, rejections: null };
 
   function renderProfile() {
     var own = isOwnProfileRoute();
@@ -3502,8 +3502,11 @@
    */
   function pendingPanel() {
     var rows = profileCache.mine || [];
+    /* A withdrawn submission leaves the list: withdrawing is the member saying they no
+       longer want to see it. The row itself stays in the database with its audit trail
+       (§3) — this is the member's view, not the record. */
     var open = rows.filter(function (r) {
-      return r.status !== 'approved' || r.ingest_state !== 'ready';
+      return r.status !== 'withdrawn' && (r.status !== 'approved' || r.ingest_state !== 'ready');
     });
     if (!open.length) return null;
 
@@ -3515,17 +3518,101 @@
       el('p.profile__empty', { text: t('mine.blurb') }),
       el('ul.mine', null, open.map(function (row) {
         var title = { ar: row.title_ar || row.title_en || '', en: row.title_en || row.title_ar || '' };
+        var state = submissionState(row);
         return el('li.mine__row', null, [
           el('div.mine__title', null, bdi(pick(title))),
           el('div.mine__meta', null, [
-            el('span.badge', { text: t('mine.state.' + submissionState(row)) }),
+            el('span.badge', { text: t('mine.state.' + state) }),
             row.ingest_error
               ? el('span.mine__error', { text: t('mine.err.' + row.ingest_error) })
-              : null
-          ])
+              : null,
+            canWithdraw(row, state) ? withdrawControl(row, title) : null
+          ]),
+          state === 'rejected' ? rejectionReason(row) : null
         ]);
       }))
     ]);
+  }
+
+  /* The moderator's reason, from my_rejections() (0064): the note and the DAY, never who
+     wrote it. A rejection from before 0064 has no note, and says only when — which is
+     true, where inventing a reason would not be. */
+  function rejectionReason(row) {
+    var found = (profileCache.rejections || {})[row.id];
+    if (!found) return null;
+    return el('div.mine__reason', null, [
+      el('span.mine__reason-label', { text: t('mine.reviewedOn', { d: I18N.day(found.rejected_on) }) }),
+      found.note ? el('p.mine__reason-text', null, bdi(found.note)) : null
+    ]);
+  }
+
+  /* Withdraw is offered where the member's own label is "In review", "Not accepted" or
+     "Processing failed" — pending or rejected, and nothing in flight.
+
+     NOT on "Upload incomplete". Those rows are orphaned drafts whose bytes never reached
+     quarantine: request-upload creates the row before the PUT, a failed PUT leaves it
+     behind, and nothing ever times it out. That is a pipeline defect with its own repair,
+     and a remove button here would be a workaround shipped in its place.
+
+     NOT on "Processing" either: the worker holds that row, and pulling it mid-transcode
+     races the worker's own write.
+
+     The status test is explicit rather than implied by `state`, because `state` follows
+     ingest first: an approved post whose ingest failed would read "failed", and approved
+     items go through the removal request, not through this. */
+  function canWithdraw(row, state) {
+    if (row.takedown) return false;
+    if (row.status !== 'pending' && row.status !== 'rejected') return false;
+    return state === 'inReview' || state === 'rejected' || state === 'failed';
+  }
+
+  /* Two steps, in place. The first click asks; only the second writes. Swapped inside its
+     own node rather than through render(), so focus lands on the question instead of
+     falling back to the top of the page between the two clicks.
+
+     The write is 0018's own: `{status: 'withdrawn'}` and nothing else, which posts_update
+     already admits for the author (42_owner_withdraw pins it). An empty representation is
+     the policy refusing, and is reported as a failure rather than a success. */
+  function withdrawControl(row, title) {
+    var box = el('span.mine__actions');
+
+    function idle() {
+      mount(box, el('button.btn.btn--quiet.mine__action', {
+        type: 'button', text: t('mine.withdraw'), onclick: ask
+      }));
+    }
+
+    function ask() {
+      var yes = el('button.btn.btn--ghost.mine__action', {
+        type: 'button', text: t('mine.withdrawYes'), onclick: go
+      });
+      mount(box, [
+        el('span.mine__ask', { text: t('mine.withdrawAsk') }),
+        yes,
+        el('button.btn.btn--quiet.mine__action', {
+          type: 'button', text: t('action.cancel'), onclick: idle
+        })
+      ]);
+      yes.focus();
+    }
+
+    function go() {
+      mount(box, el('span.mine__ask', { role: 'status', text: t('auth.working') }));
+      DB.patch('posts', 'id=eq.' + encodeURIComponent(row.id) + '&select=id,status', { status: 'withdrawn' })
+        .then(function (rows) {
+          if (!rows || !rows.length || rows[0].status !== 'withdrawn') throw new Error('refused');
+          profileCache.mine = (profileCache.mine || []).filter(function (r) { return r.id !== row.id; });
+          render();
+          UI.toast(t('mine.withdrawDone', { t: pick(title) }));
+        })
+        .catch(function () {
+          idle();
+          UI.toast(t('mine.withdrawFailed'));
+        });
+    }
+
+    idle();
+    return box;
   }
 
   /* One label per state a member can actually be in, derived from two columns rather than
@@ -3566,7 +3653,7 @@
     var key = own ? 'me:' + (state.account ? state.account.id : '') : 'u:' + handle;
     if (profileCache.key === key) return Promise.resolve();
 
-    profileCache = { key: key, loaded: false, data: null, own: null, mine: null };
+    profileCache = { key: key, loaded: false, data: null, own: null, mine: null, rejections: null };
 
     /* Two sources, and the split is §7's. The shard is the public projection everybody
        gets; profile_view() is the owner's (and a moderator's) view of the private half. A
@@ -3593,6 +3680,14 @@
         profileCache.mine = (rows || []).filter(function (r) {
           return state.account && r.created_by === state.account.id;
         });
+        /* The reasons, only when there is a rejection to explain. A failure here costs the
+           reason and nothing else — the row still says "Not accepted", as it always has. */
+        var rejected = profileCache.mine.some(function (r) { return r.status === 'rejected'; });
+        if (!rejected) return null;
+        return DB.rpc('my_rejections', {}).then(function (found) {
+          profileCache.rejections = {};
+          (found || []).forEach(function (r) { profileCache.rejections[r.post_id] = r; });
+        }, function () { profileCache.rejections = {}; });
       }, function () { profileCache.mine = []; });
     }).then(function () {
       profileCache.loaded = true;

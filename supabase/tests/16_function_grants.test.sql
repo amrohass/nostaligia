@@ -181,6 +181,14 @@ select set_eq(
     ('request_takedown(p_post_id uuid, p_note text) -> authenticated'),
     ('request_takedown(p_post_id uuid, p_note text) -> service_role'),
 
+    -- A rejection with a note (0064). reject_post is SECURITY INVOKER, so the grant is not
+    -- the boundary — posts_update is — and a member calling it is told 'forbidden'.
+    -- my_rejections is DEFINER and scoped to auth.uid() inside; anon has no posts of its own.
+    ('reject_post(p_post_id uuid, p_note text) -> authenticated'),
+    ('reject_post(p_post_id uuid, p_note text) -> service_role'),
+    ('my_rejections() -> authenticated'),
+    ('my_rejections() -> service_role'),
+
     -- M4's gazetteer (0048). All four are `authenticated` and none of them is a boundary:
     -- 0017 already grants every signed-in user SELECT on `places`, and the two writes are
     -- SECURITY INVOKER, so a member calling save_place is refused by the policy rather than

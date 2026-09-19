@@ -124,10 +124,18 @@ console.log('# i18n — a key that misses renders as itself');
     'comment on function public.set_post_location'));
   ok(placeReasons.length >= 4 && fixReasons.length >= 3,
      `CONTROL: the two RPCs' refusals were found in their migrations (${placeReasons.length}, ${fixReasons.length})`);
+  // 0064's reject_post, rendered as t('q.rejectErr.' + out.reason) inside the reject dialog.
+  const rejectNote = read('supabase/migrations/20260918090000_reject_note.sql');
+  const rejectReasons = reasonsIn(sliceOf(rejectNote,
+    'create or replace function public.reject_post',
+    'comment on function public.reject_post'));
+  ok(rejectReasons.length >= 5,
+     `CONTROL: reject_post's refusals were found in its migration (${rejectReasons.length})`);
   // 'generic' is the client's own fallback for a transport failure, which no migration
   // emits and every branch can reach.
   for (const r of placeReasons.concat(['generic'])) keys.add('pl.err.' + r);
   for (const r of fixReasons.concat(['generic'])) keys.add('q.locationErr.' + r);
+  for (const r of rejectReasons.concat(['generic'])) keys.add('q.rejectErr.' + r);
 
   // The decades DATA offers in the share sheet — every one must have a label or a
   // contributor is offered an option spelled "decade.1940".

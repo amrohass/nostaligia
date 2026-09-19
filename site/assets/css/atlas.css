@@ -1400,6 +1400,32 @@ html[lang="en"] .mine__title { font: 600 13px var(--font-en); }
 .mine__error { font: 400 11.5px var(--font-ar); color: var(--terracotta); }
 html[lang="en"] .mine__error { font: 400 11.5px var(--font-en); }
 
+/* Withdraw, in place: one quiet button, then a question and two answers. Smaller than a
+   page button because it sits inside a row, not under a form. */
+.mine__actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mine__action { padding: 4px 10px; font-size: 12.5px; }
+html[lang="en"] .mine__action { font-size: 12px; }
+.mine__ask { font: 400 12px var(--font-ar); color: var(--ink-70); }
+html[lang="en"] .mine__ask { font: 400 11.5px var(--font-en); }
+
+/* The moderator's reason under a rejected row (0064). Full width of the row, so a long
+   note wraps under the title instead of squeezing the badge. */
+.mine__reason {
+  flex-basis: 100%;
+  padding-block-start: 8px;
+  border-block-start: 1px solid var(--olive-a12);
+}
+.mine__reason-label { font: 500 11.5px var(--font-ar); color: var(--ink-60); }
+html[lang="en"] .mine__reason-label { font: 500 11px var(--font-en); }
+.mine__reason-text {
+  margin: 4px 0 0;
+  font: 400 13px/1.6 var(--font-ar);
+  color: var(--ink);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+html[lang="en"] .mine__reason-text { font: 400 12.5px/1.55 var(--font-en); }
+
 /* --------------------------- Located memories ---------------------------
 
    The Leaflet map lived here: .map-page, .leaflet-*, .map-pin, .map-card and the
